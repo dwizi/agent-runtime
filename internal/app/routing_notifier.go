@@ -13,13 +13,15 @@ import (
 )
 
 type routingNotifier struct {
-	store      *store.Store
-	publishers map[string]connectors.Publisher
-	enabled    bool
-	logger     *slog.Logger
+	workspaceRoot string
+	store         *store.Store
+	publishers    map[string]connectors.Publisher
+	enabled       bool
+	logger        *slog.Logger
 }
 
 func newRoutingNotifier(
+	workspaceRoot string,
 	storeRef *store.Store,
 	publishers map[string]connectors.Publisher,
 	enabled bool,
@@ -37,10 +39,11 @@ func newRoutingNotifier(
 		clean[name] = publisher
 	}
 	return &routingNotifier{
-		store:      storeRef,
-		publishers: clean,
-		enabled:    enabled,
-		logger:     logger,
+		workspaceRoot: strings.TrimSpace(workspaceRoot),
+		store:         storeRef,
+		publishers:    clean,
+		enabled:       enabled,
+		logger:        logger,
 	}
 }
 
@@ -77,7 +80,9 @@ func (n *routingNotifier) NotifyRoutingDecision(ctx context.Context, decision ga
 				"external_id", target.ExternalID,
 				"error", err,
 			)
+			continue
 		}
+		appendOutboundChatLog(n.workspaceRoot, target.WorkspaceID, target.Connector, target.ExternalID, decisionText)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 )
 
 type taskCompletionNotifier struct {
+	workspaceRoot string
 	store         *store.Store
 	publishers    map[string]connectors.Publisher
 	successPolicy string
@@ -22,6 +23,7 @@ type taskCompletionNotifier struct {
 }
 
 func newTaskCompletionNotifier(
+	workspaceRoot string,
 	storeRef *store.Store,
 	publishers map[string]connectors.Publisher,
 	defaultPolicy string,
@@ -45,6 +47,7 @@ func newTaskCompletionNotifier(
 	failure := normalizeTaskNotifyPolicyWithFallback(failurePolicy, basePolicy)
 
 	return &taskCompletionNotifier{
+		workspaceRoot: strings.TrimSpace(workspaceRoot),
 		store:         storeRef,
 		publishers:    cleanPublishers,
 		successPolicy: success,
@@ -94,7 +97,9 @@ func (n *taskCompletionNotifier) notify(task orchestrator.Task, result orchestra
 				"external_id", target.ExternalID,
 				"error", err,
 			)
+			continue
 		}
+		appendOutboundChatLog(n.workspaceRoot, target.WorkspaceID, target.Connector, target.ExternalID, message)
 	}
 }
 

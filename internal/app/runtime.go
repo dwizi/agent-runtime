@@ -253,12 +253,14 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		publishers[strings.ToLower(strings.TrimSpace(connector.Name()))] = publisher
 	}
 	commandGateway.SetRoutingNotifier(newRoutingNotifier(
+		cfg.WorkspaceRoot,
 		sqlStore,
 		publishers,
 		cfg.TriageNotifyAdmin,
 		logger.With("component", "routing-notifier"),
 	))
 	notifier := newTaskCompletionNotifier(
+		cfg.WorkspaceRoot,
 		sqlStore,
 		publishers,
 		cfg.TaskNotifyPolicy,

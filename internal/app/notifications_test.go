@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +57,7 @@ func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n1",
@@ -79,6 +81,58 @@ func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	}
 	if publisher.messages[0].externalID != "100" {
 		t.Fatalf("expected publish to external id 100, got %s", publisher.messages[0].externalID)
+	}
+}
+
+func TestTaskCompletionNotificationAppendsOutboundChatLog(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "101", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:          "task-log-1",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        "general",
+		Title:       "Notify target",
+		Prompt:      "Write summary",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(workspaceRoot, sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-log-1",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Notify target",
+		Prompt:      "Write summary",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: "done",
+	})
+
+	logPath := filepath.Join(workspaceRoot, contextRecord.WorkspaceID, "logs", "chats", "telegram", "101.md")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "`OUTBOUND`") {
+		t.Fatalf("expected outbound log entry, got %s", text)
+	}
+	if !strings.Contains(text, "Notify target") {
+		t.Fatalf("expected task completion text in outbound log, got %s", text)
 	}
 }
 
@@ -110,7 +164,7 @@ func TestRoutedTaskSuccessNotificationUsesNaturalReply(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-success",
@@ -167,7 +221,7 @@ func TestRoutedTaskFailureSkipsNonAdminChannels(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-failure",
@@ -223,7 +277,7 @@ func TestRoutedTaskFailureNotifiesAdminChannelOnly(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-admin-failure",
@@ -268,7 +322,7 @@ func TestTaskCompletionNotificationToAdminContextForSystemTasks(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n2",
@@ -315,7 +369,7 @@ func TestTaskCompletionNotificationPolicyOriginSkipsAdminContexts(t *testing.T) 
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "origin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "origin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n3",
@@ -359,7 +413,7 @@ func TestTaskCompletionNotificationPolicyAdminSkipsOriginContext(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "admin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "admin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n4",
@@ -415,6 +469,7 @@ func TestTaskCompletionNotificationPolicyOverridesByOutcome(t *testing.T) {
 
 	publisher := &fakePublisher{}
 	notifier := newTaskCompletionNotifier(
+		"",
 		sqlStore,
 		map[string]connectors.Publisher{"telegram": publisher},
 		"both",

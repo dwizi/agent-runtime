@@ -93,7 +93,9 @@ func (n *heartbeatNotifier) HandleTransition(ctx context.Context, transition hea
 				"external_id", target.ExternalID,
 				"error", err,
 			)
+			continue
 		}
+		appendOutboundChatLog(n.workspaceRoot, target.WorkspaceID, target.Connector, target.ExternalID, message)
 	}
 
 	logLine := buildHeartbeatLogLine(eventType, transition, snapshot)
