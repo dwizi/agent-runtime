@@ -74,6 +74,10 @@ SOUL precedence:
 - `SPINNER_QMD_QUERY_TIMEOUT_SECONDS`
 - `SPINNER_QMD_AUTO_EMBED`
 
+Notes:
+- Docker build ships `qmd` in the Spinner runtime image (`SPINNER_QMD_BINARY=qmd` by default).
+- For host-native runs, install `qmd` manually and keep it on `PATH`.
+
 ## Objectives and Proactivity
 
 - `SPINNER_OBJECTIVE_POLL_SECONDS`

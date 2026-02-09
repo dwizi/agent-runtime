@@ -24,7 +24,7 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
 
 1. Copy env:
    - `cp .env.example .env`
-2. Install qmd (required for `/search` and `/open #docid`):
+2. Install qmd locally only if you run `spinner` outside Docker (`make run`, `make tui`):
    - `bun install -g github:tobi/qmd`
    - ensure `qmd` is in `PATH`
 3. Run local:
@@ -34,6 +34,9 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
 5. Run Docker stack:
    - `docker compose up -d --build`
    - or `make compose-up` (also auto-syncs local mTLS paths into `.env` when empty)
+   - Docker image already includes `qmd` for `/search` and `/open`
+   - optional tools shell with qmd mounted to workspace data:
+     - `docker compose --profile qmd-sidecar up -d qmd-sidecar`
 
 Health endpoints:
 - `GET /healthz`

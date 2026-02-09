@@ -29,6 +29,26 @@ services:
     networks:
       - spinner_net
 
+  qmd-sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: qmd-runtime
+    container_name: spinner-qmd
+    restart: unless-stopped
+    profiles:
+      - qmd-sidecar
+    working_dir: /data/workspaces
+    command:
+      - /bin/sh
+      - -lc
+      - sleep infinity
+    volumes:
+      - ./data:/data
+      - ./context:/context
+    networks:
+      - spinner_net
+
   caddy:
     image: caddy:2.8-alpine
     container_name: spinner-caddy

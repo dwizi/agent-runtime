@@ -6,8 +6,11 @@ This runbook covers first-time installation and secure bootstrap.
 
 - Docker + Docker Compose plugin
 - Go toolchain (for local `make run` / `make tui`)
-- `qmd` installed and available in `PATH`
 - Domain/DNS ready if deploying publicly
+
+Notes:
+- Docker runtime image already includes `qmd`.
+- Install local `qmd` only when running Spinner directly on host (`make run`, `make tui`).
 
 ## 2. Clone and Prepare
 
@@ -45,6 +48,12 @@ What this does:
 - bind-mounts host paths for live editing:
   - `./data` -> `/data` (workspaces, sqlite, task outputs)
   - `./context` -> `/context` (global SOUL files)
+
+Optional qmd tooling sidecar:
+
+```bash
+docker compose --profile qmd-sidecar up -d qmd-sidecar
+```
 
 ## 5. Verify Runtime Health
 
