@@ -14,6 +14,7 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
 - SQLite bootstrap and initial schema (`users`, `identities`, `workspaces`, `contexts`, `tasks`, `pairing_requests`)
 - Discord gateway connector (`MESSAGE_CREATE`) with command routing and DM pairing
 - Telegram command gateway with pairing and task/admin commands
+- IMAP inbox connector for inbound email ingestion to workspace Markdown
 - In-memory task engine with configurable per-workspace concurrency defaults
 - Markdown file watcher for `.md` updates under `/data/workspaces`
 - qmd-backed retrieval with per-workspace index isolation and debounced re-indexing
@@ -87,6 +88,20 @@ z.ai runtime env:
 - `SPINNER_ZAI_BASE_URL` (default: `https://api.z.ai/api/paas/v4`)
 - `SPINNER_ZAI_MODEL` (default: `glm-4.7-flash`)
 - `SPINNER_ZAI_TIMEOUT_SECONDS` (default: `45`)
+
+IMAP runtime env:
+- `SPINNER_IMAP_HOST` (required to enable IMAP connector)
+- `SPINNER_IMAP_PORT` (default: `993`)
+- `SPINNER_IMAP_USERNAME`
+- `SPINNER_IMAP_PASSWORD`
+- `SPINNER_IMAP_MAILBOX` (default: `INBOX`)
+- `SPINNER_IMAP_POLL_SECONDS` (default: `60`)
+- `SPINNER_IMAP_TLS_SKIP_VERIFY` (default: `false`)
+
+IMAP ingestion behavior:
+- unread emails are polled from the configured mailbox
+- each message is written to workspace Markdown under `inbox/imap/<mailbox>/<uid>-<subject>.md`
+- each ingested message queues a review task in the orchestrator
 
 SMTP runtime env (for `send_email` approvals):
 - `SPINNER_SMTP_HOST` (required for SMTP email execution)

@@ -30,6 +30,13 @@ type Config struct {
 	TelegramToken             string
 	TelegramAPI               string
 	TelegramPoll              int
+	IMAPHost                  string
+	IMAPPort                  int
+	IMAPUsername              string
+	IMAPPassword              string
+	IMAPMailbox               string
+	IMAPPollSeconds           int
+	IMAPTLSSkipVerify         bool
 	ZAIAPIKey                 string
 	ZAIBaseURL                string
 	ZAIModel                  string
@@ -89,6 +96,13 @@ func FromEnv() Config {
 		TelegramToken:             os.Getenv("SPINNER_TELEGRAM_TOKEN"),
 		TelegramAPI:               stringOrDefault("SPINNER_TELEGRAM_API_BASE", "https://api.telegram.org"),
 		TelegramPoll:              intOrDefault("SPINNER_TELEGRAM_POLL_SECONDS", 25),
+		IMAPHost:                  strings.TrimSpace(os.Getenv("SPINNER_IMAP_HOST")),
+		IMAPPort:                  intOrDefault("SPINNER_IMAP_PORT", 993),
+		IMAPUsername:              strings.TrimSpace(os.Getenv("SPINNER_IMAP_USERNAME")),
+		IMAPPassword:              os.Getenv("SPINNER_IMAP_PASSWORD"),
+		IMAPMailbox:               stringOrDefault("SPINNER_IMAP_MAILBOX", "INBOX"),
+		IMAPPollSeconds:           intOrDefault("SPINNER_IMAP_POLL_SECONDS", 60),
+		IMAPTLSSkipVerify:         boolOrDefault("SPINNER_IMAP_TLS_SKIP_VERIFY", false),
 		ZAIAPIKey:                 os.Getenv("SPINNER_ZAI_API_KEY"),
 		ZAIBaseURL:                stringOrDefault("SPINNER_ZAI_BASE_URL", "https://api.z.ai/api/paas/v4"),
 		ZAIModel:                  stringOrDefault("SPINNER_ZAI_MODEL", "glm-4.7-flash"),

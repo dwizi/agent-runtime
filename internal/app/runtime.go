@@ -19,6 +19,7 @@ import (
 	"github.com/carlos/spinner/internal/config"
 	"github.com/carlos/spinner/internal/connectors"
 	"github.com/carlos/spinner/internal/connectors/discord"
+	"github.com/carlos/spinner/internal/connectors/imap"
 	"github.com/carlos/spinner/internal/connectors/telegram"
 	"github.com/carlos/spinner/internal/gateway"
 	"github.com/carlos/spinner/internal/httpapi"
@@ -153,6 +154,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	connectorList := []connectors.Connector{
 		discord.New(cfg.DiscordToken, cfg.DiscordAPI, cfg.DiscordWSURL, cfg.WorkspaceRoot, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "discord")),
 		telegram.New(cfg.TelegramToken, cfg.TelegramAPI, cfg.WorkspaceRoot, cfg.TelegramPoll, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "telegram")),
+		imap.New(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUsername, cfg.IMAPPassword, cfg.IMAPMailbox, cfg.IMAPPollSeconds, cfg.WorkspaceRoot, cfg.IMAPTLSSkipVerify, sqlStore, engine, logger.With("connector", "imap")),
 	}
 
 	return &Runtime{

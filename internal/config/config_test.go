@@ -24,6 +24,13 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "")
 	t.Setenv("SPINNER_TELEGRAM_POLL_SECONDS", "")
+	t.Setenv("SPINNER_IMAP_HOST", "")
+	t.Setenv("SPINNER_IMAP_PORT", "")
+	t.Setenv("SPINNER_IMAP_USERNAME", "")
+	t.Setenv("SPINNER_IMAP_PASSWORD", "")
+	t.Setenv("SPINNER_IMAP_MAILBOX", "")
+	t.Setenv("SPINNER_IMAP_POLL_SECONDS", "")
+	t.Setenv("SPINNER_IMAP_TLS_SKIP_VERIFY", "")
 	t.Setenv("SPINNER_ZAI_MODEL", "")
 	t.Setenv("SPINNER_ZAI_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_SMTP_HOST", "")
@@ -93,6 +100,27 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.TelegramPoll != 25 {
 		t.Fatalf("expected default telegram poll seconds 25, got %d", cfg.TelegramPoll)
 	}
+	if cfg.IMAPHost != "" {
+		t.Fatalf("expected default imap host empty, got %s", cfg.IMAPHost)
+	}
+	if cfg.IMAPPort != 993 {
+		t.Fatalf("expected default imap port 993, got %d", cfg.IMAPPort)
+	}
+	if cfg.IMAPUsername != "" {
+		t.Fatalf("expected default imap username empty, got %s", cfg.IMAPUsername)
+	}
+	if cfg.IMAPPassword != "" {
+		t.Fatal("expected default imap password empty")
+	}
+	if cfg.IMAPMailbox != "INBOX" {
+		t.Fatalf("expected default imap mailbox INBOX, got %s", cfg.IMAPMailbox)
+	}
+	if cfg.IMAPPollSeconds != 60 {
+		t.Fatalf("expected default imap poll seconds 60, got %d", cfg.IMAPPollSeconds)
+	}
+	if cfg.IMAPTLSSkipVerify {
+		t.Fatal("expected default imap tls skip verify false")
+	}
 	if cfg.ZAIModel != "glm-4.7-flash" {
 		t.Fatalf("expected default z.ai model glm-4.7-flash, got %s", cfg.ZAIModel)
 	}
@@ -161,6 +189,13 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "wss://discord.test/gateway")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "https://telegram.test")
 	t.Setenv("SPINNER_TELEGRAM_POLL_SECONDS", "12")
+	t.Setenv("SPINNER_IMAP_HOST", "imap.example.com")
+	t.Setenv("SPINNER_IMAP_PORT", "1993")
+	t.Setenv("SPINNER_IMAP_USERNAME", "inbox@example.com")
+	t.Setenv("SPINNER_IMAP_PASSWORD", "imap-secret")
+	t.Setenv("SPINNER_IMAP_MAILBOX", "Support")
+	t.Setenv("SPINNER_IMAP_POLL_SECONDS", "33")
+	t.Setenv("SPINNER_IMAP_TLS_SKIP_VERIFY", "true")
 	t.Setenv("SPINNER_ZAI_MODEL", "glm-4.7-flash")
 	t.Setenv("SPINNER_ZAI_TIMEOUT_SECONDS", "90")
 	t.Setenv("SPINNER_SMTP_HOST", "smtp.example.com")
@@ -235,6 +270,27 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.TelegramPoll != 12 {
 		t.Fatalf("expected overridden telegram poll seconds, got %d", cfg.TelegramPoll)
+	}
+	if cfg.IMAPHost != "imap.example.com" {
+		t.Fatalf("expected overridden imap host, got %s", cfg.IMAPHost)
+	}
+	if cfg.IMAPPort != 1993 {
+		t.Fatalf("expected overridden imap port, got %d", cfg.IMAPPort)
+	}
+	if cfg.IMAPUsername != "inbox@example.com" {
+		t.Fatalf("expected overridden imap username, got %s", cfg.IMAPUsername)
+	}
+	if cfg.IMAPPassword != "imap-secret" {
+		t.Fatalf("expected overridden imap password, got %s", cfg.IMAPPassword)
+	}
+	if cfg.IMAPMailbox != "Support" {
+		t.Fatalf("expected overridden imap mailbox, got %s", cfg.IMAPMailbox)
+	}
+	if cfg.IMAPPollSeconds != 33 {
+		t.Fatalf("expected overridden imap poll seconds, got %d", cfg.IMAPPollSeconds)
+	}
+	if !cfg.IMAPTLSSkipVerify {
+		t.Fatal("expected overridden imap tls skip verify true")
 	}
 	if cfg.ZAIModel != "glm-4.7-flash" {
 		t.Fatalf("expected overridden z.ai model, got %s", cfg.ZAIModel)
