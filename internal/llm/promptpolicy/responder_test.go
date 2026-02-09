@@ -157,3 +157,63 @@ func TestResponderLoadsSoulHierarchy(t *testing.T) {
 		t.Fatalf("expected context soul directives, got %s", prompt)
 	}
 }
+
+func TestResponderLoadsSystemPromptHierarchy(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-3"
+	contextID := "ctx:beta"
+	globalPath := filepath.Join(root, "global-system.md")
+
+	if err := os.WriteFile(globalPath, []byte("Global system prompt rules."), 0o644); err != nil {
+		t.Fatalf("write global system prompt: %v", err)
+	}
+	workspacePromptPath := filepath.Join(root, workspaceID, "context", "SYSTEM_PROMPT.md")
+	if err := os.MkdirAll(filepath.Dir(workspacePromptPath), 0o755); err != nil {
+		t.Fatalf("create workspace prompt dir: %v", err)
+	}
+	if err := os.WriteFile(workspacePromptPath, []byte("Workspace system prompt rules."), 0o644); err != nil {
+		t.Fatalf("write workspace system prompt: %v", err)
+	}
+	contextPromptPath := filepath.Join(root, workspaceID, "context", "agents", "ctx-beta", "SYSTEM_PROMPT.md")
+	if err := os.MkdirAll(filepath.Dir(contextPromptPath), 0o755); err != nil {
+		t.Fatalf("create context prompt dir: %v", err)
+	}
+	if err := os.WriteFile(contextPromptPath, []byte("Context system prompt rules."), 0o644); err != nil {
+		t.Fatalf("write context system prompt: %v", err)
+	}
+
+	base := &fakeBase{reply: "ok"}
+	provider := &fakeProvider{
+		policy: store.ContextPolicy{
+			ContextID:   contextID,
+			WorkspaceID: workspaceID,
+			IsAdmin:     false,
+		},
+	}
+	responder := New(base, provider, Config{
+		WorkspaceRoot:       root,
+		PublicSystemPrompt:  "Public baseline prompt.",
+		GlobalSystemPrompt:  globalPath,
+		WorkspacePromptPath: "context/SYSTEM_PROMPT.md",
+		ContextPromptPath:   "context/agents/{context_id}/SYSTEM_PROMPT.md",
+	})
+	_, err := responder.Reply(context.Background(), llm.MessageInput{
+		ContextID:   contextID,
+		WorkspaceID: workspaceID,
+		Text:        "hello",
+	})
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+
+	prompt := base.lastInput.SystemPrompt
+	if !strings.Contains(prompt, "Global prompt") || !strings.Contains(prompt, "Global system prompt rules.") {
+		t.Fatalf("expected global system prompt directives, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Workspace prompt override") || !strings.Contains(prompt, "Workspace system prompt rules.") {
+		t.Fatalf("expected workspace system prompt directives, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Context prompt override") || !strings.Contains(prompt, "Context system prompt rules.") {
+		t.Fatalf("expected context system prompt directives, got %s", prompt)
+	}
+}

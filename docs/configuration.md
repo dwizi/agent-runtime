@@ -56,6 +56,14 @@ Notes:
 - `SPINNER_SOUL_GLOBAL_FILE`
 - `SPINNER_SOUL_WORKSPACE_REL_PATH`
 - `SPINNER_SOUL_CONTEXT_REL_PATH`
+- `SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`
+- `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
+- `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
+
+System prompt file precedence:
+1. global file (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
+2. workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`)
+3. context/agent override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`, where `{context_id}` is replaced)
 
 SOUL precedence:
 1. global file (`SPINNER_SOUL_GLOBAL_FILE`)

@@ -73,6 +73,9 @@ type Config struct {
 	SoulGlobalFile            string
 	SoulWorkspaceRelPath      string
 	SoulContextRelPath        string
+	SystemPromptGlobalFile    string
+	SystemPromptWorkspacePath string
+	SystemPromptContextPath   string
 
 	PublicHost string
 	AdminHost  string
@@ -157,6 +160,9 @@ func FromEnv() Config {
 		SoulGlobalFile:            stringOrDefault("SPINNER_SOUL_GLOBAL_FILE", "/context/SOUL.md"),
 		SoulWorkspaceRelPath:      stringOrDefault("SPINNER_SOUL_WORKSPACE_REL_PATH", "context/SOUL.md"),
 		SoulContextRelPath:        stringOrDefault("SPINNER_SOUL_CONTEXT_REL_PATH", "context/agents/{context_id}/SOUL.md"),
+		SystemPromptGlobalFile:    stringOrDefault("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "/context/SYSTEM_PROMPT.md"),
+		SystemPromptWorkspacePath: stringOrDefault("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
+		SystemPromptContextPath:   stringOrDefault("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
 		PublicHost:                stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                 stringOrDefault("ADMIN_HOST", "admin.localhost"),
 		AdminAPIURL:               stringOrDefault("SPINNER_ADMIN_API_URL", "https://admin.localhost"),

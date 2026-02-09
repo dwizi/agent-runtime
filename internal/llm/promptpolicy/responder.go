@@ -25,9 +25,13 @@ type Config struct {
 	GlobalSoulPath       string
 	WorkspaceSoulRelPath string
 	ContextSoulRelPath   string
+	GlobalSystemPrompt   string
+	WorkspacePromptPath  string
+	ContextPromptPath    string
 	MaxSkills            int
 	MaxSkillBytes        int
 	MaxSoulBytes         int
+	MaxPromptBytes       int
 	MaxSystemPromptBytes int
 }
 
@@ -46,6 +50,9 @@ func New(base llm.Responder, provider PolicyProvider, cfg Config) *Responder {
 	}
 	if cfg.MaxSoulBytes < 300 {
 		cfg.MaxSoulBytes = 2400
+	}
+	if cfg.MaxPromptBytes < 300 {
+		cfg.MaxPromptBytes = 2400
 	}
 	if cfg.MaxSystemPromptBytes < 800 {
 		cfg.MaxSystemPromptBytes = 12000
@@ -88,8 +95,13 @@ func (r *Responder) buildSystemPrompt(ctx context.Context, input llm.MessageInpu
 	} else if strings.TrimSpace(r.cfg.PublicSystemPrompt) != "" {
 		lines = append(lines, strings.TrimSpace(r.cfg.PublicSystemPrompt))
 	}
+	systemSections := r.loadSystemPromptSections(policy.WorkspaceID, policy.ContextID)
+	if len(systemSections) > 0 {
+		lines = append(lines, "System prompt directives:")
+		lines = append(lines, systemSections...)
+	}
 	if strings.TrimSpace(policy.SystemPrompt) != "" {
-		lines = append(lines, "Context policy:\n"+strings.TrimSpace(policy.SystemPrompt))
+		lines = append(lines, "Context policy override:\n"+strings.TrimSpace(policy.SystemPrompt))
 	}
 	soulSections := r.loadSoulSections(policy.WorkspaceID, policy.ContextID)
 	if len(soulSections) > 0 {
@@ -173,7 +185,7 @@ func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []st
 
 func (r *Responder) loadSoulSections(workspaceID, contextID string) []string {
 	sections := []string{}
-	if text, ok := r.readSoulFile(strings.TrimSpace(r.cfg.GlobalSoulPath)); ok {
+	if text, ok := r.readDirectiveFile(strings.TrimSpace(r.cfg.GlobalSoulPath), r.cfg.MaxSoulBytes); ok {
 		sections = append(sections, "Global SOUL:\n"+text)
 	}
 
@@ -186,7 +198,7 @@ func (r *Responder) loadSoulSections(workspaceID, contextID string) []string {
 	workspaceRelative := strings.TrimSpace(r.cfg.WorkspaceSoulRelPath)
 	if workspaceRelative != "" {
 		path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(workspaceRelative))
-		if text, ok := r.readSoulFile(path); ok {
+		if text, ok := r.readDirectiveFile(path, r.cfg.MaxSoulBytes); ok {
 			sections = append(sections, "Workspace SOUL override:\n"+text)
 		}
 	}
@@ -198,13 +210,46 @@ func (r *Responder) loadSoulSections(workspaceID, contextID string) []string {
 	}
 	contextRelative = strings.ReplaceAll(contextRelative, "{context_id}", sanitizeSoulPathSegment(contextID))
 	path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(contextRelative))
-	if text, ok := r.readSoulFile(path); ok {
+	if text, ok := r.readDirectiveFile(path, r.cfg.MaxSoulBytes); ok {
 		sections = append(sections, "Agent SOUL override:\n"+text)
 	}
 	return sections
 }
 
-func (r *Responder) readSoulFile(path string) (string, bool) {
+func (r *Responder) loadSystemPromptSections(workspaceID, contextID string) []string {
+	sections := []string{}
+	if text, ok := r.readDirectiveFile(strings.TrimSpace(r.cfg.GlobalSystemPrompt), r.cfg.MaxPromptBytes); ok {
+		sections = append(sections, "Global prompt:\n"+text)
+	}
+
+	workspaceRoot := strings.TrimSpace(r.cfg.WorkspaceRoot)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceRoot == "" || workspaceID == "" {
+		return sections
+	}
+
+	workspaceRelative := strings.TrimSpace(r.cfg.WorkspacePromptPath)
+	if workspaceRelative != "" {
+		path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(workspaceRelative))
+		if text, ok := r.readDirectiveFile(path, r.cfg.MaxPromptBytes); ok {
+			sections = append(sections, "Workspace prompt override:\n"+text)
+		}
+	}
+
+	contextRelative := strings.TrimSpace(r.cfg.ContextPromptPath)
+	contextID = strings.TrimSpace(contextID)
+	if contextRelative == "" || contextID == "" {
+		return sections
+	}
+	contextRelative = strings.ReplaceAll(contextRelative, "{context_id}", sanitizeSoulPathSegment(contextID))
+	path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(contextRelative))
+	if text, ok := r.readDirectiveFile(path, r.cfg.MaxPromptBytes); ok {
+		sections = append(sections, "Context prompt override:\n"+text)
+	}
+	return sections
+}
+
+func (r *Responder) readDirectiveFile(path string, maxBytes int) (string, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", false
@@ -217,8 +262,8 @@ func (r *Responder) readSoulFile(path string) (string, bool) {
 	if text == "" {
 		return "", false
 	}
-	if len(text) > r.cfg.MaxSoulBytes {
-		text = text[:r.cfg.MaxSoulBytes] + "..."
+	if maxBytes > 0 && len(text) > maxBytes {
+		text = text[:maxBytes] + "..."
 	}
 	return text, true
 }

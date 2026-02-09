@@ -176,6 +176,14 @@ Prompt policies and skill templates:
 - default baseline prompts:
   - `SPINNER_LLM_ADMIN_SYSTEM_PROMPT`
   - `SPINNER_LLM_PUBLIC_SYSTEM_PROMPT`
+- optional file-based system prompts:
+  - `SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`
+  - `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
+  - `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
+- system prompt file precedence:
+  - global (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
+  - workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`)
+  - context override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`, `{context_id}` replaced)
 - optional skill templates are loaded from workspace files:
   - `skills/common/*.md`
   - `skills/admin/*.md` or `skills/public/*.md`

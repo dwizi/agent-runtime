@@ -65,6 +65,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_SOUL_GLOBAL_FILE", "")
 	t.Setenv("SPINNER_SOUL_WORKSPACE_REL_PATH", "")
 	t.Setenv("SPINNER_SOUL_CONTEXT_REL_PATH", "")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "")
 
 	cfg := FromEnv()
 	if cfg.DataDir != "/data" {
@@ -235,6 +238,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SoulContextRelPath != "context/agents/{context_id}/SOUL.md" {
 		t.Fatalf("expected default soul context rel path, got %s", cfg.SoulContextRelPath)
 	}
+	if cfg.SystemPromptGlobalFile != "/context/SYSTEM_PROMPT.md" {
+		t.Fatalf("expected default system prompt global file /context/SYSTEM_PROMPT.md, got %s", cfg.SystemPromptGlobalFile)
+	}
+	if cfg.SystemPromptWorkspacePath != "context/SYSTEM_PROMPT.md" {
+		t.Fatalf("expected default workspace system prompt path context/SYSTEM_PROMPT.md, got %s", cfg.SystemPromptWorkspacePath)
+	}
+	if cfg.SystemPromptContextPath != "context/agents/{context_id}/SYSTEM_PROMPT.md" {
+		t.Fatalf("expected default context system prompt path, got %s", cfg.SystemPromptContextPath)
+	}
 	if !cfg.AdminTLSSkipVerify {
 		t.Fatal("expected admin tls skip verify to default to true")
 	}
@@ -302,6 +314,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_SOUL_GLOBAL_FILE", "/context/GLOBAL_SOUL.md")
 	t.Setenv("SPINNER_SOUL_WORKSPACE_REL_PATH", "persona/SOUL.md")
 	t.Setenv("SPINNER_SOUL_CONTEXT_REL_PATH", "persona/agents/{context_id}.md")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "/context/GLOBAL_SYSTEM_PROMPT.md")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "persona/SYSTEM_PROMPT.md")
+	t.Setenv("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "persona/agents/{context_id}/SYSTEM_PROMPT.md")
 	t.Setenv("PUBLIC_HOST", "chat.example.com")
 	t.Setenv("ADMIN_HOST", "admin.example.com")
 	t.Setenv("SPINNER_ADMIN_API_URL", "https://admin.example.com")
@@ -483,6 +498,15 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SoulContextRelPath != "persona/agents/{context_id}.md" {
 		t.Fatalf("expected overridden soul context rel path, got %s", cfg.SoulContextRelPath)
+	}
+	if cfg.SystemPromptGlobalFile != "/context/GLOBAL_SYSTEM_PROMPT.md" {
+		t.Fatalf("expected overridden global system prompt file, got %s", cfg.SystemPromptGlobalFile)
+	}
+	if cfg.SystemPromptWorkspacePath != "persona/SYSTEM_PROMPT.md" {
+		t.Fatalf("expected overridden workspace system prompt path, got %s", cfg.SystemPromptWorkspacePath)
+	}
+	if cfg.SystemPromptContextPath != "persona/agents/{context_id}/SYSTEM_PROMPT.md" {
+		t.Fatalf("expected overridden context system prompt path, got %s", cfg.SystemPromptContextPath)
 	}
 	if cfg.PublicHost != "chat.example.com" {
 		t.Fatalf("expected overridden public host, got %s", cfg.PublicHost)

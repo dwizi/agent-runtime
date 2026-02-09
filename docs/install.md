@@ -47,7 +47,7 @@ What this does:
 - syncs missing mTLS env paths into `.env`
 - bind-mounts host paths for live editing:
   - `./data` -> `/data` (workspaces, sqlite, task outputs)
-  - `./context` -> `/context` (global SOUL files)
+  - `./context` -> `/context` (global SOUL and system prompt files)
 
 Optional qmd tooling sidecar:
 
