@@ -1,0 +1,61 @@
+services:
+  spinner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spinner-app
+    restart: unless-stopped
+    environment:
+      SPINNER_ENV: ${SPINNER_ENV:-production}
+      SPINNER_HTTP_ADDR: :8080
+      SPINNER_DATA_DIR: /data
+      SPINNER_WORKSPACE_ROOT: /data/workspaces
+      SPINNER_DB_PATH: /data/spinner/meta.sqlite
+      SPINNER_DEFAULT_CONCURRENCY: ${SPINNER_DEFAULT_CONCURRENCY:-5}
+      SPINNER_DISCORD_TOKEN: ${SPINNER_DISCORD_TOKEN:-}
+      SPINNER_TELEGRAM_TOKEN: ${SPINNER_TELEGRAM_TOKEN:-}
+      SPINNER_ZAI_API_KEY: ${SPINNER_ZAI_API_KEY:-}
+      SPINNER_ZAI_BASE_URL: ${SPINNER_ZAI_BASE_URL:-https://api.z.ai/api/paas/v4}
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      ADMIN_HOST: ${ADMIN_HOST:-admin.localhost}
+    volumes:
+      - spinner_data:/data
+    expose:
+      - "8080"
+    networks:
+      - spinner_net
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: spinner-caddy
+    restart: unless-stopped
+    depends_on:
+      - spinner
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      ADMIN_HOST: ${ADMIN_HOST:-admin.localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    command:
+      - /bin/sh
+      - -c
+      - command -v openssl >/dev/null 2>&1 || apk add --no-cache openssl >/dev/null; /etc/caddy/scripts/gen-mtls.sh && caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ops/caddy/scripts:/etc/caddy/scripts:ro
+      - ./ops/caddy/pki:/etc/caddy/pki
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - spinner_net
+
+volumes:
+  spinner_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  spinner_net:
+    driver: bridge
