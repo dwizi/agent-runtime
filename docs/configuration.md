@@ -69,6 +69,7 @@ Notes:
 ## Objectives and Proactivity
 
 - `SPINNER_OBJECTIVE_POLL_SECONDS`
+- `SPINNER_TASK_NOTIFY_POLICY` (`both` | `admin` | `origin`)
 
 API endpoints:
 - `POST /api/v1/objectives`

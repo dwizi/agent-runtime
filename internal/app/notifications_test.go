@@ -55,7 +55,7 @@ func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n1",
@@ -103,7 +103,7 @@ func TestTaskCompletionNotificationToAdminContextForSystemTasks(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n2",
@@ -126,6 +126,94 @@ func TestTaskCompletionNotificationToAdminContextForSystemTasks(t *testing.T) {
 	}
 	if publisher.messages[0].externalID != "200" {
 		t.Fatalf("expected publish to external id 200, got %s", publisher.messages[0].externalID)
+	}
+}
+
+func TestTaskCompletionNotificationPolicyOriginSkipsAdminContexts(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	adminContext, err := sqlStore.SetContextAdminByExternal(ctx, "telegram", "300", true)
+	if err != nil {
+		t.Fatalf("set admin context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:          "task-n3",
+		WorkspaceID: adminContext.WorkspaceID,
+		ContextID:   "system:filewatcher",
+		Kind:        "reindex_markdown",
+		Title:       "Reindex markdown",
+		Prompt:      "file changed",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "origin", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-n3",
+		WorkspaceID: adminContext.WorkspaceID,
+		ContextID:   "system:filewatcher",
+		Kind:        orchestrator.TaskKindReindex,
+		Title:       "Reindex markdown",
+		Prompt:      "file changed",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: "indexed",
+	})
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 0 {
+		t.Fatalf("expected no published messages for origin-only policy, got %d", len(publisher.messages))
+	}
+}
+
+func TestTaskCompletionNotificationPolicyAdminSkipsOriginContext(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "400", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:          "task-n4",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        "general",
+		Title:       "Notify target",
+		Prompt:      "Write summary",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "admin", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-n4",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Notify target",
+		Prompt:      "Write summary",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: "done",
+	})
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 0 {
+		t.Fatalf("expected no published messages for admin-only policy without admin contexts, got %d", len(publisher.messages))
 	}
 }
 

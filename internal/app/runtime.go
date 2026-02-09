@@ -197,7 +197,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}
 		publishers[strings.ToLower(strings.TrimSpace(connector.Name()))] = publisher
 	}
-	notifier := newTaskCompletionNotifier(sqlStore, publishers, logger.With("component", "task-notifier"))
+	notifier := newTaskCompletionNotifier(sqlStore, publishers, cfg.TaskNotifyPolicy, logger.With("component", "task-notifier"))
 	engine.SetObserver(newTaskObserver(sqlStore, notifier, logger.With("component", "task-observer")))
 
 	return &Runtime{

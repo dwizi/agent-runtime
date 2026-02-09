@@ -16,10 +16,11 @@ import (
 type taskCompletionNotifier struct {
 	store      *store.Store
 	publishers map[string]connectors.Publisher
+	policy     string
 	logger     *slog.Logger
 }
 
-func newTaskCompletionNotifier(storeRef *store.Store, publishers map[string]connectors.Publisher, logger *slog.Logger) *taskCompletionNotifier {
+func newTaskCompletionNotifier(storeRef *store.Store, publishers map[string]connectors.Publisher, policy string, logger *slog.Logger) *taskCompletionNotifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -34,6 +35,7 @@ func newTaskCompletionNotifier(storeRef *store.Store, publishers map[string]conn
 	return &taskCompletionNotifier{
 		store:      storeRef,
 		publishers: cleanPublishers,
+		policy:     normalizeTaskNotifyPolicy(policy),
 		logger:     logger,
 	}
 }
@@ -93,7 +95,7 @@ func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orches
 	}
 
 	contextID := strings.TrimSpace(task.ContextID)
-	if contextID != "" && !strings.HasPrefix(contextID, "system:") {
+	if n.includeOriginTarget() && contextID != "" && !strings.HasPrefix(contextID, "system:") {
 		record, err := n.store.LookupContextDelivery(ctx, contextID)
 		if err == nil {
 			add(record)
@@ -102,12 +104,14 @@ func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orches
 		}
 	}
 
-	adminContexts, err := n.store.ListWorkspaceAdminDeliveries(ctx, strings.TrimSpace(task.WorkspaceID), 50)
-	if err != nil {
-		n.logger.Error("task notification admin context list failed", "task_id", task.ID, "workspace_id", task.WorkspaceID, "error", err)
-	} else {
-		for _, record := range adminContexts {
-			add(record)
+	if n.includeAdminTargets() {
+		adminContexts, err := n.store.ListWorkspaceAdminDeliveries(ctx, strings.TrimSpace(task.WorkspaceID), 50)
+		if err != nil {
+			n.logger.Error("task notification admin context list failed", "task_id", task.ID, "workspace_id", task.WorkspaceID, "error", err)
+		} else {
+			for _, record := range adminContexts {
+				add(record)
+			}
 		}
 	}
 
@@ -153,6 +157,25 @@ func buildTaskFailureMessage(task orchestrator.Task, taskErr error) string {
 	}
 	message := fmt.Sprintf("Task failed\n- id: `%s`\n- kind: `%s`\n- title: %s\n- error: %s", strings.TrimSpace(task.ID), kind, title, truncateSingleLine(errorText, 900))
 	return compactLineBreaks(message, 1400)
+}
+
+func (n *taskCompletionNotifier) includeOriginTarget() bool {
+	return n.policy == "both" || n.policy == "origin"
+}
+
+func (n *taskCompletionNotifier) includeAdminTargets() bool {
+	return n.policy == "both" || n.policy == "admin"
+}
+
+func normalizeTaskNotifyPolicy(input string) string {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "admin":
+		return "admin"
+	case "origin":
+		return "origin"
+	default:
+		return "both"
+	}
 }
 
 func truncateSingleLine(input string, maxLen int) string {

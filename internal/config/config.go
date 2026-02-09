@@ -24,6 +24,7 @@ type Config struct {
 	QMDQueryTimeoutSec int
 	QMDAutoEmbed       bool
 	ObjectivePollSec   int
+	TaskNotifyPolicy   string
 
 	DiscordToken              string
 	DiscordAPI                string
@@ -97,6 +98,7 @@ func FromEnv() Config {
 		QMDQueryTimeoutSec:        intOrDefault("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", 30),
 		QMDAutoEmbed:              boolOrDefault("SPINNER_QMD_AUTO_EMBED", true),
 		ObjectivePollSec:          intOrDefault("SPINNER_OBJECTIVE_POLL_SECONDS", 15),
+		TaskNotifyPolicy:          notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_POLICY", "both"),
 		DiscordToken:              os.Getenv("SPINNER_DISCORD_TOKEN"),
 		DiscordAPI:                stringOrDefault("SPINNER_DISCORD_API_BASE", "https://discord.com/api/v10"),
 		DiscordWSURL:              stringOrDefault("SPINNER_DISCORD_GATEWAY_URL", "wss://gateway.discord.gg/?v=10&encoding=json"),
@@ -174,5 +176,15 @@ func boolOrDefault(name string, fallback bool) bool {
 		return false
 	default:
 		return fallback
+	}
+}
+
+func notificationPolicyOrDefault(name, fallback string) string {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch value {
+	case "both", "admin", "origin":
+		return value
+	default:
+		return strings.ToLower(strings.TrimSpace(fallback))
 	}
 }
