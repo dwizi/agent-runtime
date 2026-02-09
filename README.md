@@ -44,6 +44,8 @@ Health endpoints:
 - `GET /api/v1/pairings/lookup?token=<token>`
 - `POST /api/v1/pairings/approve`
 - `POST /api/v1/pairings/deny`
+- `POST /api/v1/objectives`
+- `GET /api/v1/objectives?workspace_id=<id>`
 
 Pairing flow (Telegram DM -> TUI approve):
 1. Linked Telegram bot receives `pair` (or `/pair`) in private DM.
@@ -102,6 +104,19 @@ IMAP ingestion behavior:
 - unread emails are polled from the configured mailbox
 - each message is written to workspace Markdown under `inbox/imap/<mailbox>/<uid>-<subject>.md`
 - each ingested message queues a review task in the orchestrator
+
+Objective scheduler runtime env:
+- `SPINNER_OBJECTIVE_POLL_SECONDS` (default: `15`)
+
+Objectives and proactivity:
+- objectives can be stored as:
+  - `trigger_type: "schedule"` with `interval_seconds` (and optional `next_run_unix`)
+  - `trigger_type: "event"` with `event_key` (currently `markdown.updated`)
+- scheduler polls due schedule objectives and enqueues `objective` tasks
+- markdown file changes can trigger event objectives for the changed workspace
+- create/list objectives via API:
+  - `POST /api/v1/objectives`
+  - `GET /api/v1/objectives?workspace_id=<workspace-id>&active_only=true`
 
 SMTP runtime env (for `send_email` approvals):
 - `SPINNER_SMTP_HOST` (required for SMTP email execution)

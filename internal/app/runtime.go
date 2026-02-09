@@ -29,6 +29,7 @@ import (
 	"github.com/carlos/spinner/internal/llm/zai"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
+	"github.com/carlos/spinner/internal/scheduler"
 	"github.com/carlos/spinner/internal/store"
 	"github.com/carlos/spinner/internal/watcher"
 )
@@ -40,6 +41,7 @@ type Runtime struct {
 	engine     *orchestrator.Engine
 	httpServer *http.Server
 	watcher    *watcher.Service
+	scheduler  *scheduler.Service
 	qmd        *qmd.Service
 	connectors []connectors.Connector
 }
@@ -114,6 +116,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		RateLimitPerWindow:     cfg.LLMRateLimitPerWindow,
 		RateLimitWindow:        time.Duration(cfg.LLMRateLimitWindowSec) * time.Second,
 	})
+	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
 
 	watchService, err := watcher.New(
 		[]string{cfg.WorkspaceRoot},
@@ -121,6 +124,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		func(ctx context.Context, path string) {
 			if workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path); workspaceID != "" {
 				qmdService.QueueWorkspaceIndex(workspaceID)
+				schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
 			}
 			_, enqueueErr := engine.Enqueue(orchestrator.Task{
 				WorkspaceID: "system",
@@ -164,6 +168,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		engine:     engine,
 		httpServer: httpServer,
 		watcher:    watchService,
+		scheduler:  schedulerService,
 		qmd:        qmdService,
 		connectors: connectorList,
 	}, nil
@@ -178,6 +183,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	})
 	group.Go(func() error {
 		return r.watcher.Start(groupCtx)
+	})
+	group.Go(func() error {
+		return r.scheduler.Start(groupCtx)
 	})
 	for _, conn := range r.connectors {
 		connector := conn

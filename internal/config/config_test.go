@@ -19,6 +19,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_QMD_INDEX_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "")
+	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "")
 	t.Setenv("SPINNER_ADMIN_TLS_SKIP_VERIFY", "")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "")
@@ -87,6 +88,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if !cfg.QMDAutoEmbed {
 		t.Fatal("expected qmd auto embed to default to true")
+	}
+	if cfg.ObjectivePollSec != 15 {
+		t.Fatalf("expected default objective poll seconds 15, got %d", cfg.ObjectivePollSec)
 	}
 	if cfg.DiscordAPI != "https://discord.com/api/v10" {
 		t.Fatalf("expected default discord api base, got %s", cfg.DiscordAPI)
@@ -185,6 +189,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_QMD_INDEX_TIMEOUT_SECONDS", "420")
 	t.Setenv("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", "44")
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "false")
+	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "11")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "https://discord.test/api/v10")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "wss://discord.test/gateway")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "https://telegram.test")
@@ -258,6 +263,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.QMDAutoEmbed {
 		t.Fatal("expected qmd auto embed false")
+	}
+	if cfg.ObjectivePollSec != 11 {
+		t.Fatalf("expected overridden objective poll seconds, got %d", cfg.ObjectivePollSec)
 	}
 	if cfg.DiscordAPI != "https://discord.test/api/v10" {
 		t.Fatalf("expected overridden discord api base, got %s", cfg.DiscordAPI)

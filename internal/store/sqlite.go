@@ -121,6 +121,22 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			created_at_unix INTEGER NOT NULL,
 			updated_at_unix INTEGER NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS objectives (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			trigger_type TEXT NOT NULL,
+			event_key TEXT,
+			interval_seconds INTEGER,
+			active INTEGER NOT NULL DEFAULT 1,
+			next_run_unix INTEGER,
+			last_run_unix INTEGER,
+			last_error TEXT,
+			created_at_unix INTEGER NOT NULL,
+			updated_at_unix INTEGER NOT NULL
+		);`,
 	}
 
 	for _, query := range queries {

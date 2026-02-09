@@ -15,8 +15,9 @@ var ErrQueueFull = errors.New("task queue is full")
 type TaskKind string
 
 const (
-	TaskKindGeneral TaskKind = "general"
-	TaskKindReindex TaskKind = "reindex_markdown"
+	TaskKindGeneral   TaskKind = "general"
+	TaskKindReindex   TaskKind = "reindex_markdown"
+	TaskKindObjective TaskKind = "objective"
 )
 
 type Task struct {

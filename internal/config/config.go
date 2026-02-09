@@ -23,6 +23,7 @@ type Config struct {
 	QMDIndexTimeoutSec int
 	QMDQueryTimeoutSec int
 	QMDAutoEmbed       bool
+	ObjectivePollSec   int
 
 	DiscordToken              string
 	DiscordAPI                string
@@ -90,6 +91,7 @@ func FromEnv() Config {
 		QMDIndexTimeoutSec:        intOrDefault("SPINNER_QMD_INDEX_TIMEOUT_SECONDS", 180),
 		QMDQueryTimeoutSec:        intOrDefault("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", 30),
 		QMDAutoEmbed:              boolOrDefault("SPINNER_QMD_AUTO_EMBED", true),
+		ObjectivePollSec:          intOrDefault("SPINNER_OBJECTIVE_POLL_SECONDS", 15),
 		DiscordToken:              os.Getenv("SPINNER_DISCORD_TOKEN"),
 		DiscordAPI:                stringOrDefault("SPINNER_DISCORD_API_BASE", "https://discord.com/api/v10"),
 		DiscordWSURL:              stringOrDefault("SPINNER_DISCORD_GATEWAY_URL", "wss://gateway.discord.gg/?v=10&encoding=json"),
