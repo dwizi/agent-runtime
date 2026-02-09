@@ -88,6 +88,18 @@ func (c *Connector) Name() string {
 	return "telegram"
 }
 
+func (c *Connector) Publish(ctx context.Context, externalID, text string) error {
+	chatID, err := strconv.ParseInt(strings.TrimSpace(externalID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("parse telegram external id: %w", err)
+	}
+	message := strings.TrimSpace(text)
+	if message == "" {
+		return nil
+	}
+	return c.sendMessage(ctx, chatID, message)
+}
+
 func (c *Connector) Start(ctx context.Context) error {
 	if c.token == "" {
 		c.logger.Info("connector disabled, token missing")

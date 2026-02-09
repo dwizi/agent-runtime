@@ -48,3 +48,39 @@ func TestLookupContextPolicyByExternal(t *testing.T) {
 		t.Fatal("expected context id")
 	}
 }
+
+func TestContextDeliveryLookupAndAdminList(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+
+	channelContext, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "100", "community")
+	if err != nil {
+		t.Fatalf("ensure channel context: %v", err)
+	}
+	adminContext, err := sqlStore.SetContextAdminByExternal(ctx, "telegram", "200", true)
+	if err != nil {
+		t.Fatalf("set admin context: %v", err)
+	}
+
+	delivery, err := sqlStore.LookupContextDelivery(ctx, channelContext.ID)
+	if err != nil {
+		t.Fatalf("lookup context delivery: %v", err)
+	}
+	if delivery.ExternalID != "100" {
+		t.Fatalf("expected external id 100, got %s", delivery.ExternalID)
+	}
+	if delivery.IsAdmin {
+		t.Fatal("expected non-admin channel context")
+	}
+
+	adminDeliveries, err := sqlStore.ListWorkspaceAdminDeliveries(ctx, adminContext.WorkspaceID, 10)
+	if err != nil {
+		t.Fatalf("list workspace admin deliveries: %v", err)
+	}
+	if len(adminDeliveries) != 1 {
+		t.Fatalf("expected one admin delivery, got %d", len(adminDeliveries))
+	}
+	if adminDeliveries[0].ContextID != adminContext.ID {
+		t.Fatalf("unexpected admin context id %s", adminDeliveries[0].ContextID)
+	}
+}

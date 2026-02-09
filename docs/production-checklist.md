@@ -39,6 +39,7 @@ Use this as a go-live gate for Spinner deployments.
   - [ ] `curl -fsS http://localhost/api/v1/info`
 - [ ] TUI access verified: `make tui`
 - [ ] First `/task` command succeeds in each enabled connector.
+- [ ] Task lifecycle observed in DB (`queued` -> `running` -> `succeeded`/`failed`).
 
 ## E. Policy and Automation
 

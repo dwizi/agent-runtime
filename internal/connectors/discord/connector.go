@@ -94,6 +94,18 @@ func (c *Connector) Name() string {
 	return "discord"
 }
 
+func (c *Connector) Publish(ctx context.Context, externalID, text string) error {
+	channelID := strings.TrimSpace(externalID)
+	if channelID == "" {
+		return fmt.Errorf("discord external id is required")
+	}
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	return c.sendChannelMessage(ctx, channelID, content)
+}
+
 func (c *Connector) Start(ctx context.Context) error {
 	if c.token == "" {
 		c.logger.Info("connector disabled, token missing")

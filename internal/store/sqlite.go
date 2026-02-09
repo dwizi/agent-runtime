@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -83,7 +84,15 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			title TEXT NOT NULL,
 			prompt TEXT NOT NULL,
 			status TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+			attempts INTEGER NOT NULL DEFAULT 0,
+			worker_id INTEGER,
+			started_at_unix INTEGER,
+			finished_at_unix INTEGER,
+			result_summary TEXT,
+			result_path TEXT,
+			error_message TEXT,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at_unix INTEGER
 		);`,
 		`CREATE TABLE IF NOT EXISTS pairing_requests (
 			id TEXT PRIMARY KEY,
@@ -161,6 +170,14 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 		`ALTER TABLE action_approvals ADD COLUMN execution_message TEXT;`,
 		`ALTER TABLE action_approvals ADD COLUMN executor_plugin TEXT;`,
 		`ALTER TABLE action_approvals ADD COLUMN executed_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;`,
+		`ALTER TABLE tasks ADD COLUMN worker_id INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN started_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN finished_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN result_summary TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN result_path TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN error_message TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN updated_at_unix INTEGER;`,
 	}
 	for _, query := range alterQueries {
 		if _, err := s.db.ExecContext(ctx, query); err != nil {
@@ -175,9 +192,10 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 }
 
 func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
+	nowUnix := time.Now().UTC().Unix()
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO tasks (id, workspace_id, context_id, kind, title, prompt, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (id, workspace_id, context_id, kind, title, prompt, status, updated_at_unix) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.ID,
 		input.WorkspaceID,
 		input.ContextID,
@@ -185,6 +203,7 @@ func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
 		input.Title,
 		input.Prompt,
 		input.Status,
+		nowUnix,
 	)
 	if err != nil {
 		return fmt.Errorf("insert task: %w", err)

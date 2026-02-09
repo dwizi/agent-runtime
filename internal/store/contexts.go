@@ -35,6 +35,14 @@ type ContextPolicy struct {
 	SystemPrompt string
 }
 
+type ContextDelivery struct {
+	ContextID   string
+	WorkspaceID string
+	Connector   string
+	ExternalID  string
+	IsAdmin     bool
+}
+
 func (s *Store) LookupUserIdentity(ctx context.Context, connector, connectorUserID string) (UserIdentity, error) {
 	row := s.db.QueryRowContext(
 		ctx,
@@ -170,6 +178,61 @@ func (s *Store) SetContextSystemPromptByExternal(ctx context.Context, connector,
 		return ContextPolicy{}, fmt.Errorf("update context system prompt: %w", err)
 	}
 	return s.LookupContextPolicy(ctx, contextRecord.ID)
+}
+
+func (s *Store) LookupContextDelivery(ctx context.Context, contextID string) (ContextDelivery, error) {
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT id, workspace_id, connector, external_id, is_admin
+		 FROM contexts
+		 WHERE id = ?`,
+		strings.TrimSpace(contextID),
+	)
+	var record ContextDelivery
+	var isAdminInt int
+	if err := row.Scan(&record.ContextID, &record.WorkspaceID, &record.Connector, &record.ExternalID, &isAdminInt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ContextDelivery{}, ErrContextNotFound
+		}
+		return ContextDelivery{}, fmt.Errorf("lookup context delivery: %w", err)
+	}
+	record.IsAdmin = isAdminInt == 1
+	return record, nil
+}
+
+func (s *Store) ListWorkspaceAdminDeliveries(ctx context.Context, workspaceID string, limit int) ([]ContextDelivery, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return []ContextDelivery{}, nil
+	}
+	if limit < 1 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, workspace_id, connector, external_id, is_admin
+		 FROM contexts
+		 WHERE workspace_id = ? AND is_admin = 1
+		 ORDER BY created_at ASC
+		 LIMIT ?`,
+		workspaceID,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list admin deliveries: %w", err)
+	}
+	defer rows.Close()
+	results := make([]ContextDelivery, 0, limit)
+	for rows.Next() {
+		var record ContextDelivery
+		var isAdminInt int
+		if err := rows.Scan(&record.ContextID, &record.WorkspaceID, &record.Connector, &record.ExternalID, &isAdminInt); err != nil {
+			return nil, fmt.Errorf("scan admin delivery: %w", err)
+		}
+		record.IsAdmin = isAdminInt == 1
+		results = append(results, record)
+	}
+	return results, nil
 }
 
 func ensureWorkspaceTx(ctx context.Context, tx *sql.Tx, slug, name string) (string, error) {

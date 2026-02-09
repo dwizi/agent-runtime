@@ -129,17 +129,22 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		RateLimitWindow:        time.Duration(cfg.LLMRateLimitWindowSec) * time.Second,
 	})
 	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
+	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, groundedResponder, qmdService, logger.With("component", "task-executor")))
 
 	watchService, err := watcher.New(
 		[]string{cfg.WorkspaceRoot},
 		logger.With("component", "watcher"),
 		func(ctx context.Context, path string) {
-			if workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path); workspaceID != "" {
+			workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path)
+			if workspaceID != "" {
 				qmdService.QueueWorkspaceIndex(workspaceID)
 				schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
 			}
-			_, enqueueErr := engine.Enqueue(orchestrator.Task{
-				WorkspaceID: "system",
+			if workspaceID == "" {
+				return
+			}
+			task, enqueueErr := engine.Enqueue(orchestrator.Task{
+				WorkspaceID: workspaceID,
 				ContextID:   "system:filewatcher",
 				Title:       "Reindex markdown",
 				Prompt:      "markdown file changed: " + path,
@@ -147,6 +152,18 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			})
 			if enqueueErr != nil {
 				logger.Error("failed to enqueue reindex task", "path", path, "error", enqueueErr)
+				return
+			}
+			if persistErr := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+				ID:          task.ID,
+				WorkspaceID: task.WorkspaceID,
+				ContextID:   task.ContextID,
+				Kind:        string(task.Kind),
+				Title:       task.Title,
+				Prompt:      task.Prompt,
+				Status:      "queued",
+			}); persistErr != nil {
+				logger.Error("failed to persist reindex task", "path", path, "task_id", task.ID, "error", persistErr)
 			}
 		},
 	)
@@ -172,6 +189,16 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		telegram.New(cfg.TelegramToken, cfg.TelegramAPI, cfg.WorkspaceRoot, cfg.TelegramPoll, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "telegram")),
 		imap.New(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUsername, cfg.IMAPPassword, cfg.IMAPMailbox, cfg.IMAPPollSeconds, cfg.WorkspaceRoot, cfg.IMAPTLSSkipVerify, sqlStore, engine, logger.With("connector", "imap")),
 	}
+	publishers := map[string]connectors.Publisher{}
+	for _, connector := range connectorList {
+		publisher, ok := connector.(connectors.Publisher)
+		if !ok {
+			continue
+		}
+		publishers[strings.ToLower(strings.TrimSpace(connector.Name()))] = publisher
+	}
+	notifier := newTaskCompletionNotifier(sqlStore, publishers, logger.With("component", "task-notifier"))
+	engine.SetObserver(newTaskObserver(sqlStore, notifier, logger.With("component", "task-observer")))
 
 	return &Runtime{
 		cfg:        cfg,

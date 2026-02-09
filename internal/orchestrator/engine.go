@@ -30,22 +30,51 @@ type Task struct {
 	CreatedAt   time.Time
 }
 
+type TaskResult struct {
+	Summary      string
+	ArtifactPath string
+}
+
+type TaskExecutor interface {
+	Execute(ctx context.Context, task Task) (TaskResult, error)
+}
+
+type TaskObserver interface {
+	OnTaskQueued(task Task)
+	OnTaskStarted(task Task, workerID int)
+	OnTaskCompleted(task Task, workerID int, result TaskResult)
+	OnTaskFailed(task Task, workerID int, err error)
+}
+
 type Engine struct {
 	maxConcurrency int
 	tasks          chan Task
 	logger         *slog.Logger
 	startOnce      sync.Once
+	executor       TaskExecutor
+	observer       TaskObserver
 }
 
 func New(maxConcurrency int, logger *slog.Logger) *Engine {
 	if maxConcurrency < 1 {
 		maxConcurrency = 1
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Engine{
 		maxConcurrency: maxConcurrency,
 		tasks:          make(chan Task, maxConcurrency*50),
 		logger:         logger,
 	}
+}
+
+func (e *Engine) SetExecutor(executor TaskExecutor) {
+	e.executor = executor
+}
+
+func (e *Engine) SetObserver(observer TaskObserver) {
+	e.observer = observer
 }
 
 func (e *Engine) Start(ctx context.Context) error {
@@ -79,6 +108,9 @@ func (e *Engine) Enqueue(task Task) (Task, error) {
 	select {
 	case e.tasks <- task:
 		e.logger.Info("task queued", "task_id", task.ID, "workspace_id", task.WorkspaceID, "context_id", task.ContextID, "kind", task.Kind)
+		if e.observer != nil {
+			e.observer.OnTaskQueued(task)
+		}
 		return task, nil
 	default:
 		return Task{}, ErrQueueFull
@@ -100,8 +132,28 @@ func (e *Engine) worker(ctx context.Context, workerID int) {
 
 func (e *Engine) processTask(ctx context.Context, workerID int, task Task) {
 	e.logger.Info("processing task", "worker_id", workerID, "task_id", task.ID, "kind", task.Kind, "title", task.Title)
-	select {
-	case <-ctx.Done():
-	case <-time.After(150 * time.Millisecond):
+	if e.observer != nil {
+		e.observer.OnTaskStarted(task, workerID)
+	}
+	if e.executor == nil {
+		select {
+		case <-ctx.Done():
+		case <-time.After(150 * time.Millisecond):
+		}
+		if e.observer != nil {
+			e.observer.OnTaskCompleted(task, workerID, TaskResult{Summary: "processed with default noop executor"})
+		}
+		return
+	}
+	result, err := e.executor.Execute(ctx, task)
+	if err != nil {
+		e.logger.Error("task execution failed", "worker_id", workerID, "task_id", task.ID, "error", err)
+		if e.observer != nil {
+			e.observer.OnTaskFailed(task, workerID, err)
+		}
+		return
+	}
+	if e.observer != nil {
+		e.observer.OnTaskCompleted(task, workerID, result)
 	}
 }

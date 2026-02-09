@@ -13,6 +13,9 @@ Day-2 tasks for maintaining Spinner safely.
    - `GET /api/v1/objectives?workspace_id=<id>&active_only=true`
 4. Review IMAP ingestion paths:
    - `/data/workspaces/<ws>/inbox/imap/...`
+5. Review task execution lifecycle:
+   - `sqlite3 /data/spinner/meta.sqlite "SELECT status, count(*) FROM tasks GROUP BY status ORDER BY status;"`
+   - task outputs under `/data/workspaces/<ws>/tasks/YYYY/MM/DD/<task-id>.md`
 
 ## Admin/TUI Controls
 
