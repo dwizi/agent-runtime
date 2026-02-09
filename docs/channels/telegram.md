@@ -1,6 +1,6 @@
-# Telegram Bot Token Guide
+# Telegram Bot Token Guide (Overlord/Admin)
 
-This guide covers creating a Telegram bot token and wiring it to Spinner.
+This guide covers creating a Telegram bot token and validating admin control-plane access.
 
 ## 1. Create a bot with BotFather
 
@@ -13,10 +13,11 @@ This guide covers creating a Telegram bot token and wiring it to Spinner.
 
 BotFather returns an HTTP API token after creation.
 
-## 2. Set the token in `.env`
+## 2. Set token and poll settings in `.env`
 
 ```env
 SPINNER_TELEGRAM_TOKEN=your_telegram_bot_token
+SPINNER_TELEGRAM_POLL_SECONDS=25
 ```
 
 ## 3. Optional environment overrides
@@ -28,7 +29,7 @@ SPINNER_TELEGRAM_API_BASE=https://api.telegram.org
 SPINNER_TELEGRAM_POLL_SECONDS=25
 ```
 
-## 4. Start Spinner and test
+## 4. Start Spinner and bootstrap admin pairing
 
 1. Start Spinner:
    - `make run`
@@ -38,8 +39,10 @@ SPINNER_TELEGRAM_POLL_SECONDS=25
 4. Open:
    - `make tui`
 5. Paste token, then approve with `a`.
+6. In your admin Telegram chat, run:
+   - `/admin-channel enable`
 
-## 5. Test channel commands
+## 5. Test admin and task commands
 
 After pairing, use commands in Telegram chats where the bot is present:
 
@@ -47,6 +50,8 @@ After pairing, use commands in Telegram chats where the bot is present:
 - `/admin-channel enable` (admin role required)
 - `/approve <token>`
 - `/deny <token> [reason]`
+- `/pending-actions`
+- `/approve-action <id>`
 
 If commands fail:
 

@@ -227,6 +227,10 @@ Rotate these artifacts before production use.
 
 ## Docs
 
+- Overlord/admin index: `docs/README.md`
+- Install runbook: `docs/install.md`
+- Configuration reference: `docs/configuration.md`
+- Operations runbook: `docs/operations.md`
 - Product requirements: `docs/prd.md`
 - Project brief: `docs/brief.md`
 - Channel setup guides: `docs/channels/README.md`

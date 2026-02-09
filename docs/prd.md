@@ -1,5 +1,12 @@
 # PRD — spinner (Product Requirements Document)
 
+Operational note:
+- This file is a product planning artifact.
+- For installation and operations, use:
+  - `docs/install.md`
+  - `docs/configuration.md`
+  - `docs/operations.md`
+
 ## 1. Summary
 
 Spinner is a cloud-agnostic, security-first orchestration platform that connects **Discord**, **Telegram**, local **Markdown workspaces**, and **email inboxes** into a unified system. Spinner runs without a web UI: operators work via chat commands and a **Charm TUI**. The system is **Markdown-native** (knowledge + state represented as `.md`) and **context-isolated** (each channel/subchannel has its own system prompt and permissions).

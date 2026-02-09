@@ -1,0 +1,82 @@
+# Operations Runbook (Overlord/Admin)
+
+Day-2 tasks for maintaining Spinner safely.
+
+## Daily Checks
+
+1. Runtime health:
+   - `curl -fsS http://localhost/healthz`
+   - `curl -fsS http://localhost/readyz`
+2. Review pending approvals in admin channels:
+   - `/pending-actions`
+3. Review objective health:
+   - `GET /api/v1/objectives?workspace_id=<id>&active_only=true`
+4. Review IMAP ingestion paths:
+   - `/data/workspaces/<ws>/inbox/imap/...`
+
+## Admin/TUI Controls
+
+Start TUI:
+
+```bash
+make tui
+```
+
+Modes:
+- `Pairings` tab: approve/deny one-time link tokens
+- `Objectives` tab:
+  - set workspace id and press `Enter`
+  - `j/k` select
+  - `p` pause/resume
+  - `x` delete
+  - `r` refresh
+
+## Approvals Workflow
+
+When LLM proposes external actions:
+- list: `/pending-actions`
+- approve: `/approve-action <action-id>`
+- deny: `/deny-action <action-id> [reason]`
+
+Guideline:
+- approve only actions aligned with workspace policy and role scope
+- deny with reason for audit clarity
+
+## Objective Lifecycle
+
+Create objective:
+- `POST /api/v1/objectives`
+
+Pause/resume:
+- `POST /api/v1/objectives/active`
+
+Update trigger/prompt:
+- `POST /api/v1/objectives/update`
+
+Delete:
+- `POST /api/v1/objectives/delete`
+
+## Incident Response
+
+If token/cert compromise is suspected:
+
+1. Rotate connector tokens (Discord/Telegram).
+2. Rotate mTLS material (`ops/caddy/pki`) and restart Caddy.
+3. Set `SPINNER_SANDBOX_ENABLED=false` temporarily if command actions are risky.
+4. Review recent action approvals and chat logs in:
+   - `/data/workspaces/<ws>/logs/chats/...`
+5. Re-pair impacted admin identities if necessary.
+
+## Backup and Recovery
+
+Back up:
+- `/data/spinner/meta.sqlite`
+- `/data/workspaces/`
+- `.env` (secure secret storage, never public)
+- `ops/caddy/pki` (if you manage cert continuity there)
+
+Restore:
+1. restore volumes/files
+2. verify `.env`
+3. run `make compose-up`
+4. validate health endpoints and admin pairing access

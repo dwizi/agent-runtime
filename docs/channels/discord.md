@@ -1,6 +1,6 @@
-# Discord Bot Token Guide
+# Discord Bot Token Guide (Overlord/Admin)
 
-This guide covers creating a Discord bot token and the minimum settings needed for Spinner.
+This guide covers creating a Discord bot token and validating admin/task command flow.
 
 ## 1. Create a Discord application and bot
 
@@ -9,7 +9,7 @@ This guide covers creating a Discord bot token and the minimum settings needed f
 3. Open **Bot** in the left menu.
 4. Click **Add Bot**.
 
-## 2. Copy the bot token
+## 2. Copy token and set runtime env
 
 1. In the **Bot** page, find **Token**.
 2. Click **Reset Token** (or **Copy**) and store it securely.
@@ -17,6 +17,8 @@ This guide covers creating a Discord bot token and the minimum settings needed f
 
 ```env
 SPINNER_DISCORD_TOKEN=your_discord_bot_token
+SPINNER_DISCORD_API_BASE=https://discord.com/api/v10
+SPINNER_DISCORD_GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json
 ```
 
 ## 3. Enable required intents
@@ -41,28 +43,21 @@ Spinner uses message commands like `/task`, so `Message Content Intent` must be 
    - `Manage Messages` (optional)
 4. Open the generated URL and invite the bot to your server.
 
-## 5. Optional environment overrides
-
-Defaults already work, but you can override:
-
-```env
-SPINNER_DISCORD_API_BASE=https://discord.com/api/v10
-SPINNER_DISCORD_GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json
-```
-
-## 6. Validate with Spinner
+## 5. Validate with Spinner
 
 1. Start Spinner:
    - `make run`
 2. In Discord:
    - DM the bot: `pair`
    - In a server channel: `/task write a short test summary`
+   - In your admin channel: `/admin-channel enable`
 
 If the bot does not respond:
 
 - Verify token is correct in `.env`
 - Verify `Message Content Intent` is enabled
 - Confirm bot has permission to read/send messages in that channel
+- Confirm identity was paired and approved in TUI
 
 ## Production hardening
 
