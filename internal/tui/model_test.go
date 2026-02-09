@@ -45,6 +45,17 @@ func TestTogglesToObjectivesMode(t *testing.T) {
 	}
 }
 
+func TestTabCyclesToTasksMode(t *testing.T) {
+	m := model{
+		mode: modeObjectives,
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	typed := updated.(model)
+	if typed.mode != modeTasks {
+		t.Fatalf("expected tasks mode, got %s", typed.mode)
+	}
+}
+
 func TestObjectiveLoadedMessageUpdatesSelection(t *testing.T) {
 	m := model{
 		mode: modeObjectives,
@@ -65,5 +76,28 @@ func TestObjectiveLoadedMessageUpdatesSelection(t *testing.T) {
 	}
 	if typed.objectiveIndex != 0 {
 		t.Fatalf("expected objective index normalized to 0, got %d", typed.objectiveIndex)
+	}
+}
+
+func TestTasksLoadedMessageUpdatesSelection(t *testing.T) {
+	m := model{
+		mode: modeTasks,
+		tasks: []adminclient.Task{
+			{ID: "task-1", Title: "One"},
+			{ID: "task-2", Title: "Two"},
+		},
+		taskIndex: 7,
+	}
+	updated, _ := m.Update(tasksLoadedMsg{
+		items: []adminclient.Task{
+			{ID: "task-3", Title: "Three", Status: "failed"},
+		},
+	})
+	typed := updated.(model)
+	if len(typed.tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(typed.tasks))
+	}
+	if typed.taskIndex != 0 {
+		t.Fatalf("expected task index normalized to 0, got %d", typed.taskIndex)
 	}
 }

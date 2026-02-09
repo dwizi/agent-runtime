@@ -34,12 +34,18 @@ type model struct {
 	objectiveWorkspace string
 	objectives         []adminclient.Objective
 	objectiveIndex     int
+	taskWorkspace      string
+	taskStatusFilter   string
+	tasks              []adminclient.Task
+	taskIndex          int
+	taskRetryMsg       *adminclient.RetryTaskResponse
 	startupInfo        string
 }
 
 const (
 	modePairings   = "pairings"
 	modeObjectives = "objectives"
+	modeTasks      = "tasks"
 )
 
 func Run(cfg config.Config, logger *slog.Logger) error {
@@ -55,6 +61,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 		client:             client,
 		mode:               modePairings,
 		objectiveWorkspace: "ws-1",
+		taskWorkspace:      "ws-1",
 		startupInfo:        startupInfo,
 	})
 	_, err = program.Run()
@@ -165,6 +172,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.objectiveIndex = 0
 		}
 		return m, nil
+	case tasksLoadedMsg:
+		m.loading = false
+		if typed.err != nil {
+			m.errorText = typed.err.Error()
+			m.statusText = ""
+			return m, nil
+		}
+		m.errorText = ""
+		m.statusText = fmt.Sprintf("loaded %d task(s)", len(typed.items))
+		m.tasks = typed.items
+		if m.taskIndex >= len(m.tasks) {
+			m.taskIndex = len(m.tasks) - 1
+		}
+		if m.taskIndex < 0 {
+			m.taskIndex = 0
+		}
+		return m, nil
+	case taskRetryDoneMsg:
+		m.loading = false
+		if typed.err != nil {
+			m.errorText = typed.err.Error()
+			m.statusText = ""
+			return m, nil
+		}
+		m.errorText = ""
+		m.statusText = "task retried"
+		m.taskRetryMsg = &typed.response
+		return m, m.listTasksCmd(strings.TrimSpace(m.taskWorkspace), m.taskStatusFilter)
 	}
 
 	switch typed := msg.(type) {
@@ -174,16 +209,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "tab":
-			if m.mode == modePairings {
+			switch m.mode {
+			case modePairings:
 				m.mode = modeObjectives
 				m.statusText = "objectives mode"
 				m.errorText = ""
 				return m, m.listObjectivesCmd(strings.TrimSpace(m.objectiveWorkspace))
+			case modeObjectives:
+				m.mode = modeTasks
+				m.statusText = "tasks mode"
+				m.errorText = ""
+				return m, m.listTasksCmd(strings.TrimSpace(m.taskWorkspace), m.taskStatusFilter)
+			default:
+				m.mode = modePairings
+				m.statusText = "pairings mode"
+				m.errorText = ""
+				return m, nil
 			}
-			m.mode = modePairings
-			m.statusText = "pairings mode"
-			m.errorText = ""
-			return m, nil
 		}
 
 		if m.loading {
@@ -192,6 +234,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.mode == modeObjectives {
 			return m.handleObjectivesKey(typed)
+		}
+		if m.mode == modeTasks {
+			return m.handleTasksKey(typed)
 		}
 		return m.handlePairingsKey(typed)
 	}
@@ -213,10 +258,13 @@ func (m model) View() string {
 
 	pairTab := tabStyle.Render("Pairings")
 	objectiveTab := tabStyle.Render("Objectives")
+	taskTab := tabStyle.Render("Tasks")
 	if m.mode == modePairings {
 		pairTab = activeTab.Render("Pairings")
-	} else {
+	} else if m.mode == modeObjectives {
 		objectiveTab = activeTab.Render("Objectives")
+	} else {
+		taskTab = activeTab.Render("Tasks")
 	}
 
 	bodyLines := []string{
@@ -225,7 +273,7 @@ func (m model) View() string {
 		fmt.Sprintf("Environment: %s", m.cfg.Environment),
 		fmt.Sprintf("Admin API: %s", m.cfg.AdminAPIURL),
 		fmt.Sprintf("Approver: %s (%s)", m.cfg.TUIApproverUserID, m.cfg.TUIApprovalRole),
-		fmt.Sprintf("Tabs: %s | %s (Tab to switch)", pairTab, objectiveTab),
+		fmt.Sprintf("Tabs: %s | %s | %s (Tab to switch)", pairTab, objectiveTab, taskTab),
 		"",
 	}
 	if strings.TrimSpace(m.startupInfo) != "" {
@@ -256,6 +304,40 @@ func (m model) View() string {
 			}
 		}
 		bodyLines = append(bodyLines, "", "Controls: Enter/r=refresh, j/k=move, p=pause/resume, x=delete, q=quit")
+	} else if m.mode == modeTasks {
+		bodyLines = append(bodyLines,
+			"Workspace ID (type + Enter to load):",
+			highlight.Render(m.taskWorkspace),
+			fmt.Sprintf("Status Filter: %s ([ / ] to cycle)", highlight.Render(taskFilterLabel(m.taskStatusFilter))),
+			"",
+		)
+		if len(m.tasks) == 0 {
+			bodyLines = append(bodyLines, "No tasks loaded.")
+		} else {
+			bodyLines = append(bodyLines, "Tasks:")
+			for index, item := range m.tasks {
+				prefix := "  "
+				if index == m.taskIndex {
+					prefix = "> "
+				}
+				line := fmt.Sprintf("%s%s [%s] (%s)", prefix, item.Title, item.Status, item.Kind)
+				bodyLines = append(bodyLines, line)
+			}
+			selected := m.tasks[m.taskIndex]
+			bodyLines = append(bodyLines,
+				"",
+				"Selected Task:",
+				fmt.Sprintf("- ID: %s", selected.ID),
+				fmt.Sprintf("- Status: %s (attempts: %d)", selected.Status, selected.Attempts),
+			)
+			if strings.TrimSpace(selected.ResultPath) != "" {
+				bodyLines = append(bodyLines, fmt.Sprintf("- Output: %s", selected.ResultPath))
+			}
+			if strings.TrimSpace(selected.ErrorMessage) != "" {
+				bodyLines = append(bodyLines, fmt.Sprintf("- Error: %s", selected.ErrorMessage))
+			}
+		}
+		bodyLines = append(bodyLines, "", "Controls: Enter/r=refresh, j/k=move, y=retry failed task, [ ]=filter, q=quit")
 	} else {
 		if m.activePair == nil {
 			bodyLines = append(bodyLines,
@@ -324,6 +406,16 @@ type objectiveActiveDoneMsg struct {
 type objectiveDeleteDoneMsg struct {
 	id  string
 	err error
+}
+
+type tasksLoadedMsg struct {
+	items []adminclient.Task
+	err   error
+}
+
+type taskRetryDoneMsg struct {
+	response adminclient.RetryTaskResponse
+	err      error
 }
 
 func (m model) handlePairingsKey(typed tea.KeyMsg) (model, tea.Cmd) {
@@ -432,6 +524,77 @@ func (m model) handleObjectivesKey(typed tea.KeyMsg) (model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) handleTasksKey(typed tea.KeyMsg) (model, tea.Cmd) {
+	switch typed.String() {
+	case "enter", "r":
+		workspaceID := strings.TrimSpace(m.taskWorkspace)
+		if workspaceID == "" {
+			m.errorText = "workspace id is required"
+			return m, nil
+		}
+		m.loading = true
+		m.statusText = "loading tasks..."
+		m.errorText = ""
+		return m, m.listTasksCmd(workspaceID, m.taskStatusFilter)
+	case "backspace":
+		if len(m.taskWorkspace) > 0 {
+			m.taskWorkspace = m.taskWorkspace[:len(m.taskWorkspace)-1]
+		}
+		return m, nil
+	case "j", "down":
+		if len(m.tasks) > 0 && m.taskIndex < len(m.tasks)-1 {
+			m.taskIndex++
+		}
+		return m, nil
+	case "k", "up":
+		if len(m.tasks) > 0 && m.taskIndex > 0 {
+			m.taskIndex--
+		}
+		return m, nil
+	case "[":
+		m.taskStatusFilter = previousTaskFilter(m.taskStatusFilter)
+		workspaceID := strings.TrimSpace(m.taskWorkspace)
+		if workspaceID == "" {
+			return m, nil
+		}
+		m.loading = true
+		m.statusText = "loading tasks..."
+		m.errorText = ""
+		return m, m.listTasksCmd(workspaceID, m.taskStatusFilter)
+	case "]":
+		m.taskStatusFilter = nextTaskFilter(m.taskStatusFilter)
+		workspaceID := strings.TrimSpace(m.taskWorkspace)
+		if workspaceID == "" {
+			return m, nil
+		}
+		m.loading = true
+		m.statusText = "loading tasks..."
+		m.errorText = ""
+		return m, m.listTasksCmd(workspaceID, m.taskStatusFilter)
+	case "y":
+		if len(m.tasks) == 0 {
+			return m, nil
+		}
+		selected := m.tasks[m.taskIndex]
+		if strings.ToLower(strings.TrimSpace(selected.Status)) != "failed" {
+			m.errorText = "only failed tasks can be retried"
+			return m, nil
+		}
+		m.loading = true
+		m.statusText = "retrying task..."
+		m.errorText = ""
+		return m, m.retryTaskCmd(selected.ID)
+	}
+	if typed.Type == tea.KeyRunes {
+		for _, char := range typed.Runes {
+			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+				m.taskWorkspace += string(char)
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m model) lookupPairingCmd(token string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -483,6 +646,64 @@ func (m model) deleteObjectiveCmd(objectiveID string) tea.Cmd {
 		defer cancel()
 		err := m.client.DeleteObjective(ctx, objectiveID)
 		return objectiveDeleteDoneMsg{id: objectiveID, err: err}
+	}
+}
+
+func (m model) listTasksCmd(workspaceID, status string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		items, err := m.client.ListTasks(ctx, workspaceID, status, 200)
+		return tasksLoadedMsg{items: items, err: err}
+	}
+}
+
+func (m model) retryTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		response, err := m.client.RetryTask(ctx, taskID)
+		return taskRetryDoneMsg{response: response, err: err}
+	}
+}
+
+var taskFilterCycle = []string{"", "failed", "queued", "running", "succeeded"}
+
+func nextTaskFilter(current string) string {
+	value := strings.ToLower(strings.TrimSpace(current))
+	for index, item := range taskFilterCycle {
+		if value == item {
+			return taskFilterCycle[(index+1)%len(taskFilterCycle)]
+		}
+	}
+	return taskFilterCycle[0]
+}
+
+func previousTaskFilter(current string) string {
+	value := strings.ToLower(strings.TrimSpace(current))
+	for index, item := range taskFilterCycle {
+		if value == item {
+			if index == 0 {
+				return taskFilterCycle[len(taskFilterCycle)-1]
+			}
+			return taskFilterCycle[index-1]
+		}
+	}
+	return taskFilterCycle[0]
+}
+
+func taskFilterLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "failed":
+		return "failed"
+	case "queued":
+		return "queued"
+	case "running":
+		return "running"
+	case "succeeded":
+		return "succeeded"
+	default:
+		return "all"
 	}
 }
 

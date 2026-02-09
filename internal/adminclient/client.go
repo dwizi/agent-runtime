@@ -64,6 +64,39 @@ type ListObjectivesResponse struct {
 	Count int         `json:"count"`
 }
 
+type Task struct {
+	ID             string `json:"id"`
+	WorkspaceID    string `json:"workspace_id"`
+	ContextID      string `json:"context_id"`
+	Kind           string `json:"kind"`
+	Title          string `json:"title"`
+	Prompt         string `json:"prompt"`
+	Status         string `json:"status"`
+	Attempts       int    `json:"attempts"`
+	WorkerID       int    `json:"worker_id"`
+	StartedAtUnix  int64  `json:"started_at_unix"`
+	FinishedAtUnix int64  `json:"finished_at_unix"`
+	ResultSummary  string `json:"result_summary"`
+	ResultPath     string `json:"result_path"`
+	ErrorMessage   string `json:"error_message"`
+	CreatedAtUnix  int64  `json:"created_at_unix"`
+	UpdatedAtUnix  int64  `json:"updated_at_unix"`
+}
+
+type ListTasksResponse struct {
+	Items []Task `json:"items"`
+	Count int    `json:"count"`
+}
+
+type RetryTaskResponse struct {
+	TaskID      string `json:"task_id"`
+	RetryOfTask string `json:"retry_of_task"`
+	WorkspaceID string `json:"workspace_id"`
+	ContextID   string `json:"context_id"`
+	Kind        string `json:"kind"`
+	Status      string `json:"status"`
+}
+
 func New(cfg config.Config) (*Client, error) {
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -220,6 +253,54 @@ func (c *Client) DeleteObjective(ctx context.Context, objectiveID string) error 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	return c.doJSON(req, nil)
+}
+
+func (c *Client) ListTasks(ctx context.Context, workspaceID, status string, limit int) ([]Task, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	query := url.Values{}
+	query.Set("workspace_id", workspaceID)
+	if strings.TrimSpace(status) != "" {
+		query.Set("status", strings.TrimSpace(status))
+	}
+	if limit > 0 {
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/tasks?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	var response ListTasksResponse
+	if err := c.doJSON(req, &response); err != nil {
+		return nil, err
+	}
+	return response.Items, nil
+}
+
+func (c *Client) RetryTask(ctx context.Context, taskID string) (RetryTaskResponse, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return RetryTaskResponse{}, fmt.Errorf("task id is required")
+	}
+	payload := map[string]string{
+		"task_id": taskID,
+	}
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		return RetryTaskResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/tasks/retry", bytes.NewReader(requestBody))
+	if err != nil {
+		return RetryTaskResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response RetryTaskResponse
+	if err := c.doJSON(req, &response); err != nil {
+		return RetryTaskResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) doJSON(req *http.Request, out any) error {

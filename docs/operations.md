@@ -33,6 +33,12 @@ Modes:
   - `p` pause/resume
   - `x` delete
   - `r` refresh
+- `Tasks` tab:
+  - set workspace id and press `Enter`
+  - `j/k` select
+  - `[`/`]` cycle status filter
+  - `y` retry selected failed task
+  - `r` refresh
 
 ## Approvals Workflow
 
@@ -58,6 +64,17 @@ Update trigger/prompt:
 
 Delete:
 - `POST /api/v1/objectives/delete`
+
+## Task Operations
+
+List tasks:
+- `GET /api/v1/tasks?workspace_id=<id>&status=<optional>&limit=<optional>`
+
+Task detail:
+- `GET /api/v1/tasks?id=<task-id>`
+
+Retry failed task:
+- `POST /api/v1/tasks/retry`
 
 ## Incident Response
 

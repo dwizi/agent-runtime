@@ -87,3 +87,47 @@ func TestTaskMarkFailed(t *testing.T) {
 		t.Fatalf("unexpected error message: %s", loaded.ErrorMessage)
 	}
 }
+
+func TestListTasksFiltersByWorkspaceAndStatus(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+
+	insert := func(id, workspaceID, status string) {
+		t.Helper()
+		if err := sqlStore.CreateTask(ctx, CreateTaskInput{
+			ID:          id,
+			WorkspaceID: workspaceID,
+			ContextID:   "ctx-1",
+			Kind:        "general",
+			Title:       "Task " + id,
+			Prompt:      "run",
+			Status:      status,
+		}); err != nil {
+			t.Fatalf("create task %s: %v", id, err)
+		}
+	}
+	insert("task-a", "ws-1", "queued")
+	insert("task-b", "ws-1", "queued")
+	insert("task-c", "ws-2", "queued")
+	if err := sqlStore.MarkTaskRunning(ctx, "task-b", 1, time.Now().UTC()); err != nil {
+		t.Fatalf("mark task running: %v", err)
+	}
+	if err := sqlStore.MarkTaskFailed(ctx, "task-b", time.Now().UTC(), "boom"); err != nil {
+		t.Fatalf("mark task failed: %v", err)
+	}
+
+	items, err := sqlStore.ListTasks(ctx, ListTasksInput{
+		WorkspaceID: "ws-1",
+		Status:      "failed",
+		Limit:       10,
+	})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 failed task, got %d", len(items))
+	}
+	if items[0].ID != "task-b" {
+		t.Fatalf("expected task-b, got %s", items[0].ID)
+	}
+}
