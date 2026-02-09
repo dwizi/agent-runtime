@@ -14,13 +14,21 @@ import (
 )
 
 type taskCompletionNotifier struct {
-	store      *store.Store
-	publishers map[string]connectors.Publisher
-	policy     string
-	logger     *slog.Logger
+	store         *store.Store
+	publishers    map[string]connectors.Publisher
+	successPolicy string
+	failurePolicy string
+	logger        *slog.Logger
 }
 
-func newTaskCompletionNotifier(storeRef *store.Store, publishers map[string]connectors.Publisher, policy string, logger *slog.Logger) *taskCompletionNotifier {
+func newTaskCompletionNotifier(
+	storeRef *store.Store,
+	publishers map[string]connectors.Publisher,
+	defaultPolicy string,
+	successPolicy string,
+	failurePolicy string,
+	logger *slog.Logger,
+) *taskCompletionNotifier {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -32,23 +40,28 @@ func newTaskCompletionNotifier(storeRef *store.Store, publishers map[string]conn
 		}
 		cleanPublishers[name] = publisher
 	}
+	basePolicy := normalizeTaskNotifyPolicy(defaultPolicy)
+	success := normalizeTaskNotifyPolicyWithFallback(successPolicy, basePolicy)
+	failure := normalizeTaskNotifyPolicyWithFallback(failurePolicy, basePolicy)
+
 	return &taskCompletionNotifier{
-		store:      storeRef,
-		publishers: cleanPublishers,
-		policy:     normalizeTaskNotifyPolicy(policy),
-		logger:     logger,
+		store:         storeRef,
+		publishers:    cleanPublishers,
+		successPolicy: success,
+		failurePolicy: failure,
+		logger:        logger,
 	}
 }
 
 func (n *taskCompletionNotifier) NotifyCompleted(task orchestrator.Task, result orchestrator.TaskResult) {
-	n.notify(task, buildTaskSuccessMessage(task, result))
+	n.notify(task, buildTaskSuccessMessage(task, result), n.successPolicy)
 }
 
 func (n *taskCompletionNotifier) NotifyFailed(task orchestrator.Task, taskErr error) {
-	n.notify(task, buildTaskFailureMessage(task, taskErr))
+	n.notify(task, buildTaskFailureMessage(task, taskErr), n.failurePolicy)
 }
 
-func (n *taskCompletionNotifier) notify(task orchestrator.Task, message string) {
+func (n *taskCompletionNotifier) notify(task orchestrator.Task, message string, policy string) {
 	if n == nil || n.store == nil || len(n.publishers) == 0 {
 		return
 	}
@@ -59,7 +72,7 @@ func (n *taskCompletionNotifier) notify(task orchestrator.Task, message string) 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	targets := n.resolveTargets(ctx, task)
+	targets := n.resolveTargets(ctx, task, policy)
 	for _, target := range targets {
 		publisher := n.publishers[strings.ToLower(strings.TrimSpace(target.Connector))]
 		if publisher == nil {
@@ -76,7 +89,7 @@ func (n *taskCompletionNotifier) notify(task orchestrator.Task, message string) 
 	}
 }
 
-func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orchestrator.Task) []store.ContextDelivery {
+func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orchestrator.Task, policy string) []store.ContextDelivery {
 	unique := map[string]store.ContextDelivery{}
 	add := func(record store.ContextDelivery) {
 		connector := strings.ToLower(strings.TrimSpace(record.Connector))
@@ -95,7 +108,7 @@ func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orches
 	}
 
 	contextID := strings.TrimSpace(task.ContextID)
-	if n.includeOriginTarget() && contextID != "" && !strings.HasPrefix(contextID, "system:") {
+	if includeOriginTarget(policy) && contextID != "" && !strings.HasPrefix(contextID, "system:") {
 		record, err := n.store.LookupContextDelivery(ctx, contextID)
 		if err == nil {
 			add(record)
@@ -104,7 +117,7 @@ func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orches
 		}
 	}
 
-	if n.includeAdminTargets() {
+	if includeAdminTargets(policy) {
 		adminContexts, err := n.store.ListWorkspaceAdminDeliveries(ctx, strings.TrimSpace(task.WorkspaceID), 50)
 		if err != nil {
 			n.logger.Error("task notification admin context list failed", "task_id", task.ID, "workspace_id", task.WorkspaceID, "error", err)
@@ -159,12 +172,12 @@ func buildTaskFailureMessage(task orchestrator.Task, taskErr error) string {
 	return compactLineBreaks(message, 1400)
 }
 
-func (n *taskCompletionNotifier) includeOriginTarget() bool {
-	return n.policy == "both" || n.policy == "origin"
+func includeOriginTarget(policy string) bool {
+	return policy == "both" || policy == "origin"
 }
 
-func (n *taskCompletionNotifier) includeAdminTargets() bool {
-	return n.policy == "both" || n.policy == "admin"
+func includeAdminTargets(policy string) bool {
+	return policy == "both" || policy == "admin"
 }
 
 func normalizeTaskNotifyPolicy(input string) string {
@@ -176,6 +189,14 @@ func normalizeTaskNotifyPolicy(input string) string {
 	default:
 		return "both"
 	}
+}
+
+func normalizeTaskNotifyPolicyWithFallback(input, fallback string) string {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return normalizeTaskNotifyPolicy(fallback)
+	}
+	return normalizeTaskNotifyPolicy(value)
 }
 
 func truncateSingleLine(input string, maxLen int) string {

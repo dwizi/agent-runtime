@@ -21,6 +21,8 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "")
 	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "")
+	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "")
+	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "")
 	t.Setenv("SPINNER_ADMIN_TLS_SKIP_VERIFY", "")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "")
@@ -100,6 +102,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.TaskNotifyPolicy != "both" {
 		t.Fatalf("expected default task notify policy both, got %s", cfg.TaskNotifyPolicy)
+	}
+	if cfg.TaskNotifySuccessPolicy != "" {
+		t.Fatalf("expected default task notify success policy empty, got %s", cfg.TaskNotifySuccessPolicy)
+	}
+	if cfg.TaskNotifyFailurePolicy != "" {
+		t.Fatalf("expected default task notify failure policy empty, got %s", cfg.TaskNotifyFailurePolicy)
 	}
 	if cfg.DiscordAPI != "https://discord.com/api/v10" {
 		t.Fatalf("expected default discord api base, got %s", cfg.DiscordAPI)
@@ -215,6 +223,8 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "false")
 	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "11")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "admin")
+	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "origin")
+	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "admin")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "https://discord.test/api/v10")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "wss://discord.test/gateway")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "https://telegram.test")
@@ -299,6 +309,12 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.TaskNotifyPolicy != "admin" {
 		t.Fatalf("expected overridden task notify policy admin, got %s", cfg.TaskNotifyPolicy)
+	}
+	if cfg.TaskNotifySuccessPolicy != "origin" {
+		t.Fatalf("expected overridden task notify success policy origin, got %s", cfg.TaskNotifySuccessPolicy)
+	}
+	if cfg.TaskNotifyFailurePolicy != "admin" {
+		t.Fatalf("expected overridden task notify failure policy admin, got %s", cfg.TaskNotifyFailurePolicy)
 	}
 	if cfg.DiscordAPI != "https://discord.test/api/v10" {
 		t.Fatalf("expected overridden discord api base, got %s", cfg.DiscordAPI)

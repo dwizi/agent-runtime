@@ -70,6 +70,8 @@ Notes:
 
 - `SPINNER_OBJECTIVE_POLL_SECONDS`
 - `SPINNER_TASK_NOTIFY_POLICY` (`both` | `admin` | `origin`)
+- `SPINNER_TASK_NOTIFY_SUCCESS_POLICY` (`both` | `admin` | `origin`, optional override)
+- `SPINNER_TASK_NOTIFY_FAILURE_POLICY` (`both` | `admin` | `origin`, optional override)
 
 API endpoints:
 - `POST /api/v1/objectives`

@@ -8,23 +8,25 @@ import (
 )
 
 type Config struct {
-	Environment        string
-	HTTPAddr           string
-	DataDir            string
-	DBPath             string
-	WorkspaceRoot      string
-	DefaultConcurrency int
-	QMDBinary          string
-	QMDIndexName       string
-	QMDCollectionName  string
-	QMDSearchLimit     int
-	QMDOpenMaxBytes    int
-	QMDDebounceSeconds int
-	QMDIndexTimeoutSec int
-	QMDQueryTimeoutSec int
-	QMDAutoEmbed       bool
-	ObjectivePollSec   int
-	TaskNotifyPolicy   string
+	Environment             string
+	HTTPAddr                string
+	DataDir                 string
+	DBPath                  string
+	WorkspaceRoot           string
+	DefaultConcurrency      int
+	QMDBinary               string
+	QMDIndexName            string
+	QMDCollectionName       string
+	QMDSearchLimit          int
+	QMDOpenMaxBytes         int
+	QMDDebounceSeconds      int
+	QMDIndexTimeoutSec      int
+	QMDQueryTimeoutSec      int
+	QMDAutoEmbed            bool
+	ObjectivePollSec        int
+	TaskNotifyPolicy        string
+	TaskNotifySuccessPolicy string
+	TaskNotifyFailurePolicy string
 
 	DiscordToken              string
 	DiscordAPI                string
@@ -99,6 +101,8 @@ func FromEnv() Config {
 		QMDAutoEmbed:              boolOrDefault("SPINNER_QMD_AUTO_EMBED", true),
 		ObjectivePollSec:          intOrDefault("SPINNER_OBJECTIVE_POLL_SECONDS", 15),
 		TaskNotifyPolicy:          notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_POLICY", "both"),
+		TaskNotifySuccessPolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", ""),
+		TaskNotifyFailurePolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_FAILURE_POLICY", ""),
 		DiscordToken:              os.Getenv("SPINNER_DISCORD_TOKEN"),
 		DiscordAPI:                stringOrDefault("SPINNER_DISCORD_API_BASE", "https://discord.com/api/v10"),
 		DiscordWSURL:              stringOrDefault("SPINNER_DISCORD_GATEWAY_URL", "wss://gateway.discord.gg/?v=10&encoding=json"),
@@ -185,6 +189,11 @@ func notificationPolicyOrDefault(name, fallback string) string {
 	case "both", "admin", "origin":
 		return value
 	default:
-		return strings.ToLower(strings.TrimSpace(fallback))
+		switch strings.ToLower(strings.TrimSpace(fallback)) {
+		case "both", "admin", "origin", "":
+			return strings.ToLower(strings.TrimSpace(fallback))
+		default:
+			return "both"
+		}
 	}
 }
