@@ -64,6 +64,9 @@ type Config struct {
 	LLMRateLimitWindowSec     int
 	LLMAdminSystemPrompt      string
 	LLMPublicSystemPrompt     string
+	SoulGlobalFile            string
+	SoulWorkspaceRelPath      string
+	SoulContextRelPath        string
 
 	PublicHost string
 	AdminHost  string
@@ -139,6 +142,9 @@ func FromEnv() Config {
 		LLMRateLimitWindowSec:     intOrDefault("SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS", 60),
 		LLMAdminSystemPrompt:      stringOrDefault("SPINNER_LLM_ADMIN_SYSTEM_PROMPT", "You are assisting admin operators. Prioritize security, approvals, and operational clarity."),
 		LLMPublicSystemPrompt:     stringOrDefault("SPINNER_LLM_PUBLIC_SYSTEM_PROMPT", "You are assisting community members. Be concise, safe, and policy-compliant."),
+		SoulGlobalFile:            stringOrDefault("SPINNER_SOUL_GLOBAL_FILE", "/context/SOUL.md"),
+		SoulWorkspaceRelPath:      stringOrDefault("SPINNER_SOUL_WORKSPACE_REL_PATH", "context/SOUL.md"),
+		SoulContextRelPath:        stringOrDefault("SPINNER_SOUL_CONTEXT_REL_PATH", "context/agents/{context_id}/SOUL.md"),
 		PublicHost:                stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                 stringOrDefault("ADMIN_HOST", "admin.localhost"),
 		AdminAPIURL:               stringOrDefault("SPINNER_ADMIN_API_URL", "https://admin.localhost"),

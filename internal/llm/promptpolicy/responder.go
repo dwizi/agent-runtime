@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -21,8 +22,12 @@ type Config struct {
 	WorkspaceRoot        string
 	AdminSystemPrompt    string
 	PublicSystemPrompt   string
+	GlobalSoulPath       string
+	WorkspaceSoulRelPath string
+	ContextSoulRelPath   string
 	MaxSkills            int
 	MaxSkillBytes        int
+	MaxSoulBytes         int
 	MaxSystemPromptBytes int
 }
 
@@ -38,6 +43,9 @@ func New(base llm.Responder, provider PolicyProvider, cfg Config) *Responder {
 	}
 	if cfg.MaxSkillBytes < 300 {
 		cfg.MaxSkillBytes = 1400
+	}
+	if cfg.MaxSoulBytes < 300 {
+		cfg.MaxSoulBytes = 2400
 	}
 	if cfg.MaxSystemPromptBytes < 800 {
 		cfg.MaxSystemPromptBytes = 12000
@@ -82,6 +90,11 @@ func (r *Responder) buildSystemPrompt(ctx context.Context, input llm.MessageInpu
 	}
 	if strings.TrimSpace(policy.SystemPrompt) != "" {
 		lines = append(lines, "Context policy:\n"+strings.TrimSpace(policy.SystemPrompt))
+	}
+	soulSections := r.loadSoulSections(policy.WorkspaceID, policy.ContextID)
+	if len(soulSections) > 0 {
+		lines = append(lines, "SOUL behavior directives:")
+		lines = append(lines, soulSections...)
 	}
 	lines = append(lines, "External actions policy:\nIf you need to request an external action (email/send/post/run), include an `action` fenced JSON block. Example:\n```action\n{\"type\":\"send_email\",\"target\":\"ops@example.com\",\"summary\":\"Send update\",\"subject\":\"Status\",\"body\":\"...\"}\n```\nFor shell/CLI execution use:\n```action\n{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch service status\",\"args\":[\"-sS\",\"https://example.com/health\"]}\n```\nThese actions require admin approval before execution. Command execution is restricted by sandbox policy allowlists.")
 
@@ -156,4 +169,71 @@ func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []st
 		skills = append(skills, fmt.Sprintf("- `%s`: %s", filepath.Base(path), strings.Join(strings.Fields(text), " ")))
 	}
 	return skills
+}
+
+func (r *Responder) loadSoulSections(workspaceID, contextID string) []string {
+	sections := []string{}
+	if text, ok := r.readSoulFile(strings.TrimSpace(r.cfg.GlobalSoulPath)); ok {
+		sections = append(sections, "Global SOUL:\n"+text)
+	}
+
+	workspaceRoot := strings.TrimSpace(r.cfg.WorkspaceRoot)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceRoot == "" || workspaceID == "" {
+		return sections
+	}
+
+	workspaceRelative := strings.TrimSpace(r.cfg.WorkspaceSoulRelPath)
+	if workspaceRelative != "" {
+		path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(workspaceRelative))
+		if text, ok := r.readSoulFile(path); ok {
+			sections = append(sections, "Workspace SOUL override:\n"+text)
+		}
+	}
+
+	contextRelative := strings.TrimSpace(r.cfg.ContextSoulRelPath)
+	contextID = strings.TrimSpace(contextID)
+	if contextRelative == "" || contextID == "" {
+		return sections
+	}
+	contextRelative = strings.ReplaceAll(contextRelative, "{context_id}", sanitizeSoulPathSegment(contextID))
+	path := filepath.Join(workspaceRoot, workspaceID, filepath.FromSlash(contextRelative))
+	if text, ok := r.readSoulFile(path); ok {
+		sections = append(sections, "Agent SOUL override:\n"+text)
+	}
+	return sections
+}
+
+func (r *Responder) readSoulFile(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", false
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(string(content))
+	if text == "" {
+		return "", false
+	}
+	if len(text) > r.cfg.MaxSoulBytes {
+		text = text[:r.cfg.MaxSoulBytes] + "..."
+	}
+	return text, true
+}
+
+var soulPathSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func sanitizeSoulPathSegment(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "default"
+	}
+	value := soulPathSanitizer.ReplaceAllString(trimmed, "-")
+	value = strings.Trim(value, "-")
+	if value == "" {
+		return "default"
+	}
+	return value
 }

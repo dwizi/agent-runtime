@@ -42,6 +42,9 @@ What this does:
 - starts `spinner` and `caddy`
 - provisions local admin mTLS material under `ops/caddy/pki`
 - syncs missing mTLS env paths into `.env`
+- bind-mounts host paths for live editing:
+  - `./data` -> `/data` (workspaces, sqlite, task outputs)
+  - `./context` -> `/context` (global SOUL files)
 
 ## 5. Verify Runtime Health
 

@@ -53,6 +53,14 @@ Notes:
 - `SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS`
 - `SPINNER_LLM_ADMIN_SYSTEM_PROMPT`
 - `SPINNER_LLM_PUBLIC_SYSTEM_PROMPT`
+- `SPINNER_SOUL_GLOBAL_FILE`
+- `SPINNER_SOUL_WORKSPACE_REL_PATH`
+- `SPINNER_SOUL_CONTEXT_REL_PATH`
+
+SOUL precedence:
+1. global file (`SPINNER_SOUL_GLOBAL_FILE`)
+2. workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SOUL_WORKSPACE_REL_PATH`)
+3. context/agent override (`/data/workspaces/<workspace>/` + `SPINNER_SOUL_CONTEXT_REL_PATH`, where `{context_id}` is replaced)
 
 ## qmd / Markdown Retrieval
 

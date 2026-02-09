@@ -12,6 +12,9 @@ services:
       SPINNER_WORKSPACE_ROOT: /data/workspaces
       SPINNER_DB_PATH: /data/spinner/meta.sqlite
       SPINNER_DEFAULT_CONCURRENCY: ${SPINNER_DEFAULT_CONCURRENCY:-5}
+      SPINNER_SOUL_GLOBAL_FILE: ${SPINNER_SOUL_GLOBAL_FILE:-/context/SOUL.md}
+      SPINNER_SOUL_WORKSPACE_REL_PATH: ${SPINNER_SOUL_WORKSPACE_REL_PATH:-context/SOUL.md}
+      SPINNER_SOUL_CONTEXT_REL_PATH: ${SPINNER_SOUL_CONTEXT_REL_PATH:-context/agents/{context_id}/SOUL.md}
       SPINNER_DISCORD_TOKEN: ${SPINNER_DISCORD_TOKEN:-}
       SPINNER_TELEGRAM_TOKEN: ${SPINNER_TELEGRAM_TOKEN:-}
       SPINNER_ZAI_API_KEY: ${SPINNER_ZAI_API_KEY:-}
@@ -19,7 +22,8 @@ services:
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
       ADMIN_HOST: ${ADMIN_HOST:-admin.localhost}
     volumes:
-      - spinner_data:/data
+      - ./data:/data
+      - ./context:/context
     expose:
       - "8080"
     networks:
@@ -52,7 +56,6 @@ services:
       - spinner_net
 
 volumes:
-  spinner_data:
   caddy_data:
   caddy_config:
 

@@ -56,6 +56,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS", "")
 	t.Setenv("SPINNER_LLM_ADMIN_SYSTEM_PROMPT", "")
 	t.Setenv("SPINNER_LLM_PUBLIC_SYSTEM_PROMPT", "")
+	t.Setenv("SPINNER_SOUL_GLOBAL_FILE", "")
+	t.Setenv("SPINNER_SOUL_WORKSPACE_REL_PATH", "")
+	t.Setenv("SPINNER_SOUL_CONTEXT_REL_PATH", "")
 
 	cfg := FromEnv()
 	if cfg.DataDir != "/data" {
@@ -199,6 +202,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.LLMPublicSystemPrompt == "" {
 		t.Fatal("expected default public system prompt")
 	}
+	if cfg.SoulGlobalFile != "/context/SOUL.md" {
+		t.Fatalf("expected default soul global file /context/SOUL.md, got %s", cfg.SoulGlobalFile)
+	}
+	if cfg.SoulWorkspaceRelPath != "context/SOUL.md" {
+		t.Fatalf("expected default soul workspace rel path context/SOUL.md, got %s", cfg.SoulWorkspaceRelPath)
+	}
+	if cfg.SoulContextRelPath != "context/agents/{context_id}/SOUL.md" {
+		t.Fatalf("expected default soul context rel path, got %s", cfg.SoulContextRelPath)
+	}
 	if !cfg.AdminTLSSkipVerify {
 		t.Fatal("expected admin tls skip verify to default to true")
 	}
@@ -257,6 +269,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS", "120")
 	t.Setenv("SPINNER_LLM_ADMIN_SYSTEM_PROMPT", "admin prompt")
 	t.Setenv("SPINNER_LLM_PUBLIC_SYSTEM_PROMPT", "public prompt")
+	t.Setenv("SPINNER_SOUL_GLOBAL_FILE", "/context/GLOBAL_SOUL.md")
+	t.Setenv("SPINNER_SOUL_WORKSPACE_REL_PATH", "persona/SOUL.md")
+	t.Setenv("SPINNER_SOUL_CONTEXT_REL_PATH", "persona/agents/{context_id}.md")
 	t.Setenv("PUBLIC_HOST", "chat.example.com")
 	t.Setenv("ADMIN_HOST", "admin.example.com")
 	t.Setenv("SPINNER_ADMIN_API_URL", "https://admin.example.com")
@@ -411,6 +426,15 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.LLMPublicSystemPrompt != "public prompt" {
 		t.Fatalf("expected overridden public system prompt, got %s", cfg.LLMPublicSystemPrompt)
+	}
+	if cfg.SoulGlobalFile != "/context/GLOBAL_SOUL.md" {
+		t.Fatalf("expected overridden soul global file, got %s", cfg.SoulGlobalFile)
+	}
+	if cfg.SoulWorkspaceRelPath != "persona/SOUL.md" {
+		t.Fatalf("expected overridden soul workspace rel path, got %s", cfg.SoulWorkspaceRelPath)
+	}
+	if cfg.SoulContextRelPath != "persona/agents/{context_id}.md" {
+		t.Fatalf("expected overridden soul context rel path, got %s", cfg.SoulContextRelPath)
 	}
 	if cfg.PublicHost != "chat.example.com" {
 		t.Fatalf("expected overridden public host, got %s", cfg.PublicHost)

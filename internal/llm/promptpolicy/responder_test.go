@@ -97,3 +97,63 @@ func TestResponderFallsBackWhenContextMissing(t *testing.T) {
 		t.Fatalf("expected public baseline in fallback, got %s", base.lastInput.SystemPrompt)
 	}
 }
+
+func TestResponderLoadsSoulHierarchy(t *testing.T) {
+	root := t.TempDir()
+	globalPath := filepath.Join(root, "global-soul.md")
+	workspaceID := "ws-2"
+	contextID := "ctx:alpha"
+
+	if err := os.WriteFile(globalPath, []byte("Global behavior rules."), 0o644); err != nil {
+		t.Fatalf("write global soul: %v", err)
+	}
+	workspaceSoulPath := filepath.Join(root, workspaceID, "context", "SOUL.md")
+	if err := os.MkdirAll(filepath.Dir(workspaceSoulPath), 0o755); err != nil {
+		t.Fatalf("create workspace soul dir: %v", err)
+	}
+	if err := os.WriteFile(workspaceSoulPath, []byte("Workspace override behavior."), 0o644); err != nil {
+		t.Fatalf("write workspace soul: %v", err)
+	}
+	contextSoulPath := filepath.Join(root, workspaceID, "context", "agents", "ctx-alpha", "SOUL.md")
+	if err := os.MkdirAll(filepath.Dir(contextSoulPath), 0o755); err != nil {
+		t.Fatalf("create context soul dir: %v", err)
+	}
+	if err := os.WriteFile(contextSoulPath, []byte("Agent-specific behavior."), 0o644); err != nil {
+		t.Fatalf("write context soul: %v", err)
+	}
+
+	base := &fakeBase{reply: "ok"}
+	provider := &fakeProvider{
+		policy: store.ContextPolicy{
+			ContextID:   contextID,
+			WorkspaceID: workspaceID,
+			IsAdmin:     false,
+		},
+	}
+	responder := New(base, provider, Config{
+		WorkspaceRoot:        root,
+		PublicSystemPrompt:   "Public baseline prompt.",
+		GlobalSoulPath:       globalPath,
+		WorkspaceSoulRelPath: "context/SOUL.md",
+		ContextSoulRelPath:   "context/agents/{context_id}/SOUL.md",
+	})
+	_, err := responder.Reply(context.Background(), llm.MessageInput{
+		ContextID:   contextID,
+		WorkspaceID: workspaceID,
+		Text:        "hello",
+	})
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+
+	prompt := base.lastInput.SystemPrompt
+	if !strings.Contains(prompt, "Global SOUL") || !strings.Contains(prompt, "Global behavior rules.") {
+		t.Fatalf("expected global soul directives, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Workspace SOUL override") || !strings.Contains(prompt, "Workspace override behavior.") {
+		t.Fatalf("expected workspace soul directives, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Agent SOUL override") || !strings.Contains(prompt, "Agent-specific behavior.") {
+		t.Fatalf("expected context soul directives, got %s", prompt)
+	}
+}
