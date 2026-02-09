@@ -47,6 +47,9 @@ type Config struct {
 	SMTPUsername              string
 	SMTPPassword              string
 	SMTPFrom                  string
+	SandboxEnabled            bool
+	SandboxAllowedCommandsCSV string
+	SandboxTimeoutSec         int
 	LLMEnabled                bool
 	LLMAllowDM                bool
 	LLMRequireMentionInGroups bool
@@ -114,6 +117,9 @@ func FromEnv() Config {
 		SMTPUsername:              strings.TrimSpace(os.Getenv("SPINNER_SMTP_USERNAME")),
 		SMTPPassword:              os.Getenv("SPINNER_SMTP_PASSWORD"),
 		SMTPFrom:                  strings.TrimSpace(os.Getenv("SPINNER_SMTP_FROM")),
+		SandboxEnabled:            boolOrDefault("SPINNER_SANDBOX_ENABLED", true),
+		SandboxAllowedCommandsCSV: stringOrDefault("SPINNER_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,grep,head,tail"),
+		SandboxTimeoutSec:         intOrDefault("SPINNER_SANDBOX_TIMEOUT_SECONDS", 20),
 		LLMEnabled:                boolOrDefault("SPINNER_LLM_ENABLED", true),
 		LLMAllowDM:                boolOrDefault("SPINNER_LLM_ALLOW_DM", true),
 		LLMRequireMentionInGroups: boolOrDefault("SPINNER_LLM_REQUIRE_MENTION_IN_GROUPS", true),

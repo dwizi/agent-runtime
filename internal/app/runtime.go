@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/carlos/spinner/internal/actions/executor"
+	"github.com/carlos/spinner/internal/actions/plugins/sandbox"
 	"github.com/carlos/spinner/internal/actions/plugins/smtp"
 	"github.com/carlos/spinner/internal/actions/plugins/webhook"
 	"github.com/carlos/spinner/internal/config"
@@ -77,8 +78,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		AutoEmbed:     cfg.QMDAutoEmbed,
 	}, logger.With("component", "qmd"))
 
-	actionExecutor := executor.NewRegistry(
-		webhook.New(15*time.Second),
+	plugins := []executor.Plugin{
+		webhook.New(15 * time.Second),
 		smtp.New(smtp.Config{
 			Host:     cfg.SMTPHost,
 			Port:     cfg.SMTPPort,
@@ -86,7 +87,16 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			Password: cfg.SMTPPassword,
 			From:     cfg.SMTPFrom,
 		}),
-	)
+	}
+	if cfg.SandboxEnabled {
+		plugins = append(plugins, sandbox.New(sandbox.Config{
+			Enabled:         true,
+			WorkspaceRoot:   cfg.WorkspaceRoot,
+			AllowedCommands: parseCSVList(cfg.SandboxAllowedCommandsCSV),
+			Timeout:         time.Duration(cfg.SandboxTimeoutSec) * time.Second,
+		}))
+	}
+	actionExecutor := executor.NewRegistry(plugins...)
 	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor)
 	responder := zai.New(zai.Config{
 		APIKey:  cfg.ZAIAPIKey,
@@ -262,4 +272,26 @@ func parseCSVSet(input string) map[string]struct{} {
 		return nil
 	}
 	return set
+}
+
+func parseCSVList(input string) []string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, ",")
+	result := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		value := strings.ToLower(strings.TrimSpace(part))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }

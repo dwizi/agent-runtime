@@ -31,3 +31,13 @@ func TestParseCSVSet(t *testing.T) {
 		t.Fatal("expected member in set")
 	}
 }
+
+func TestParseCSVList(t *testing.T) {
+	list := parseCSVList(" curl,git , ,RG,curl ")
+	if len(list) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(list))
+	}
+	if list[0] != "curl" || list[1] != "git" || list[2] != "rg" {
+		t.Fatalf("unexpected list: %+v", list)
+	}
+}

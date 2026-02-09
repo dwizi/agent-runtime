@@ -125,6 +125,11 @@ SMTP runtime env (for `send_email` approvals):
 - `SPINNER_SMTP_PASSWORD` (required when username is set)
 - `SPINNER_SMTP_FROM` (default sender, can be overridden by approved action payload `from`)
 
+Sandbox command runtime env:
+- `SPINNER_SANDBOX_ENABLED` (default: `true`)
+- `SPINNER_SANDBOX_ALLOWED_COMMANDS` CSV allowlist (default: `echo,cat,ls,curl,grep,head,tail`)
+- `SPINNER_SANDBOX_TIMEOUT_SECONDS` (default: `20`)
+
 LLM grounding:
 - before generating a reply, Spinner runs qmd search in the current workspace and injects top Markdown context snippets/excerpts into the prompt.
 
@@ -170,6 +175,12 @@ Generic external action plugin (initial):
   - `body` / `text`
   - `html`
   - `cc`, `bcc`, `from`
+- `type: "run_command"` or `type: "shell_command"` executes a sandboxed command.
+- command action payload:
+  - `target` or `payload.command` for binary name
+  - `payload.args` as array or string
+  - optional `payload.cwd` (must stay inside workspace root)
+- command execution is allowlist-based and always requires admin approval first.
 
 ## mTLS artifacts
 

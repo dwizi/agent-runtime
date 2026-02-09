@@ -83,7 +83,7 @@ func (r *Responder) buildSystemPrompt(ctx context.Context, input llm.MessageInpu
 	if strings.TrimSpace(policy.SystemPrompt) != "" {
 		lines = append(lines, "Context policy:\n"+strings.TrimSpace(policy.SystemPrompt))
 	}
-	lines = append(lines, "External actions policy:\nIf you need to request an external action (email/send/post/run), include an `action` fenced JSON block. Example:\n```action\n{\"type\":\"send_email\",\"target\":\"ops@example.com\",\"summary\":\"Send update\",\"subject\":\"Status\",\"body\":\"...\"}\n```\nThese actions require admin approval before execution.")
+	lines = append(lines, "External actions policy:\nIf you need to request an external action (email/send/post/run), include an `action` fenced JSON block. Example:\n```action\n{\"type\":\"send_email\",\"target\":\"ops@example.com\",\"summary\":\"Send update\",\"subject\":\"Status\",\"body\":\"...\"}\n```\nFor shell/CLI execution use:\n```action\n{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch service status\",\"args\":[\"-sS\",\"https://example.com/health\"]}\n```\nThese actions require admin approval before execution. Command execution is restricted by sandbox policy allowlists.")
 
 	skills := r.loadSkills(policy.WorkspaceID, policy.ContextID, policy.IsAdmin)
 	if len(skills) > 0 {

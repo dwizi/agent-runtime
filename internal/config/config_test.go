@@ -39,6 +39,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_SMTP_USERNAME", "")
 	t.Setenv("SPINNER_SMTP_PASSWORD", "")
 	t.Setenv("SPINNER_SMTP_FROM", "")
+	t.Setenv("SPINNER_SANDBOX_ENABLED", "")
+	t.Setenv("SPINNER_SANDBOX_ALLOWED_COMMANDS", "")
+	t.Setenv("SPINNER_SANDBOX_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_LLM_ENABLED", "")
 	t.Setenv("SPINNER_LLM_ALLOW_DM", "")
 	t.Setenv("SPINNER_LLM_REQUIRE_MENTION_IN_GROUPS", "")
@@ -146,6 +149,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SMTPFrom != "" {
 		t.Fatalf("expected default smtp from empty, got %s", cfg.SMTPFrom)
 	}
+	if !cfg.SandboxEnabled {
+		t.Fatal("expected sandbox enabled by default")
+	}
+	if cfg.SandboxAllowedCommandsCSV == "" {
+		t.Fatal("expected default sandbox allowlist")
+	}
+	if cfg.SandboxTimeoutSec != 20 {
+		t.Fatalf("expected default sandbox timeout 20, got %d", cfg.SandboxTimeoutSec)
+	}
 	if !cfg.LLMEnabled {
 		t.Fatal("expected llm enabled by default")
 	}
@@ -208,6 +220,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_SMTP_USERNAME", "bot@example.com")
 	t.Setenv("SPINNER_SMTP_PASSWORD", "secret")
 	t.Setenv("SPINNER_SMTP_FROM", "Spinner Bot <bot@example.com>")
+	t.Setenv("SPINNER_SANDBOX_ENABLED", "false")
+	t.Setenv("SPINNER_SANDBOX_ALLOWED_COMMANDS", "curl,git,rg")
+	t.Setenv("SPINNER_SANDBOX_TIMEOUT_SECONDS", "45")
 	t.Setenv("SPINNER_LLM_ENABLED", "true")
 	t.Setenv("SPINNER_LLM_ALLOW_DM", "false")
 	t.Setenv("SPINNER_LLM_REQUIRE_MENTION_IN_GROUPS", "false")
@@ -320,6 +335,15 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SMTPFrom != "Spinner Bot <bot@example.com>" {
 		t.Fatalf("expected overridden smtp from, got %s", cfg.SMTPFrom)
+	}
+	if cfg.SandboxEnabled {
+		t.Fatal("expected sandbox enabled false")
+	}
+	if cfg.SandboxAllowedCommandsCSV != "curl,git,rg" {
+		t.Fatalf("expected overridden sandbox commands, got %s", cfg.SandboxAllowedCommandsCSV)
+	}
+	if cfg.SandboxTimeoutSec != 45 {
+		t.Fatalf("expected overridden sandbox timeout, got %d", cfg.SandboxTimeoutSec)
 	}
 	if !cfg.LLMEnabled {
 		t.Fatal("expected llm enabled true")
