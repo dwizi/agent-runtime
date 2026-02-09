@@ -24,6 +24,10 @@ type Config struct {
 	QMDQueryTimeoutSec      int
 	QMDAutoEmbed            bool
 	ObjectivePollSec        int
+	HeartbeatEnabled        bool
+	HeartbeatIntervalSec    int
+	HeartbeatStaleSec       int
+	HeartbeatNotifyAdmin    bool
 	TaskNotifyPolicy        string
 	TaskNotifySuccessPolicy string
 	TaskNotifyFailurePolicy string
@@ -103,6 +107,10 @@ func FromEnv() Config {
 		QMDQueryTimeoutSec:        intOrDefault("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", 30),
 		QMDAutoEmbed:              boolOrDefault("SPINNER_QMD_AUTO_EMBED", true),
 		ObjectivePollSec:          intOrDefault("SPINNER_OBJECTIVE_POLL_SECONDS", 15),
+		HeartbeatEnabled:          boolOrDefault("SPINNER_HEARTBEAT_ENABLED", true),
+		HeartbeatIntervalSec:      intOrDefault("SPINNER_HEARTBEAT_INTERVAL_SECONDS", 30),
+		HeartbeatStaleSec:         intOrDefault("SPINNER_HEARTBEAT_STALE_SECONDS", 120),
+		HeartbeatNotifyAdmin:      boolOrDefault("SPINNER_HEARTBEAT_NOTIFY_ADMIN", true),
 		TaskNotifyPolicy:          notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_POLICY", "both"),
 		TaskNotifySuccessPolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", ""),
 		TaskNotifyFailurePolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_FAILURE_POLICY", ""),

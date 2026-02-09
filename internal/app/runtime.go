@@ -23,6 +23,7 @@ import (
 	"github.com/carlos/spinner/internal/connectors/imap"
 	"github.com/carlos/spinner/internal/connectors/telegram"
 	"github.com/carlos/spinner/internal/gateway"
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/httpapi"
 	"github.com/carlos/spinner/internal/llm/grounded"
 	"github.com/carlos/spinner/internal/llm/promptpolicy"
@@ -36,15 +37,21 @@ import (
 )
 
 type Runtime struct {
-	cfg        config.Config
-	logger     *slog.Logger
-	store      *store.Store
-	engine     *orchestrator.Engine
-	httpServer *http.Server
-	watcher    *watcher.Service
-	scheduler  *scheduler.Service
-	qmd        *qmd.Service
-	connectors []connectors.Connector
+	cfg              config.Config
+	logger           *slog.Logger
+	store            *store.Store
+	engine           *orchestrator.Engine
+	httpServer       *http.Server
+	watcher          *watcher.Service
+	scheduler        *scheduler.Service
+	qmd              *qmd.Service
+	connectors       []connectors.Connector
+	heartbeat        *heartbeat.Registry
+	heartbeatMonitor *heartbeat.Monitor
+}
+
+type heartbeatAware interface {
+	SetHeartbeatReporter(reporter heartbeat.Reporter)
 }
 
 func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -65,6 +72,16 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	}
 
 	engine := orchestrator.New(cfg.DefaultConcurrency, logger.With("component", "orchestrator"))
+	var heartbeatRegistry *heartbeat.Registry
+	if cfg.HeartbeatEnabled {
+		heartbeatRegistry = heartbeat.NewRegistry()
+		heartbeatRegistry.Starting("runtime", "booting")
+		heartbeatRegistry.Starting("orchestrator", "initializing")
+		heartbeatRegistry.Starting("scheduler", "initializing")
+		heartbeatRegistry.Starting("watcher", "initializing")
+		heartbeatRegistry.Starting("api", "initializing")
+		heartbeatRegistry.Starting("qmd", "initializing")
+	}
 	qmdService := qmd.New(qmd.Config{
 		WorkspaceRoot: cfg.WorkspaceRoot,
 		Binary:        cfg.QMDBinary,
@@ -77,6 +94,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		QueryTimeout:  time.Duration(cfg.QMDQueryTimeoutSec) * time.Second,
 		AutoEmbed:     cfg.QMDAutoEmbed,
 	}, logger.With("component", "qmd"))
+	if heartbeatRegistry != nil {
+		heartbeatRegistry.Beat("qmd", "qmd service initialized")
+	}
 
 	plugins := []executor.Plugin{
 		webhook.New(15 * time.Second),
@@ -133,6 +153,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	})
 	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
 	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, groundedResponder, qmdService, logger.With("component", "task-executor")))
+	if heartbeatRegistry != nil {
+		schedulerService.SetHeartbeatReporter(heartbeatRegistry)
+	}
 
 	watchService, err := watcher.New(
 		[]string{cfg.WorkspaceRoot},
@@ -174,12 +197,17 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		sqlStore.Close()
 		return nil, err
 	}
+	if heartbeatRegistry != nil {
+		watchService.SetHeartbeatReporter(heartbeatRegistry)
+	}
 
 	handler := httpapi.NewRouter(httpapi.Dependencies{
-		Config: cfg,
-		Store:  sqlStore,
-		Engine: engine,
-		Logger: logger.With("component", "api"),
+		Config:              cfg,
+		Store:               sqlStore,
+		Engine:              engine,
+		Logger:              logger.With("component", "api"),
+		Heartbeat:           heartbeatRegistry,
+		HeartbeatStaleAfter: time.Duration(cfg.HeartbeatStaleSec) * time.Second,
 	})
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -187,10 +215,30 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	connectorList := []connectors.Connector{
-		discord.New(cfg.DiscordToken, cfg.DiscordAPI, cfg.DiscordWSURL, cfg.WorkspaceRoot, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "discord")),
-		telegram.New(cfg.TelegramToken, cfg.TelegramAPI, cfg.WorkspaceRoot, cfg.TelegramPoll, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "telegram")),
-		imap.New(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUsername, cfg.IMAPPassword, cfg.IMAPMailbox, cfg.IMAPPollSeconds, cfg.WorkspaceRoot, cfg.IMAPTLSSkipVerify, sqlStore, engine, logger.With("connector", "imap")),
+	connectorList := []connectors.Connector{}
+	if strings.TrimSpace(cfg.DiscordToken) != "" {
+		connectorList = append(connectorList, discord.New(cfg.DiscordToken, cfg.DiscordAPI, cfg.DiscordWSURL, cfg.WorkspaceRoot, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "discord")))
+	} else if heartbeatRegistry != nil {
+		heartbeatRegistry.Disabled("connector:discord", "token missing")
+	}
+	if strings.TrimSpace(cfg.TelegramToken) != "" {
+		connectorList = append(connectorList, telegram.New(cfg.TelegramToken, cfg.TelegramAPI, cfg.WorkspaceRoot, cfg.TelegramPoll, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "telegram")))
+	} else if heartbeatRegistry != nil {
+		heartbeatRegistry.Disabled("connector:telegram", "token missing")
+	}
+	if strings.TrimSpace(cfg.IMAPHost) != "" && strings.TrimSpace(cfg.IMAPUsername) != "" && strings.TrimSpace(cfg.IMAPPassword) != "" {
+		connectorList = append(connectorList, imap.New(cfg.IMAPHost, cfg.IMAPPort, cfg.IMAPUsername, cfg.IMAPPassword, cfg.IMAPMailbox, cfg.IMAPPollSeconds, cfg.WorkspaceRoot, cfg.IMAPTLSSkipVerify, sqlStore, engine, logger.With("connector", "imap")))
+	} else if heartbeatRegistry != nil {
+		heartbeatRegistry.Disabled("connector:imap", "credentials missing")
+	}
+	if heartbeatRegistry != nil {
+		for _, connector := range connectorList {
+			reportingConnector, ok := connector.(heartbeatAware)
+			if !ok {
+				continue
+			}
+			reportingConnector.SetHeartbeatReporter(heartbeatRegistry)
+		}
 	}
 	publishers := map[string]connectors.Publisher{}
 	for _, connector := range connectorList {
@@ -209,6 +257,36 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		logger.With("component", "task-notifier"),
 	)
 	engine.SetObserver(newTaskObserver(sqlStore, notifier, logger.With("component", "task-observer")))
+	if heartbeatRegistry != nil {
+		heartbeatNotifier := newHeartbeatNotifier(
+			sqlStore,
+			publishers,
+			cfg.WorkspaceRoot,
+			cfg.HeartbeatNotifyAdmin,
+			logger.With("component", "heartbeat-notifier"),
+		)
+		heartbeatMonitor := heartbeat.NewMonitor(heartbeatRegistry, heartbeat.MonitorConfig{
+			Interval:   time.Duration(cfg.HeartbeatIntervalSec) * time.Second,
+			StaleAfter: time.Duration(cfg.HeartbeatStaleSec) * time.Second,
+			Logger:     logger.With("component", "heartbeat-monitor"),
+			OnTransition: func(ctx context.Context, transition heartbeat.Transition, snapshot heartbeat.Snapshot) {
+				heartbeatNotifier.HandleTransition(ctx, transition, snapshot)
+			},
+		})
+		return &Runtime{
+			cfg:              cfg,
+			logger:           logger,
+			store:            sqlStore,
+			engine:           engine,
+			httpServer:       httpServer,
+			watcher:          watchService,
+			scheduler:        schedulerService,
+			qmd:              qmdService,
+			connectors:       connectorList,
+			heartbeat:        heartbeatRegistry,
+			heartbeatMonitor: heartbeatMonitor,
+		}, nil
+	}
 
 	return &Runtime{
 		cfg:        cfg,
@@ -225,30 +303,52 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 
 func (r *Runtime) Run(ctx context.Context) error {
 	r.logger.Info("spinner runtime starting", "addr", r.cfg.HTTPAddr, "workspace_root", r.cfg.WorkspaceRoot)
+	if r.heartbeat != nil {
+		r.heartbeat.Beat("runtime", "runtime loop started")
+	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
-		return r.engine.Start(groupCtx)
+		if r.heartbeat != nil {
+			r.heartbeat.Starting("orchestrator", "workers starting")
+		}
+		return runMonitored(groupCtx, r.heartbeat, "orchestrator", 20*time.Second, func(runCtx context.Context) error {
+			return r.engine.Start(runCtx)
+		})
 	})
 	group.Go(func() error {
-		return r.watcher.Start(groupCtx)
+		return runMonitored(groupCtx, r.heartbeat, "watcher", 0, func(runCtx context.Context) error {
+			return r.watcher.Start(runCtx)
+		})
 	})
 	group.Go(func() error {
-		return r.scheduler.Start(groupCtx)
+		return runMonitored(groupCtx, r.heartbeat, "scheduler", 0, func(runCtx context.Context) error {
+			return r.scheduler.Start(runCtx)
+		})
 	})
 	for _, conn := range r.connectors {
 		connector := conn
 		group.Go(func() error {
-			return connector.Start(groupCtx)
+			componentName := "connector:" + strings.ToLower(strings.TrimSpace(connector.Name()))
+			return runMonitored(groupCtx, r.heartbeat, componentName, 0, func(runCtx context.Context) error {
+				return connector.Start(runCtx)
+			})
 		})
 	}
 	group.Go(func() error {
-		err := r.httpServer.ListenAndServe()
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
+		return runMonitored(groupCtx, r.heartbeat, "api", 20*time.Second, func(runCtx context.Context) error {
+			err := r.httpServer.ListenAndServe()
+			if errors.Is(err, http.ErrServerClosed) {
+				return nil
+			}
+			return err
+		})
 	})
+	if r.heartbeatMonitor != nil {
+		group.Go(func() error {
+			return r.heartbeatMonitor.Start(groupCtx)
+		})
+	}
 	group.Go(func() error {
 		<-groupCtx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -291,6 +391,54 @@ func workspaceIDFromPath(workspaceRoot, changedPath string) string {
 		return ""
 	}
 	return workspaceID
+}
+
+func runMonitored(
+	ctx context.Context,
+	reporter heartbeat.Reporter,
+	component string,
+	beatInterval time.Duration,
+	run func(context.Context) error,
+) error {
+	if run == nil {
+		return nil
+	}
+	if reporter != nil {
+		reporter.Starting(component, "starting")
+		reporter.Beat(component, "running")
+	}
+
+	var stopHeartbeat func()
+	if reporter != nil && beatInterval > 0 {
+		heartbeatCtx, cancel := context.WithCancel(ctx)
+		stopHeartbeat = cancel
+		go func() {
+			ticker := time.NewTicker(beatInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-heartbeatCtx.Done():
+					return
+				case <-ticker.C:
+					reporter.Beat(component, "running")
+				}
+			}
+		}()
+	}
+
+	err := run(ctx)
+	if stopHeartbeat != nil {
+		stopHeartbeat()
+	}
+	if reporter == nil {
+		return err
+	}
+	if err != nil && ctx.Err() == nil {
+		reporter.Degrade(component, "component failed", err)
+		return err
+	}
+	reporter.Stopped(component, "stopped")
+	return err
 }
 
 func parseCSVSet(input string) map[string]struct{} {

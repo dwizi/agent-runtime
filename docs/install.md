@@ -60,12 +60,14 @@ docker compose --profile qmd-sidecar up -d qmd-sidecar
 ```bash
 curl -fsS http://localhost/healthz
 curl -fsS http://localhost/readyz
+curl -fsS http://localhost/api/v1/heartbeat
 curl -fsS http://localhost/api/v1/info
 ```
 
 Expected:
 - `healthz` = `{"status":"ok"}`
 - `readyz` = `{"status":"ready"}`
+- `heartbeat` includes component states and `overall`
 
 ## 6. Bootstrap First Admin Identity
 

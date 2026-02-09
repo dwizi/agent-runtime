@@ -18,6 +18,7 @@ import (
 
 	"github.com/carlos/spinner/internal/actions"
 	"github.com/carlos/spinner/internal/gateway"
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/llm"
 	llmsafety "github.com/carlos/spinner/internal/llm/safety"
 	"github.com/carlos/spinner/internal/memorylog"
@@ -58,6 +59,7 @@ type Connector struct {
 	logger      *slog.Logger
 	botUsername string
 	offset      int64
+	reporter    heartbeat.Reporter
 }
 
 func New(token, apiBase, workspaceRoot string, pollSeconds int, pairings PairingStore, commandGateway CommandGateway, responder Responder, policy SafetyPolicy, logger *slog.Logger) *Connector {
@@ -88,6 +90,10 @@ func (c *Connector) Name() string {
 	return "telegram"
 }
 
+func (c *Connector) SetHeartbeatReporter(reporter heartbeat.Reporter) {
+	c.reporter = reporter
+}
+
 func (c *Connector) Publish(ctx context.Context, externalID, text string) error {
 	chatID, err := strconv.ParseInt(strings.TrimSpace(externalID), 10, 64)
 	if err != nil {
@@ -101,22 +107,37 @@ func (c *Connector) Publish(ctx context.Context, externalID, text string) error 
 }
 
 func (c *Connector) Start(ctx context.Context) error {
+	if c.reporter != nil {
+		c.reporter.Starting("connector:telegram", "starting")
+	}
 	if c.token == "" {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:telegram", "token missing")
+		}
 		c.logger.Info("connector disabled, token missing")
 		<-ctx.Done()
 		return nil
 	}
 	if c.pairings == nil {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:telegram", "pairing store missing")
+		}
 		c.logger.Info("connector disabled, pairing store missing")
 		<-ctx.Done()
 		return nil
 	}
 	if c.gateway == nil {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:telegram", "gateway missing")
+		}
 		c.logger.Info("connector disabled, gateway missing")
 		<-ctx.Done()
 		return nil
 	}
 
+	if c.reporter != nil {
+		c.reporter.Beat("connector:telegram", "polling updates")
+	}
 	c.logger.Info("connector started", "api_base", c.apiBase)
 	if username, err := c.fetchBotUsername(ctx); err == nil {
 		c.botUsername = username
@@ -129,17 +150,28 @@ func (c *Connector) Start(ctx context.Context) error {
 
 	for {
 		if ctx.Err() != nil {
+			if c.reporter != nil {
+				c.reporter.Stopped("connector:telegram", "stopped")
+			}
 			c.logger.Info("connector stopped")
 			return nil
 		}
 		if err := c.pollOnce(ctx); err != nil && ctx.Err() == nil {
+			if c.reporter != nil {
+				c.reporter.Degrade("connector:telegram", "poll failed", err)
+			}
 			c.logger.Error("poll failed", "error", err)
 			select {
 			case <-ctx.Done():
+				if c.reporter != nil {
+					c.reporter.Stopped("connector:telegram", "stopped")
+				}
 				c.logger.Info("connector stopped")
 				return nil
 			case <-time.After(1500 * time.Millisecond):
 			}
+		} else if c.reporter != nil {
+			c.reporter.Beat("connector:telegram", "poll cycle ok")
 		}
 	}
 }

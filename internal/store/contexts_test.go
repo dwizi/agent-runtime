@@ -83,4 +83,15 @@ func TestContextDeliveryLookupAndAdminList(t *testing.T) {
 	if adminDeliveries[0].ContextID != adminContext.ID {
 		t.Fatalf("unexpected admin context id %s", adminDeliveries[0].ContextID)
 	}
+
+	globalAdmins, err := sqlStore.ListAdminDeliveries(ctx, 10)
+	if err != nil {
+		t.Fatalf("list admin deliveries: %v", err)
+	}
+	if len(globalAdmins) != 1 {
+		t.Fatalf("expected one global admin delivery, got %d", len(globalAdmins))
+	}
+	if globalAdmins[0].ContextID != adminContext.ID {
+		t.Fatalf("unexpected global admin context id %s", globalAdmins[0].ContextID)
+	}
 }

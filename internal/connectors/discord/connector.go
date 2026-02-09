@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions"
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/gorilla/websocket"
 
 	"github.com/carlos/spinner/internal/gateway"
@@ -67,6 +68,7 @@ type Connector struct {
 	httpClient *http.Client
 	logger     *slog.Logger
 	botUserID  string
+	reporter   heartbeat.Reporter
 }
 
 func New(token, apiBase, gatewayURL, workspaceRoot string, pairings PairingStore, commandGateway CommandGateway, responder Responder, policy SafetyPolicy, logger *slog.Logger) *Connector {
@@ -94,6 +96,10 @@ func (c *Connector) Name() string {
 	return "discord"
 }
 
+func (c *Connector) SetHeartbeatReporter(reporter heartbeat.Reporter) {
+	c.reporter = reporter
+}
+
 func (c *Connector) Publish(ctx context.Context, externalID, text string) error {
 	channelID := strings.TrimSpace(externalID)
 	if channelID == "" {
@@ -107,31 +113,55 @@ func (c *Connector) Publish(ctx context.Context, externalID, text string) error 
 }
 
 func (c *Connector) Start(ctx context.Context) error {
+	if c.reporter != nil {
+		c.reporter.Starting("connector:discord", "starting")
+	}
 	if c.token == "" {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:discord", "token missing")
+		}
 		c.logger.Info("connector disabled, token missing")
 		<-ctx.Done()
 		return nil
 	}
 	if c.pairings == nil || c.gateway == nil {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:discord", "dependencies missing")
+		}
 		c.logger.Info("connector disabled, dependencies missing")
 		<-ctx.Done()
 		return nil
 	}
 
+	if c.reporter != nil {
+		c.reporter.Beat("connector:discord", "gateway session loop active")
+	}
 	c.logger.Info("connector started", "mode", "gateway")
 	for {
 		if ctx.Err() != nil {
+			if c.reporter != nil {
+				c.reporter.Stopped("connector:discord", "stopped")
+			}
 			c.logger.Info("connector stopped")
 			return nil
 		}
 		if err := c.runSession(ctx); err != nil {
 			if ctx.Err() != nil {
+				if c.reporter != nil {
+					c.reporter.Stopped("connector:discord", "stopped")
+				}
 				c.logger.Info("connector stopped")
 				return nil
+			}
+			if c.reporter != nil {
+				c.reporter.Degrade("connector:discord", "gateway session error", err)
 			}
 			c.logger.Error("discord session ended, reconnecting", "error", err)
 			select {
 			case <-ctx.Done():
+				if c.reporter != nil {
+					c.reporter.Stopped("connector:discord", "stopped")
+				}
 				c.logger.Info("connector stopped")
 				return nil
 			case <-time.After(2 * time.Second):
@@ -177,6 +207,9 @@ func (c *Connector) runSession(ctx context.Context) error {
 	if err := c.sendIdentify(conn, &writeMu); err != nil {
 		return err
 	}
+	if c.reporter != nil {
+		c.reporter.Beat("connector:discord", "gateway session established")
+	}
 
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 	defer cancelHeartbeat()
@@ -199,6 +232,9 @@ func (c *Connector) runSession(ctx context.Context) error {
 
 		switch envelope.Op {
 		case 0:
+			if c.reporter != nil {
+				c.reporter.Beat("connector:discord", "gateway event received")
+			}
 			if envelope.T == "READY" {
 				var ready discordReady
 				if err := json.Unmarshal(envelope.D, &ready); err == nil {

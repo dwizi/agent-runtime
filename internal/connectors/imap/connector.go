@@ -23,6 +23,7 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/store"
 )
@@ -67,6 +68,7 @@ type Connector struct {
 	logger        *slog.Logger
 	fetchUnread   func(ctx context.Context) ([]Message, error)
 	markSeen      func(ctx context.Context, uids []uint32) error
+	reporter      heartbeat.Reporter
 }
 
 func New(host string, port int, username, password, mailbox string, pollSeconds int, workspaceRoot string, tlsSkipVerify bool, store Store, engine Engine, logger *slog.Logger) *Connector {
@@ -101,34 +103,64 @@ func (c *Connector) Name() string {
 	return "imap"
 }
 
+func (c *Connector) SetHeartbeatReporter(reporter heartbeat.Reporter) {
+	c.reporter = reporter
+}
+
 func (c *Connector) Start(ctx context.Context) error {
+	if c.reporter != nil {
+		c.reporter.Starting("connector:imap", "starting")
+	}
 	if c.host == "" || c.username == "" || c.password == "" {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:imap", "credentials missing")
+		}
 		c.logger.Info("connector disabled, imap credentials missing")
 		<-ctx.Done()
 		return nil
 	}
 	if c.store == nil {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:imap", "store missing")
+		}
 		c.logger.Info("connector disabled, store missing")
 		<-ctx.Done()
 		return nil
 	}
 	if c.fetchUnread == nil || c.markSeen == nil {
+		if c.reporter != nil {
+			c.reporter.Disabled("connector:imap", "handlers missing")
+		}
 		c.logger.Info("connector disabled, imap handlers missing")
 		<-ctx.Done()
 		return nil
+	}
+	if c.reporter != nil {
+		c.reporter.Beat("connector:imap", "polling mailbox")
 	}
 	c.logger.Info("connector started", "mailbox", c.mailbox, "host", c.host, "poll_seconds", c.pollSeconds)
 
 	for {
 		if ctx.Err() != nil {
+			if c.reporter != nil {
+				c.reporter.Stopped("connector:imap", "stopped")
+			}
 			c.logger.Info("connector stopped")
 			return nil
 		}
 		if err := c.pollOnce(ctx); err != nil && ctx.Err() == nil {
+			if c.reporter != nil {
+				c.reporter.Degrade("connector:imap", "poll failed", err)
+			}
 			c.logger.Error("imap poll failed", "error", err)
+		} else if c.reporter != nil {
+			c.reporter.Beat("connector:imap", "poll cycle ok")
 		}
 		select {
 		case <-ctx.Done():
+			if c.reporter != nil {
+				c.reporter.Stopped("connector:imap", "stopped")
+			}
 			c.logger.Info("connector stopped")
 			return nil
 		case <-time.After(time.Duration(c.pollSeconds) * time.Second):

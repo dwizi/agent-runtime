@@ -7,6 +7,8 @@ Day-2 tasks for maintaining Spinner safely.
 1. Runtime health:
    - `curl -fsS http://localhost/healthz`
    - `curl -fsS http://localhost/readyz`
+   - `curl -fsS http://localhost/api/v1/heartbeat`
+   - verify `overall` is not `degraded`
 2. Review pending approvals in admin channels:
    - `/pending-actions`
 3. Review objective health:

@@ -235,6 +235,36 @@ func (s *Store) ListWorkspaceAdminDeliveries(ctx context.Context, workspaceID st
 	return results, nil
 }
 
+func (s *Store) ListAdminDeliveries(ctx context.Context, limit int) ([]ContextDelivery, error) {
+	if limit < 1 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, workspace_id, connector, external_id, is_admin
+		 FROM contexts
+		 WHERE is_admin = 1
+		 ORDER BY created_at ASC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list admin deliveries: %w", err)
+	}
+	defer rows.Close()
+	results := make([]ContextDelivery, 0, limit)
+	for rows.Next() {
+		var record ContextDelivery
+		var isAdminInt int
+		if err := rows.Scan(&record.ContextID, &record.WorkspaceID, &record.Connector, &record.ExternalID, &isAdminInt); err != nil {
+			return nil, fmt.Errorf("scan admin delivery: %w", err)
+		}
+		record.IsAdmin = isAdminInt == 1
+		results = append(results, record)
+	}
+	return results, nil
+}
+
 func ensureWorkspaceTx(ctx context.Context, tx *sql.Tx, slug, name string) (string, error) {
 	var workspaceID string
 	err := tx.QueryRowContext(

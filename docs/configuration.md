@@ -78,6 +78,22 @@ Notes:
 - Docker build ships `qmd` in the Spinner runtime image (`SPINNER_QMD_BINARY=qmd` by default).
 - For host-native runs, install `qmd` manually and keep it on `PATH`.
 
+## Heartbeat and Supervision
+
+- `SPINNER_HEARTBEAT_ENABLED`
+- `SPINNER_HEARTBEAT_INTERVAL_SECONDS`
+- `SPINNER_HEARTBEAT_STALE_SECONDS`
+- `SPINNER_HEARTBEAT_NOTIFY_ADMIN`
+
+API endpoint:
+- `GET /api/v1/heartbeat`
+
+Behavior:
+- tracks health state transitions for runtime components
+- marks stale components when heartbeat age exceeds `SPINNER_HEARTBEAT_STALE_SECONDS`
+- optionally notifies admin channels on degraded/recovered transitions
+- writes workspace heartbeat transitions to `/data/workspaces/<workspace-id>/ops/heartbeat.md`
+
 ## Objectives and Proactivity
 
 - `SPINNER_OBJECTIVE_POLL_SECONDS`

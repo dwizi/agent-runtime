@@ -11,15 +11,18 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/config"
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/store"
 )
 
 type Dependencies struct {
-	Config config.Config
-	Store  *store.Store
-	Engine *orchestrator.Engine
-	Logger *slog.Logger
+	Config              config.Config
+	Store               *store.Store
+	Engine              *orchestrator.Engine
+	Logger              *slog.Logger
+	Heartbeat           *heartbeat.Registry
+	HeartbeatStaleAfter time.Duration
 }
 
 type router struct {
@@ -31,6 +34,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", rt.handleHealth)
 	mux.HandleFunc("/readyz", rt.handleReady)
+	mux.HandleFunc("/api/v1/heartbeat", rt.handleHeartbeat)
 	mux.HandleFunc("/api/v1/info", rt.handleInfo)
 	mux.HandleFunc("/api/v1/tasks", rt.handleTasks)
 	mux.HandleFunc("/api/v1/tasks/retry", rt.handleTaskRetry)
@@ -55,6 +59,18 @@ func (r *router) handleReady(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (r *router) handleHeartbeat(w http.ResponseWriter, req *http.Request) {
+	if r.deps.Heartbeat == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "unavailable",
+			"error":  "heartbeat is disabled",
+		})
+		return
+	}
+	snapshot := r.deps.Heartbeat.Snapshot(r.deps.HeartbeatStaleAfter)
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (r *router) handleInfo(w http.ResponseWriter, req *http.Request) {

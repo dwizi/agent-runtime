@@ -36,6 +36,7 @@ Use this as a go-live gate for Spinner deployments.
 - [ ] Health checks pass:
   - [ ] `curl -fsS http://localhost/healthz`
   - [ ] `curl -fsS http://localhost/readyz`
+  - [ ] `curl -fsS http://localhost/api/v1/heartbeat` (overall not degraded)
   - [ ] `curl -fsS http://localhost/api/v1/info`
 - [ ] TUI access verified: `make tui`
 - [ ] First `/task` command succeeds in each enabled connector.

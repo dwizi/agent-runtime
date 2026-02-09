@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/store"
 )
@@ -29,6 +30,7 @@ type Service struct {
 	engine       Engine
 	logger       *slog.Logger
 	pollInterval time.Duration
+	reporter     heartbeat.Reporter
 }
 
 func New(store Store, engine Engine, pollInterval time.Duration, logger *slog.Logger) *Service {
@@ -43,24 +45,46 @@ func New(store Store, engine Engine, pollInterval time.Duration, logger *slog.Lo
 	}
 }
 
+func (s *Service) SetHeartbeatReporter(reporter heartbeat.Reporter) {
+	s.reporter = reporter
+}
+
 func (s *Service) Start(ctx context.Context) error {
 	if s.store == nil || s.engine == nil {
+		if s.reporter != nil {
+			s.reporter.Disabled("scheduler", "dependencies missing")
+		}
 		<-ctx.Done()
 		return nil
 	}
 	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
+	if s.reporter != nil {
+		s.reporter.Starting("scheduler", "started")
+		s.reporter.Beat("scheduler", "polling objectives")
+	}
 	s.logger.Info("scheduler started", "poll_interval", s.pollInterval.String())
 	for {
 		if ctx.Err() != nil {
+			if s.reporter != nil {
+				s.reporter.Stopped("scheduler", "stopped")
+			}
 			s.logger.Info("scheduler stopped")
 			return nil
 		}
 		if err := s.processDue(ctx); err != nil {
+			if s.reporter != nil {
+				s.reporter.Degrade("scheduler", "process due failed", err)
+			}
 			s.logger.Error("scheduler process due failed", "error", err)
+		} else if s.reporter != nil {
+			s.reporter.Beat("scheduler", "poll cycle completed")
 		}
 		select {
 		case <-ctx.Done():
+			if s.reporter != nil {
+				s.reporter.Stopped("scheduler", "stopped")
+			}
 			s.logger.Info("scheduler stopped")
 			return nil
 		case <-ticker.C:

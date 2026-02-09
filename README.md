@@ -41,6 +41,7 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
 Health endpoints:
 - `GET /healthz`
 - `GET /readyz`
+- `GET /api/v1/heartbeat`
 - `GET /api/v1/info`
 - `POST /api/v1/tasks`
 - `POST /api/v1/pairings/start`
@@ -115,6 +116,18 @@ IMAP ingestion behavior:
 
 Objective scheduler runtime env:
 - `SPINNER_OBJECTIVE_POLL_SECONDS` (default: `15`)
+
+Heartbeat runtime env:
+- `SPINNER_HEARTBEAT_ENABLED` (default: `true`)
+- `SPINNER_HEARTBEAT_INTERVAL_SECONDS` (default: `30`)
+- `SPINNER_HEARTBEAT_STALE_SECONDS` (default: `120`)
+- `SPINNER_HEARTBEAT_NOTIFY_ADMIN` (default: `true`)
+
+Heartbeat behavior:
+- monitors orchestrator, scheduler, watcher, connectors, and API loop
+- exposes current health states at `GET /api/v1/heartbeat`
+- emits admin notifications on degraded/recovered state transitions
+- appends transition log entries to `/data/workspaces/<workspace-id>/ops/heartbeat.md` for workspaces with admin channels
 
 Objectives and proactivity:
 - objectives can be stored as:

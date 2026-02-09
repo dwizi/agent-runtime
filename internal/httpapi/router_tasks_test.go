@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/config"
+	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/store"
 )
@@ -113,6 +114,48 @@ func TestTaskRetryRejectsNonFailedTask(t *testing.T) {
 	handler.ServeHTTP(retryRes, retryReq)
 	if retryRes.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400 for non-failed retry, got %d", retryRes.Code)
+	}
+}
+
+func TestHeartbeatEndpoint(t *testing.T) {
+	sqlStore := newRouterTestStore(t)
+	registry := heartbeat.NewRegistry()
+	registry.Beat("scheduler", "ok")
+
+	handler := NewRouter(Dependencies{
+		Config:              config.Config{},
+		Store:               sqlStore,
+		Engine:              orchestrator.New(1, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Heartbeat:           registry,
+		HeartbeatStaleAfter: 90 * time.Second,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/heartbeat", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", res.Code)
+	}
+
+	var payload struct {
+		Overall    string `json:"overall"`
+		Components []struct {
+			Name  string `json:"name"`
+			State string `json:"state"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode heartbeat payload: %v", err)
+	}
+	if payload.Overall == "" {
+		t.Fatal("expected overall state")
+	}
+	if len(payload.Components) != 1 {
+		t.Fatalf("expected one component, got %d", len(payload.Components))
+	}
+	if payload.Components[0].Name != "scheduler" {
+		t.Fatalf("expected scheduler component, got %s", payload.Components[0].Name)
 	}
 }
 

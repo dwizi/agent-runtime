@@ -20,6 +20,10 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "")
 	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "")
+	t.Setenv("SPINNER_HEARTBEAT_ENABLED", "")
+	t.Setenv("SPINNER_HEARTBEAT_INTERVAL_SECONDS", "")
+	t.Setenv("SPINNER_HEARTBEAT_STALE_SECONDS", "")
+	t.Setenv("SPINNER_HEARTBEAT_NOTIFY_ADMIN", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "")
@@ -102,6 +106,18 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.ObjectivePollSec != 15 {
 		t.Fatalf("expected default objective poll seconds 15, got %d", cfg.ObjectivePollSec)
+	}
+	if !cfg.HeartbeatEnabled {
+		t.Fatal("expected heartbeat enabled by default")
+	}
+	if cfg.HeartbeatIntervalSec != 30 {
+		t.Fatalf("expected default heartbeat interval 30, got %d", cfg.HeartbeatIntervalSec)
+	}
+	if cfg.HeartbeatStaleSec != 120 {
+		t.Fatalf("expected default heartbeat stale seconds 120, got %d", cfg.HeartbeatStaleSec)
+	}
+	if !cfg.HeartbeatNotifyAdmin {
+		t.Fatal("expected heartbeat admin notifications enabled by default")
 	}
 	if cfg.TaskNotifyPolicy != "both" {
 		t.Fatalf("expected default task notify policy both, got %s", cfg.TaskNotifyPolicy)
@@ -234,6 +250,10 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", "44")
 	t.Setenv("SPINNER_QMD_AUTO_EMBED", "false")
 	t.Setenv("SPINNER_OBJECTIVE_POLL_SECONDS", "11")
+	t.Setenv("SPINNER_HEARTBEAT_ENABLED", "true")
+	t.Setenv("SPINNER_HEARTBEAT_INTERVAL_SECONDS", "20")
+	t.Setenv("SPINNER_HEARTBEAT_STALE_SECONDS", "75")
+	t.Setenv("SPINNER_HEARTBEAT_NOTIFY_ADMIN", "false")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "admin")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "origin")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "admin")
@@ -321,6 +341,18 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.ObjectivePollSec != 11 {
 		t.Fatalf("expected overridden objective poll seconds, got %d", cfg.ObjectivePollSec)
+	}
+	if !cfg.HeartbeatEnabled {
+		t.Fatal("expected overridden heartbeat enabled true")
+	}
+	if cfg.HeartbeatIntervalSec != 20 {
+		t.Fatalf("expected overridden heartbeat interval, got %d", cfg.HeartbeatIntervalSec)
+	}
+	if cfg.HeartbeatStaleSec != 75 {
+		t.Fatalf("expected overridden heartbeat stale seconds, got %d", cfg.HeartbeatStaleSec)
+	}
+	if cfg.HeartbeatNotifyAdmin {
+		t.Fatal("expected overridden heartbeat notify admin false")
 	}
 	if cfg.TaskNotifyPolicy != "admin" {
 		t.Fatalf("expected overridden task notify policy admin, got %s", cfg.TaskNotifyPolicy)
