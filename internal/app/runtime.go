@@ -93,6 +93,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			Enabled:         true,
 			WorkspaceRoot:   cfg.WorkspaceRoot,
 			AllowedCommands: parseCSVList(cfg.SandboxAllowedCommandsCSV),
+			RunnerCommand:   cfg.SandboxRunnerCommand,
+			RunnerArgs:      parseShellArgs(cfg.SandboxRunnerArgs),
 			Timeout:         time.Duration(cfg.SandboxTimeoutSec) * time.Second,
 		}))
 	}
@@ -294,4 +296,12 @@ func parseCSVList(input string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+func parseShellArgs(input string) []string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Fields(trimmed)
 }

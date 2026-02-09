@@ -41,3 +41,13 @@ func TestParseCSVList(t *testing.T) {
 		t.Fatalf("unexpected list: %+v", list)
 	}
 }
+
+func TestParseShellArgs(t *testing.T) {
+	args := parseShellArgs(" --network=off   --readonly ")
+	if len(args) != 2 {
+		t.Fatalf("expected 2 args, got %d", len(args))
+	}
+	if args[0] != "--network=off" || args[1] != "--readonly" {
+		t.Fatalf("unexpected shell args: %+v", args)
+	}
+}

@@ -44,6 +44,26 @@ type ApprovePairingResponse struct {
 	ConnectorUserID string `json:"connector_user_id"`
 }
 
+type Objective struct {
+	ID              string `json:"id"`
+	WorkspaceID     string `json:"workspace_id"`
+	ContextID       string `json:"context_id"`
+	Title           string `json:"title"`
+	Prompt          string `json:"prompt"`
+	TriggerType     string `json:"trigger_type"`
+	EventKey        string `json:"event_key"`
+	IntervalSeconds int    `json:"interval_seconds"`
+	Active          bool   `json:"active"`
+	NextRunUnix     int64  `json:"next_run_unix"`
+	LastRunUnix     int64  `json:"last_run_unix"`
+	LastError       string `json:"last_error"`
+}
+
+type ListObjectivesResponse struct {
+	Items []Objective `json:"items"`
+	Count int         `json:"count"`
+}
+
 func New(cfg config.Config) (*Client, error) {
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -138,6 +158,68 @@ func (c *Client) DenyPairing(ctx context.Context, token, approverUserID, reason 
 		return Pairing{}, err
 	}
 	return response, nil
+}
+
+func (c *Client) ListObjectives(ctx context.Context, workspaceID string, activeOnly bool, limit int) ([]Objective, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace id is required")
+	}
+	query := url.Values{}
+	query.Set("workspace_id", workspaceID)
+	if !activeOnly {
+		query.Set("active_only", "false")
+	}
+	if limit > 0 {
+		query.Set("limit", fmt.Sprintf("%d", limit))
+	}
+	endpoint := c.baseURL + "/api/v1/objectives?" + query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var response ListObjectivesResponse
+	if err := c.doJSON(req, &response); err != nil {
+		return nil, err
+	}
+	return response.Items, nil
+}
+
+func (c *Client) SetObjectiveActive(ctx context.Context, objectiveID string, active bool) (Objective, error) {
+	payload := map[string]any{
+		"id":     strings.TrimSpace(objectiveID),
+		"active": active,
+	}
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		return Objective{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/objectives/active", bytes.NewReader(requestBody))
+	if err != nil {
+		return Objective{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response Objective
+	if err := c.doJSON(req, &response); err != nil {
+		return Objective{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) DeleteObjective(ctx context.Context, objectiveID string) error {
+	payload := map[string]any{
+		"id": strings.TrimSpace(objectiveID),
+	}
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/objectives/delete", bytes.NewReader(requestBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.doJSON(req, nil)
 }
 
 func (c *Client) doJSON(req *http.Request, out any) error {

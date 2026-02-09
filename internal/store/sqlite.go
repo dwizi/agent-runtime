@@ -137,6 +137,18 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			created_at_unix INTEGER NOT NULL,
 			updated_at_unix INTEGER NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS imap_ingestions (
+			id TEXT PRIMARY KEY,
+			account_key TEXT NOT NULL,
+			uid INTEGER NOT NULL,
+			message_id TEXT,
+			workspace_id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			created_at_unix INTEGER NOT NULL,
+			UNIQUE(account_key, uid),
+			UNIQUE(account_key, message_id)
+		);`,
 	}
 
 	for _, query := range queries {

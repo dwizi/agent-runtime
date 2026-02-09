@@ -41,6 +41,8 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_SMTP_FROM", "")
 	t.Setenv("SPINNER_SANDBOX_ENABLED", "")
 	t.Setenv("SPINNER_SANDBOX_ALLOWED_COMMANDS", "")
+	t.Setenv("SPINNER_SANDBOX_RUNNER_COMMAND", "")
+	t.Setenv("SPINNER_SANDBOX_RUNNER_ARGS", "")
 	t.Setenv("SPINNER_SANDBOX_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_LLM_ENABLED", "")
 	t.Setenv("SPINNER_LLM_ALLOW_DM", "")
@@ -155,6 +157,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SandboxAllowedCommandsCSV == "" {
 		t.Fatal("expected default sandbox allowlist")
 	}
+	if cfg.SandboxRunnerCommand != "" {
+		t.Fatalf("expected default sandbox runner command empty, got %s", cfg.SandboxRunnerCommand)
+	}
+	if cfg.SandboxRunnerArgs != "" {
+		t.Fatalf("expected default sandbox runner args empty, got %s", cfg.SandboxRunnerArgs)
+	}
 	if cfg.SandboxTimeoutSec != 20 {
 		t.Fatalf("expected default sandbox timeout 20, got %d", cfg.SandboxTimeoutSec)
 	}
@@ -222,6 +230,8 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_SMTP_FROM", "Spinner Bot <bot@example.com>")
 	t.Setenv("SPINNER_SANDBOX_ENABLED", "false")
 	t.Setenv("SPINNER_SANDBOX_ALLOWED_COMMANDS", "curl,git,rg")
+	t.Setenv("SPINNER_SANDBOX_RUNNER_COMMAND", "just-bash")
+	t.Setenv("SPINNER_SANDBOX_RUNNER_ARGS", "--network=off --readonly")
 	t.Setenv("SPINNER_SANDBOX_TIMEOUT_SECONDS", "45")
 	t.Setenv("SPINNER_LLM_ENABLED", "true")
 	t.Setenv("SPINNER_LLM_ALLOW_DM", "false")
@@ -341,6 +351,12 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SandboxAllowedCommandsCSV != "curl,git,rg" {
 		t.Fatalf("expected overridden sandbox commands, got %s", cfg.SandboxAllowedCommandsCSV)
+	}
+	if cfg.SandboxRunnerCommand != "just-bash" {
+		t.Fatalf("expected overridden sandbox runner command, got %s", cfg.SandboxRunnerCommand)
+	}
+	if cfg.SandboxRunnerArgs != "--network=off --readonly" {
+		t.Fatalf("expected overridden sandbox runner args, got %s", cfg.SandboxRunnerArgs)
 	}
 	if cfg.SandboxTimeoutSec != 45 {
 		t.Fatalf("expected overridden sandbox timeout, got %d", cfg.SandboxTimeoutSec)

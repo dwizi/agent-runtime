@@ -114,3 +114,54 @@ func TestListEventObjectives(t *testing.T) {
 		t.Fatalf("unexpected trigger type: %s", items[0].TriggerType)
 	}
 }
+
+func TestUpdatePauseAndDeleteObjective(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
+		WorkspaceID:     "ws-4",
+		ContextID:       "ctx-4",
+		Title:           "Draft summary",
+		Prompt:          "Draft a summary",
+		TriggerType:     ObjectiveTriggerSchedule,
+		IntervalSeconds: 120,
+		Active:          true,
+	})
+	if err != nil {
+		t.Fatalf("create objective: %v", err)
+	}
+
+	newTitle := "Draft weekly summary"
+	newPrompt := "Draft a weekly summary from latest markdown notes"
+	inactive := false
+	updated, err := sqlStore.UpdateObjective(ctx, UpdateObjectiveInput{
+		ID:     created.ID,
+		Title:  &newTitle,
+		Prompt: &newPrompt,
+		Active: &inactive,
+	})
+	if err != nil {
+		t.Fatalf("update objective: %v", err)
+	}
+	if updated.Title != newTitle || updated.Prompt != newPrompt {
+		t.Fatalf("objective update not persisted: %+v", updated)
+	}
+	if updated.Active {
+		t.Fatal("expected objective to be inactive after update")
+	}
+
+	resumed, err := sqlStore.SetObjectiveActive(ctx, created.ID, true)
+	if err != nil {
+		t.Fatalf("set objective active: %v", err)
+	}
+	if !resumed.Active {
+		t.Fatal("expected objective to be active")
+	}
+
+	if err := sqlStore.DeleteObjective(ctx, created.ID); err != nil {
+		t.Fatalf("delete objective: %v", err)
+	}
+	if _, err := sqlStore.LookupObjective(ctx, created.ID); err == nil {
+		t.Fatal("expected lookup to fail after delete")
+	}
+}

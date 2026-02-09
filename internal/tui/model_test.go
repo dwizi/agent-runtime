@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/carlos/spinner/internal/adminclient"
 	"github.com/carlos/spinner/internal/config"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRecoverInvalidTLSConfigClearsInvalidPair(t *testing.T) {
@@ -29,5 +31,39 @@ func TestRecoverInvalidTLSConfigClearsInvalidPair(t *testing.T) {
 	updated, _ := recoverInvalidTLSConfig(cfg, "", logger)
 	if updated.AdminTLSCertFile != "" || updated.AdminTLSKeyFile != "" {
 		t.Fatal("expected invalid client cert config to be cleared")
+	}
+}
+
+func TestTogglesToObjectivesMode(t *testing.T) {
+	m := model{
+		mode: modePairings,
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	typed := updated.(model)
+	if typed.mode != modeObjectives {
+		t.Fatalf("expected objectives mode, got %s", typed.mode)
+	}
+}
+
+func TestObjectiveLoadedMessageUpdatesSelection(t *testing.T) {
+	m := model{
+		mode: modeObjectives,
+		objectives: []adminclient.Objective{
+			{ID: "obj-1", Title: "One"},
+			{ID: "obj-2", Title: "Two"},
+		},
+		objectiveIndex: 5,
+	}
+	updated, _ := m.Update(objectivesLoadedMsg{
+		items: []adminclient.Objective{
+			{ID: "obj-3", Title: "Three", Active: true},
+		},
+	})
+	typed := updated.(model)
+	if len(typed.objectives) != 1 {
+		t.Fatalf("expected one objective, got %d", len(typed.objectives))
+	}
+	if typed.objectiveIndex != 0 {
+		t.Fatalf("expected objective index normalized to 0, got %d", typed.objectiveIndex)
 	}
 }

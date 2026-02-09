@@ -46,6 +46,9 @@ Health endpoints:
 - `POST /api/v1/pairings/deny`
 - `POST /api/v1/objectives`
 - `GET /api/v1/objectives?workspace_id=<id>`
+- `POST /api/v1/objectives/update`
+- `POST /api/v1/objectives/active`
+- `POST /api/v1/objectives/delete`
 
 Pairing flow (Telegram DM -> TUI approve):
 1. Linked Telegram bot receives `pair` (or `/pair`) in private DM.
@@ -103,6 +106,8 @@ IMAP runtime env:
 IMAP ingestion behavior:
 - unread emails are polled from the configured mailbox
 - each message is written to workspace Markdown under `inbox/imap/<mailbox>/<uid>-<subject>.md`
+- `.md` email attachments are extracted to `inbox/imap/<mailbox>/attachments/`
+- dedupe prevents re-ingesting already-processed messages (`uid`/`message-id`)
 - each ingested message queues a review task in the orchestrator
 
 Objective scheduler runtime env:
@@ -117,6 +122,14 @@ Objectives and proactivity:
 - create/list objectives via API:
   - `POST /api/v1/objectives`
   - `GET /api/v1/objectives?workspace_id=<workspace-id>&active_only=true`
+- manage objectives via API:
+  - `POST /api/v1/objectives/update`
+  - `POST /api/v1/objectives/active` (pause/resume)
+  - `POST /api/v1/objectives/delete`
+- TUI objective operations:
+  - press `Tab` to switch to Objectives mode
+  - type workspace id + `Enter` to load
+  - `j/k` select, `p` pause/resume, `x` delete, `r` refresh
 
 SMTP runtime env (for `send_email` approvals):
 - `SPINNER_SMTP_HOST` (required for SMTP email execution)
@@ -128,6 +141,8 @@ SMTP runtime env (for `send_email` approvals):
 Sandbox command runtime env:
 - `SPINNER_SANDBOX_ENABLED` (default: `true`)
 - `SPINNER_SANDBOX_ALLOWED_COMMANDS` CSV allowlist (default: `echo,cat,ls,curl,grep,head,tail`)
+- `SPINNER_SANDBOX_RUNNER_COMMAND` optional wrapper binary for isolation (e.g. `just-bash`)
+- `SPINNER_SANDBOX_RUNNER_ARGS` optional runner arguments (space separated)
 - `SPINNER_SANDBOX_TIMEOUT_SECONDS` (default: `20`)
 
 LLM grounding:
@@ -181,6 +196,8 @@ Generic external action plugin (initial):
   - `payload.args` as array or string
   - optional `payload.cwd` (must stay inside workspace root)
 - command execution is allowlist-based and always requires admin approval first.
+- commands must be bare executable names (no absolute/relative paths).
+- command output is truncated to a safe size before persistence/response.
 
 ## mTLS artifacts
 

@@ -18,6 +18,7 @@ type fakeStore struct {
 	contextRecord store.ContextRecord
 	lastTask      store.CreateTaskInput
 	taskCount     int
+	ingestedUIDs  map[uint32]bool
 }
 
 func (f *fakeStore) EnsureContextForExternalChannel(ctx context.Context, connector, externalID, displayName string) (store.ContextRecord, error) {
@@ -33,6 +34,21 @@ func (f *fakeStore) EnsureContextForExternalChannel(ctx context.Context, connect
 func (f *fakeStore) CreateTask(ctx context.Context, input store.CreateTaskInput) error {
 	f.lastTask = input
 	f.taskCount++
+	return nil
+}
+
+func (f *fakeStore) IsIMAPMessageIngested(ctx context.Context, accountKey string, uid uint32, messageID string) (bool, error) {
+	if f.ingestedUIDs == nil {
+		return false, nil
+	}
+	return f.ingestedUIDs[uid], nil
+}
+
+func (f *fakeStore) MarkIMAPMessageIngested(ctx context.Context, input store.MarkIMAPIngestionInput) error {
+	if f.ingestedUIDs == nil {
+		f.ingestedUIDs = map[uint32]bool{}
+	}
+	f.ingestedUIDs[input.UID] = true
 	return nil
 }
 
@@ -131,5 +147,86 @@ func TestPollOnceNoMessages(t *testing.T) {
 	}
 	if markSeenCalled {
 		t.Fatal("expected markSeen not to be called")
+	}
+}
+
+func TestPollOnceSkipsAlreadyIngested(t *testing.T) {
+	storeMock := &fakeStore{
+		ingestedUIDs: map[uint32]bool{42: true},
+	}
+	connector := New(
+		"imap.example.com",
+		993,
+		"inbox@example.com",
+		"secret",
+		"INBOX",
+		60,
+		t.TempDir(),
+		false,
+		storeMock,
+		&fakeEngine{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	connector.fetchUnread = func(ctx context.Context) ([]Message, error) {
+		return []Message{
+			{
+				UID:       42,
+				MessageID: "<already@example.com>",
+				Subject:   "Already ingested",
+				Body:      "body",
+			},
+		}, nil
+	}
+	var marked []uint32
+	connector.markSeen = func(ctx context.Context, uids []uint32) error {
+		marked = append(marked, uids...)
+		return nil
+	}
+	if err := connector.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce failed: %v", err)
+	}
+	if storeMock.taskCount != 0 {
+		t.Fatalf("expected no task for duplicated message, got %d", storeMock.taskCount)
+	}
+	if len(marked) != 1 || marked[0] != 42 {
+		t.Fatalf("expected duplicate uid marked seen, got %+v", marked)
+	}
+}
+
+func TestDecodeMessageBodyMultipartWithMarkdownAttachment(t *testing.T) {
+	raw := strings.Join([]string{
+		"From: alice@example.com",
+		"To: inbox@example.com",
+		"Subject: Test",
+		"MIME-Version: 1.0",
+		"Content-Type: multipart/mixed; boundary=abc123",
+		"",
+		"--abc123",
+		"Content-Type: text/plain; charset=utf-8",
+		"",
+		"Primary plain body.",
+		"--abc123",
+		"Content-Type: text/markdown; name=\"notes.md\"",
+		"Content-Disposition: attachment; filename=\"notes.md\"",
+		"",
+		"# Notes",
+		"",
+		"hello",
+		"--abc123--",
+		"",
+	}, "\r\n")
+
+	body, attachments := decodeMessageBody([]byte(raw))
+	if !strings.Contains(body, "Primary plain body.") {
+		t.Fatalf("expected plain body, got %s", body)
+	}
+	if len(attachments) != 1 {
+		t.Fatalf("expected one attachment, got %d", len(attachments))
+	}
+	if attachments[0].Filename != "notes.md" {
+		t.Fatalf("unexpected attachment filename: %s", attachments[0].Filename)
+	}
+	if !strings.Contains(string(attachments[0].Content), "# Notes") {
+		t.Fatalf("unexpected attachment content: %s", string(attachments[0].Content))
 	}
 }

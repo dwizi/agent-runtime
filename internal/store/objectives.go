@@ -65,6 +65,17 @@ type UpdateObjectiveRunInput struct {
 	LastError string
 }
 
+type UpdateObjectiveInput struct {
+	ID              string
+	Title           *string
+	Prompt          *string
+	TriggerType     *ObjectiveTriggerType
+	EventKey        *string
+	IntervalSeconds *int
+	NextRunAt       *time.Time
+	Active          *bool
+}
+
 func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput) (Objective, error) {
 	now := time.Now().UTC()
 	record := Objective{
@@ -285,6 +296,103 @@ func (s *Store) LookupObjective(ctx context.Context, id string) (Objective, erro
 		return Objective{}, err
 	}
 	return record, nil
+}
+
+func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput) (Objective, error) {
+	record, err := s.LookupObjective(ctx, input.ID)
+	if err != nil {
+		return Objective{}, err
+	}
+	if input.Title != nil {
+		record.Title = strings.TrimSpace(*input.Title)
+	}
+	if input.Prompt != nil {
+		record.Prompt = strings.TrimSpace(*input.Prompt)
+	}
+	if input.TriggerType != nil {
+		record.TriggerType = *input.TriggerType
+	}
+	if input.EventKey != nil {
+		record.EventKey = strings.TrimSpace(strings.ToLower(*input.EventKey))
+	}
+	if input.IntervalSeconds != nil {
+		record.IntervalSeconds = *input.IntervalSeconds
+	}
+	if input.NextRunAt != nil {
+		record.NextRunAt = input.NextRunAt.UTC()
+	}
+	if input.Active != nil {
+		record.Active = *input.Active
+	}
+
+	now := time.Now().UTC()
+	if strings.TrimSpace(record.Title) == "" || strings.TrimSpace(record.Prompt) == "" {
+		return Objective{}, ErrObjectiveInvalid
+	}
+	switch record.TriggerType {
+	case ObjectiveTriggerSchedule:
+		record.EventKey = ""
+		if record.IntervalSeconds < 1 {
+			return Objective{}, ErrObjectiveInvalid
+		}
+		if record.Active && record.NextRunAt.IsZero() {
+			record.NextRunAt = now.Add(time.Duration(record.IntervalSeconds) * time.Second)
+		}
+	case ObjectiveTriggerEvent:
+		if strings.TrimSpace(record.EventKey) == "" {
+			return Objective{}, ErrObjectiveInvalid
+		}
+		record.IntervalSeconds = 0
+		record.NextRunAt = time.Time{}
+	default:
+		return Objective{}, ErrObjectiveInvalid
+	}
+	record.UpdatedAt = now
+
+	if _, err := s.db.ExecContext(
+		ctx,
+		`UPDATE objectives
+		 SET title = ?, prompt = ?, trigger_type = ?, event_key = ?, interval_seconds = ?, active = ?, next_run_unix = ?, updated_at_unix = ?
+		 WHERE id = ?`,
+		record.Title,
+		record.Prompt,
+		string(record.TriggerType),
+		nullIfEmpty(record.EventKey),
+		nullIfZero(record.IntervalSeconds),
+		boolToInt(record.Active),
+		nullTimeUnix(record.NextRunAt),
+		record.UpdatedAt.Unix(),
+		record.ID,
+	); err != nil {
+		return Objective{}, fmt.Errorf("update objective: %w", err)
+	}
+	return s.LookupObjective(ctx, record.ID)
+}
+
+func (s *Store) SetObjectiveActive(ctx context.Context, id string, active bool) (Objective, error) {
+	return s.UpdateObjective(ctx, UpdateObjectiveInput{
+		ID:     strings.TrimSpace(id),
+		Active: &active,
+	})
+}
+
+func (s *Store) DeleteObjective(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrObjectiveInvalid
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM objectives WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete objective: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete objective rows affected: %w", err)
+	}
+	if affected < 1 {
+		return ErrObjectiveNotFound
+	}
+	return nil
 }
 
 type objectiveScanner interface {

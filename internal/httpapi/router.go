@@ -38,6 +38,9 @@ func NewRouter(deps Dependencies) http.Handler {
 	mux.HandleFunc("/api/v1/pairings/approve", rt.handlePairingsApprove)
 	mux.HandleFunc("/api/v1/pairings/deny", rt.handlePairingsDeny)
 	mux.HandleFunc("/api/v1/objectives", rt.handleObjectives)
+	mux.HandleFunc("/api/v1/objectives/update", rt.handleObjectivesUpdate)
+	mux.HandleFunc("/api/v1/objectives/active", rt.handleObjectivesActive)
+	mux.HandleFunc("/api/v1/objectives/delete", rt.handleObjectivesDelete)
 	return mux
 }
 
@@ -312,6 +315,26 @@ type objectiveRequest struct {
 	Active          *bool  `json:"active"`
 }
 
+type objectiveUpdateRequest struct {
+	ID              string  `json:"id"`
+	Title           *string `json:"title"`
+	Prompt          *string `json:"prompt"`
+	TriggerType     *string `json:"trigger_type"`
+	EventKey        *string `json:"event_key"`
+	IntervalSeconds *int    `json:"interval_seconds"`
+	NextRunUnix     *int64  `json:"next_run_unix"`
+	Active          *bool   `json:"active"`
+}
+
+type objectiveActiveRequest struct {
+	ID     string `json:"id"`
+	Active bool   `json:"active"`
+}
+
+type objectiveDeleteRequest struct {
+	ID string `json:"id"`
+}
+
 func (r *router) handleObjectives(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
 	case http.MethodPost:
@@ -389,6 +412,81 @@ func (r *router) handleObjectivesList(w http.ResponseWriter, req *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items": payload,
 		"count": len(payload),
+	})
+}
+
+func (r *router) handleObjectivesUpdate(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var payload objectiveUpdateRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	input := store.UpdateObjectiveInput{
+		ID:              strings.TrimSpace(payload.ID),
+		Title:           payload.Title,
+		Prompt:          payload.Prompt,
+		EventKey:        payload.EventKey,
+		IntervalSeconds: payload.IntervalSeconds,
+		Active:          payload.Active,
+	}
+	if payload.TriggerType != nil {
+		normalized := store.ObjectiveTriggerType(strings.ToLower(strings.TrimSpace(*payload.TriggerType)))
+		input.TriggerType = &normalized
+	}
+	if payload.NextRunUnix != nil {
+		nextRun := time.Time{}
+		if *payload.NextRunUnix > 0 {
+			nextRun = time.Unix(*payload.NextRunUnix, 0).UTC()
+		}
+		input.NextRunAt = &nextRun
+	}
+	objective, err := r.deps.Store.UpdateObjective(req.Context(), input)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, objectiveToMap(objective))
+}
+
+func (r *router) handleObjectivesActive(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var payload objectiveActiveRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	objective, err := r.deps.Store.SetObjectiveActive(req.Context(), strings.TrimSpace(payload.ID), payload.Active)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, objectiveToMap(objective))
+}
+
+func (r *router) handleObjectivesDelete(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var payload objectiveDeleteRequest
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+		return
+	}
+	if err := r.deps.Store.DeleteObjective(req.Context(), strings.TrimSpace(payload.ID)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":      strings.TrimSpace(payload.ID),
+		"deleted": true,
 	})
 }
 

@@ -49,6 +49,8 @@ type Config struct {
 	SMTPFrom                  string
 	SandboxEnabled            bool
 	SandboxAllowedCommandsCSV string
+	SandboxRunnerCommand      string
+	SandboxRunnerArgs         string
 	SandboxTimeoutSec         int
 	LLMEnabled                bool
 	LLMAllowDM                bool
@@ -119,6 +121,8 @@ func FromEnv() Config {
 		SMTPFrom:                  strings.TrimSpace(os.Getenv("SPINNER_SMTP_FROM")),
 		SandboxEnabled:            boolOrDefault("SPINNER_SANDBOX_ENABLED", true),
 		SandboxAllowedCommandsCSV: stringOrDefault("SPINNER_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,grep,head,tail"),
+		SandboxRunnerCommand:      strings.TrimSpace(os.Getenv("SPINNER_SANDBOX_RUNNER_COMMAND")),
+		SandboxRunnerArgs:         strings.TrimSpace(os.Getenv("SPINNER_SANDBOX_RUNNER_ARGS")),
 		SandboxTimeoutSec:         intOrDefault("SPINNER_SANDBOX_TIMEOUT_SECONDS", 20),
 		LLMEnabled:                boolOrDefault("SPINNER_LLM_ENABLED", true),
 		LLMAllowDM:                boolOrDefault("SPINNER_LLM_ALLOW_DM", true),

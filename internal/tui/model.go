@@ -20,18 +20,27 @@ import (
 )
 
 type model struct {
-	cfg         config.Config
-	logger      *slog.Logger
-	client      *adminclient.Client
-	quitting    bool
-	loading     bool
-	tokenInput  string
-	statusText  string
-	errorText   string
-	activePair  *adminclient.Pairing
-	approvedMsg *adminclient.ApprovePairingResponse
-	startupInfo string
+	cfg                config.Config
+	logger             *slog.Logger
+	client             *adminclient.Client
+	quitting           bool
+	loading            bool
+	mode               string
+	tokenInput         string
+	statusText         string
+	errorText          string
+	activePair         *adminclient.Pairing
+	approvedMsg        *adminclient.ApprovePairingResponse
+	objectiveWorkspace string
+	objectives         []adminclient.Objective
+	objectiveIndex     int
+	startupInfo        string
 }
+
+const (
+	modePairings   = "pairings"
+	modeObjectives = "objectives"
+)
 
 func Run(cfg config.Config, logger *slog.Logger) error {
 	updatedCfg, startupInfo := syncEnvAtStartup(cfg, logger)
@@ -41,10 +50,12 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	program := tea.NewProgram(model{
-		cfg:         updatedCfg,
-		logger:      logger,
-		client:      client,
-		startupInfo: startupInfo,
+		cfg:                updatedCfg,
+		logger:             logger,
+		client:             client,
+		mode:               modePairings,
+		objectiveWorkspace: "ws-1",
+		startupInfo:        startupInfo,
 	})
 	_, err = program.Run()
 	return err
@@ -93,6 +104,67 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activePair = &typed.pairing
 		m.approvedMsg = nil
 		return m, nil
+	case objectivesLoadedMsg:
+		m.loading = false
+		if typed.err != nil {
+			m.errorText = typed.err.Error()
+			m.statusText = ""
+			return m, nil
+		}
+		m.errorText = ""
+		m.statusText = fmt.Sprintf("loaded %d objective(s)", len(typed.items))
+		m.objectives = typed.items
+		if m.objectiveIndex >= len(m.objectives) {
+			m.objectiveIndex = len(m.objectives) - 1
+		}
+		if m.objectiveIndex < 0 {
+			m.objectiveIndex = 0
+		}
+		return m, nil
+	case objectiveActiveDoneMsg:
+		m.loading = false
+		if typed.err != nil {
+			m.errorText = typed.err.Error()
+			m.statusText = ""
+			return m, nil
+		}
+		m.errorText = ""
+		if typed.item.Active {
+			m.statusText = "objective resumed"
+		} else {
+			m.statusText = "objective paused"
+		}
+		for index := range m.objectives {
+			if m.objectives[index].ID == typed.item.ID {
+				m.objectives[index] = typed.item
+				break
+			}
+		}
+		return m, nil
+	case objectiveDeleteDoneMsg:
+		m.loading = false
+		if typed.err != nil {
+			m.errorText = typed.err.Error()
+			m.statusText = ""
+			return m, nil
+		}
+		m.errorText = ""
+		m.statusText = "objective deleted"
+		filtered := make([]adminclient.Objective, 0, len(m.objectives))
+		for _, item := range m.objectives {
+			if item.ID == typed.id {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		m.objectives = filtered
+		if m.objectiveIndex >= len(m.objectives) {
+			m.objectiveIndex = len(m.objectives) - 1
+		}
+		if m.objectiveIndex < 0 {
+			m.objectiveIndex = 0
+		}
+		return m, nil
 	}
 
 	switch typed := msg.(type) {
@@ -101,58 +173,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
+		case "tab":
+			if m.mode == modePairings {
+				m.mode = modeObjectives
+				m.statusText = "objectives mode"
+				m.errorText = ""
+				return m, m.listObjectivesCmd(strings.TrimSpace(m.objectiveWorkspace))
+			}
+			m.mode = modePairings
+			m.statusText = "pairings mode"
+			m.errorText = ""
+			return m, nil
 		}
 
 		if m.loading {
 			return m, nil
 		}
 
-		if m.activePair == nil {
-			switch typed.String() {
-			case "enter":
-				token := strings.ToUpper(strings.TrimSpace(m.tokenInput))
-				if token == "" {
-					return m, nil
-				}
-				m.loading = true
-				m.statusText = "loading token..."
-				m.errorText = ""
-				return m, m.lookupPairingCmd(token)
-			case "backspace":
-				if len(m.tokenInput) > 0 {
-					m.tokenInput = m.tokenInput[:len(m.tokenInput)-1]
-				}
-				return m, nil
-			}
-			if typed.Type == tea.KeyRunes {
-				for _, char := range typed.Runes {
-					if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' {
-						m.tokenInput += strings.ToUpper(string(char))
-					}
-				}
-			}
-			return m, nil
+		if m.mode == modeObjectives {
+			return m.handleObjectivesKey(typed)
 		}
-
-		switch typed.String() {
-		case "n":
-			m.activePair = nil
-			m.approvedMsg = nil
-			m.errorText = ""
-			m.statusText = ""
-			m.tokenInput = ""
-			return m, nil
-		case "a":
-			m.loading = true
-			m.statusText = "approving pairing..."
-			m.errorText = ""
-			return m, m.approvePairingCmd(strings.ToUpper(strings.TrimSpace(m.tokenInput)))
-		case "d":
-			m.loading = true
-			m.statusText = "denying pairing..."
-			m.errorText = ""
-			return m, m.denyPairingCmd(strings.ToUpper(strings.TrimSpace(m.tokenInput)))
-		}
+		return m.handlePairingsKey(typed)
 	}
 
 	return m, nil
@@ -167,6 +208,16 @@ func (m model) View() string {
 	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	tabStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	activeTab := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+
+	pairTab := tabStyle.Render("Pairings")
+	objectiveTab := tabStyle.Render("Objectives")
+	if m.mode == modePairings {
+		pairTab = activeTab.Render("Pairings")
+	} else {
+		objectiveTab = activeTab.Render("Objectives")
+	}
 
 	bodyLines := []string{
 		"",
@@ -174,39 +225,66 @@ func (m model) View() string {
 		fmt.Sprintf("Environment: %s", m.cfg.Environment),
 		fmt.Sprintf("Admin API: %s", m.cfg.AdminAPIURL),
 		fmt.Sprintf("Approver: %s (%s)", m.cfg.TUIApproverUserID, m.cfg.TUIApprovalRole),
+		fmt.Sprintf("Tabs: %s | %s (Tab to switch)", pairTab, objectiveTab),
 		"",
 	}
 	if strings.TrimSpace(m.startupInfo) != "" {
 		bodyLines = append(bodyLines, warnStyle.Render(m.startupInfo), "")
 	}
 
-	if m.activePair == nil {
+	if m.mode == modeObjectives {
 		bodyLines = append(bodyLines,
-			"Paste one-time token from Telegram/Discord DM and press Enter:",
-			highlight.Render(m.tokenInput),
+			"Workspace ID (type + Enter to load):",
+			highlight.Render(m.objectiveWorkspace),
 			"",
-			"Controls: Enter=lookup, Backspace=edit, q=quit",
 		)
+		if len(m.objectives) == 0 {
+			bodyLines = append(bodyLines, "No objectives loaded.")
+		} else {
+			bodyLines = append(bodyLines, "Objectives:")
+			for index, item := range m.objectives {
+				prefix := "  "
+				if index == m.objectiveIndex {
+					prefix = "> "
+				}
+				state := "paused"
+				if item.Active {
+					state = "active"
+				}
+				line := fmt.Sprintf("%s%s [%s] (%s)", prefix, item.Title, state, item.TriggerType)
+				bodyLines = append(bodyLines, line)
+			}
+		}
+		bodyLines = append(bodyLines, "", "Controls: Enter/r=refresh, j/k=move, p=pause/resume, x=delete, q=quit")
 	} else {
-		bodyLines = append(bodyLines,
-			"Pending pairing request:",
-			fmt.Sprintf("- Connector: %s", m.activePair.Connector),
-			fmt.Sprintf("- Connector User ID: %s", m.activePair.ConnectorUserID),
-			fmt.Sprintf("- Display Name: %s", m.activePair.DisplayName),
-			fmt.Sprintf("- Status: %s", m.activePair.Status),
-			fmt.Sprintf("- Expires At: %s", time.Unix(m.activePair.ExpiresAtUnix, 0).UTC().Format(time.RFC3339)),
-			"",
-			"Controls: a=approve, d=deny, n=new token, q=quit",
-		)
-	}
+		if m.activePair == nil {
+			bodyLines = append(bodyLines,
+				"Paste one-time token from Telegram/Discord DM and press Enter:",
+				highlight.Render(m.tokenInput),
+				"",
+				"Controls: Enter=lookup, Backspace=edit, q=quit",
+			)
+		} else {
+			bodyLines = append(bodyLines,
+				"Pending pairing request:",
+				fmt.Sprintf("- Connector: %s", m.activePair.Connector),
+				fmt.Sprintf("- Connector User ID: %s", m.activePair.ConnectorUserID),
+				fmt.Sprintf("- Display Name: %s", m.activePair.DisplayName),
+				fmt.Sprintf("- Status: %s", m.activePair.Status),
+				fmt.Sprintf("- Expires At: %s", time.Unix(m.activePair.ExpiresAtUnix, 0).UTC().Format(time.RFC3339)),
+				"",
+				"Controls: a=approve, d=deny, n=new token, q=quit",
+			)
+		}
 
-	if m.approvedMsg != nil {
-		bodyLines = append(bodyLines,
-			"",
-			highlight.Render("Approval completed"),
-			fmt.Sprintf("- User ID: %s", m.approvedMsg.ApprovedUserID),
-			fmt.Sprintf("- Identity ID: %s", m.approvedMsg.IdentityID),
-		)
+		if m.approvedMsg != nil {
+			bodyLines = append(bodyLines,
+				"",
+				highlight.Render("Approval completed"),
+				fmt.Sprintf("- User ID: %s", m.approvedMsg.ApprovedUserID),
+				fmt.Sprintf("- Identity ID: %s", m.approvedMsg.IdentityID),
+			)
+		}
 	}
 	if strings.TrimSpace(m.statusText) != "" {
 		bodyLines = append(bodyLines, "", warnStyle.Render(m.statusText))
@@ -233,6 +311,127 @@ type denyPairingDoneMsg struct {
 	err     error
 }
 
+type objectivesLoadedMsg struct {
+	items []adminclient.Objective
+	err   error
+}
+
+type objectiveActiveDoneMsg struct {
+	item adminclient.Objective
+	err  error
+}
+
+type objectiveDeleteDoneMsg struct {
+	id  string
+	err error
+}
+
+func (m model) handlePairingsKey(typed tea.KeyMsg) (model, tea.Cmd) {
+	if m.activePair == nil {
+		switch typed.String() {
+		case "enter":
+			token := strings.ToUpper(strings.TrimSpace(m.tokenInput))
+			if token == "" {
+				return m, nil
+			}
+			m.loading = true
+			m.statusText = "loading token..."
+			m.errorText = ""
+			return m, m.lookupPairingCmd(token)
+		case "backspace":
+			if len(m.tokenInput) > 0 {
+				m.tokenInput = m.tokenInput[:len(m.tokenInput)-1]
+			}
+			return m, nil
+		}
+		if typed.Type == tea.KeyRunes {
+			for _, char := range typed.Runes {
+				if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' {
+					m.tokenInput += strings.ToUpper(string(char))
+				}
+			}
+		}
+		return m, nil
+	}
+
+	switch typed.String() {
+	case "n":
+		m.activePair = nil
+		m.approvedMsg = nil
+		m.errorText = ""
+		m.statusText = ""
+		m.tokenInput = ""
+		return m, nil
+	case "a":
+		m.loading = true
+		m.statusText = "approving pairing..."
+		m.errorText = ""
+		return m, m.approvePairingCmd(strings.ToUpper(strings.TrimSpace(m.tokenInput)))
+	case "d":
+		m.loading = true
+		m.statusText = "denying pairing..."
+		m.errorText = ""
+		return m, m.denyPairingCmd(strings.ToUpper(strings.TrimSpace(m.tokenInput)))
+	}
+	return m, nil
+}
+
+func (m model) handleObjectivesKey(typed tea.KeyMsg) (model, tea.Cmd) {
+	switch typed.String() {
+	case "enter", "r":
+		workspaceID := strings.TrimSpace(m.objectiveWorkspace)
+		if workspaceID == "" {
+			m.errorText = "workspace id is required"
+			return m, nil
+		}
+		m.loading = true
+		m.statusText = "loading objectives..."
+		m.errorText = ""
+		return m, m.listObjectivesCmd(workspaceID)
+	case "backspace":
+		if len(m.objectiveWorkspace) > 0 {
+			m.objectiveWorkspace = m.objectiveWorkspace[:len(m.objectiveWorkspace)-1]
+		}
+		return m, nil
+	case "j", "down":
+		if len(m.objectives) > 0 && m.objectiveIndex < len(m.objectives)-1 {
+			m.objectiveIndex++
+		}
+		return m, nil
+	case "k", "up":
+		if len(m.objectives) > 0 && m.objectiveIndex > 0 {
+			m.objectiveIndex--
+		}
+		return m, nil
+	case "p":
+		if len(m.objectives) == 0 {
+			return m, nil
+		}
+		selected := m.objectives[m.objectiveIndex]
+		m.loading = true
+		m.statusText = "updating objective state..."
+		m.errorText = ""
+		return m, m.setObjectiveActiveCmd(selected.ID, !selected.Active)
+	case "x":
+		if len(m.objectives) == 0 {
+			return m, nil
+		}
+		selected := m.objectives[m.objectiveIndex]
+		m.loading = true
+		m.statusText = "deleting objective..."
+		m.errorText = ""
+		return m, m.deleteObjectiveCmd(selected.ID)
+	}
+	if typed.Type == tea.KeyRunes {
+		for _, char := range typed.Runes {
+			if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+				m.objectiveWorkspace += string(char)
+			}
+		}
+	}
+	return m, nil
+}
+
 func (m model) lookupPairingCmd(token string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -257,6 +456,33 @@ func (m model) denyPairingCmd(token string) tea.Cmd {
 		defer cancel()
 		pairing, err := m.client.DenyPairing(ctx, token, m.cfg.TUIApproverUserID, "denied by admin")
 		return denyPairingDoneMsg{pairing: pairing, err: err}
+	}
+}
+
+func (m model) listObjectivesCmd(workspaceID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		items, err := m.client.ListObjectives(ctx, workspaceID, false, 100)
+		return objectivesLoadedMsg{items: items, err: err}
+	}
+}
+
+func (m model) setObjectiveActiveCmd(objectiveID string, active bool) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		item, err := m.client.SetObjectiveActive(ctx, objectiveID, active)
+		return objectiveActiveDoneMsg{item: item, err: err}
+	}
+}
+
+func (m model) deleteObjectiveCmd(objectiveID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		err := m.client.DeleteObjective(ctx, objectiveID)
+		return objectiveDeleteDoneMsg{id: objectiveID, err: err}
 	}
 }
 
