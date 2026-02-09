@@ -28,6 +28,8 @@ type Config struct {
 	HeartbeatIntervalSec    int
 	HeartbeatStaleSec       int
 	HeartbeatNotifyAdmin    bool
+	TriageEnabled           bool
+	TriageNotifyAdmin       bool
 	TaskNotifyPolicy        string
 	TaskNotifySuccessPolicy string
 	TaskNotifyFailurePolicy string
@@ -111,6 +113,8 @@ func FromEnv() Config {
 		HeartbeatIntervalSec:      intOrDefault("SPINNER_HEARTBEAT_INTERVAL_SECONDS", 30),
 		HeartbeatStaleSec:         intOrDefault("SPINNER_HEARTBEAT_STALE_SECONDS", 120),
 		HeartbeatNotifyAdmin:      boolOrDefault("SPINNER_HEARTBEAT_NOTIFY_ADMIN", true),
+		TriageEnabled:             boolOrDefault("SPINNER_TRIAGE_ENABLED", true),
+		TriageNotifyAdmin:         boolOrDefault("SPINNER_TRIAGE_NOTIFY_ADMIN", true),
 		TaskNotifyPolicy:          notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_POLICY", "both"),
 		TaskNotifySuccessPolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", ""),
 		TaskNotifyFailurePolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_FAILURE_POLICY", ""),

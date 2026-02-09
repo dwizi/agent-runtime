@@ -53,6 +53,15 @@ Guideline:
 - approve only actions aligned with workspace policy and role scope
 - deny with reason for audit clarity
 
+## Message Routing Overrides
+
+When auto triage creates routed tasks from channel traffic:
+- inspect task metadata (`route_class`, `priority`, `due_at_unix`, `assigned_lane`)
+- override from admin channels with:
+  - `/route <task-id> <question|issue|task|moderation|noise> [p1|p2|p3] [due-window]`
+- example:
+  - `/route task-123 moderation p1 2h`
+
 ## Objective Lifecycle
 
 Create objective:

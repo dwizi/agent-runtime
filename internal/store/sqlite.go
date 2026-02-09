@@ -15,13 +15,21 @@ type Store struct {
 }
 
 type CreateTaskInput struct {
-	ID          string
-	WorkspaceID string
-	ContextID   string
-	Kind        string
-	Title       string
-	Prompt      string
-	Status      string
+	ID               string
+	WorkspaceID      string
+	ContextID        string
+	Kind             string
+	Title            string
+	Prompt           string
+	Status           string
+	RouteClass       string
+	Priority         string
+	DueAt            time.Time
+	AssignedLane     string
+	SourceConnector  string
+	SourceExternalID string
+	SourceUserID     string
+	SourceText       string
 }
 
 func New(path string) (*Store, error) {
@@ -84,6 +92,14 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			title TEXT NOT NULL,
 			prompt TEXT NOT NULL,
 			status TEXT NOT NULL,
+			route_class TEXT,
+			priority TEXT,
+			due_at_unix INTEGER,
+			assigned_lane TEXT,
+			source_connector TEXT,
+			source_external_id TEXT,
+			source_user_id TEXT,
+			source_text TEXT,
 			attempts INTEGER NOT NULL DEFAULT 0,
 			worker_id INTEGER,
 			started_at_unix INTEGER,
@@ -178,6 +194,14 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 		`ALTER TABLE tasks ADD COLUMN result_path TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN error_message TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN updated_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN route_class TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN priority TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN due_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN assigned_lane TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN source_connector TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN source_external_id TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN source_user_id TEXT;`,
+		`ALTER TABLE tasks ADD COLUMN source_text TEXT;`,
 	}
 	for _, query := range alterQueries {
 		if _, err := s.db.ExecContext(ctx, query); err != nil {
@@ -193,9 +217,18 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 
 func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
 	nowUnix := time.Now().UTC().Unix()
+	dueAtUnix := int64(0)
+	if !input.DueAt.IsZero() {
+		dueAtUnix = input.DueAt.UTC().Unix()
+	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO tasks (id, workspace_id, context_id, kind, title, prompt, status, updated_at_unix) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tasks (
+			id, workspace_id, context_id, kind, title, prompt, status,
+			route_class, priority, due_at_unix, assigned_lane,
+			source_connector, source_external_id, source_user_id, source_text,
+			updated_at_unix
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.ID,
 		input.WorkspaceID,
 		input.ContextID,
@@ -203,6 +236,14 @@ func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
 		input.Title,
 		input.Prompt,
 		input.Status,
+		nullIfEmpty(strings.TrimSpace(input.RouteClass)),
+		nullIfEmpty(strings.TrimSpace(input.Priority)),
+		nullIfZeroInt64(dueAtUnix),
+		nullIfEmpty(strings.TrimSpace(input.AssignedLane)),
+		nullIfEmpty(strings.TrimSpace(input.SourceConnector)),
+		nullIfEmpty(strings.TrimSpace(input.SourceExternalID)),
+		nullIfEmpty(strings.TrimSpace(input.SourceUserID)),
+		nullIfEmpty(strings.TrimSpace(input.SourceText)),
 		nowUnix,
 	)
 	if err != nil {
@@ -217,4 +258,11 @@ func (s *Store) Ping(ctx context.Context) error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+func nullIfZeroInt64(value int64) any {
+	if value == 0 {
+		return nil
+	}
+	return value
 }

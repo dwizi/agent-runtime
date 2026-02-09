@@ -84,6 +84,8 @@ Notes:
 - `SPINNER_HEARTBEAT_INTERVAL_SECONDS`
 - `SPINNER_HEARTBEAT_STALE_SECONDS`
 - `SPINNER_HEARTBEAT_NOTIFY_ADMIN`
+- `SPINNER_TRIAGE_ENABLED`
+- `SPINNER_TRIAGE_NOTIFY_ADMIN`
 
 API endpoint:
 - `GET /api/v1/heartbeat`
@@ -93,6 +95,7 @@ Behavior:
 - marks stale components when heartbeat age exceeds `SPINNER_HEARTBEAT_STALE_SECONDS`
 - optionally notifies admin channels on degraded/recovered transitions
 - writes workspace heartbeat transitions to `/data/workspaces/<workspace-id>/ops/heartbeat.md`
+- controls auto triage routing and admin routing notifications for Discord/Telegram messages
 
 ## Objectives and Proactivity
 
@@ -100,6 +103,11 @@ Behavior:
 - `SPINNER_TASK_NOTIFY_POLICY` (`both` | `admin` | `origin`)
 - `SPINNER_TASK_NOTIFY_SUCCESS_POLICY` (`both` | `admin` | `origin`, optional override)
 - `SPINNER_TASK_NOTIFY_FAILURE_POLICY` (`both` | `admin` | `origin`, optional override)
+
+Notification behavior:
+- routed chat tasks send natural-language success replies (no task log formatting)
+- routed task failures are delivered only to admin-marked channels
+- non-admin channels do not receive failure notifications
 
 API endpoints:
 - `POST /api/v1/objectives`

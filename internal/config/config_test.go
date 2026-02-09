@@ -24,6 +24,8 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_HEARTBEAT_INTERVAL_SECONDS", "")
 	t.Setenv("SPINNER_HEARTBEAT_STALE_SECONDS", "")
 	t.Setenv("SPINNER_HEARTBEAT_NOTIFY_ADMIN", "")
+	t.Setenv("SPINNER_TRIAGE_ENABLED", "")
+	t.Setenv("SPINNER_TRIAGE_NOTIFY_ADMIN", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "")
@@ -118,6 +120,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if !cfg.HeartbeatNotifyAdmin {
 		t.Fatal("expected heartbeat admin notifications enabled by default")
+	}
+	if !cfg.TriageEnabled {
+		t.Fatal("expected triage enabled by default")
+	}
+	if !cfg.TriageNotifyAdmin {
+		t.Fatal("expected triage admin notifications enabled by default")
 	}
 	if cfg.TaskNotifyPolicy != "both" {
 		t.Fatalf("expected default task notify policy both, got %s", cfg.TaskNotifyPolicy)
@@ -254,6 +262,8 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_HEARTBEAT_INTERVAL_SECONDS", "20")
 	t.Setenv("SPINNER_HEARTBEAT_STALE_SECONDS", "75")
 	t.Setenv("SPINNER_HEARTBEAT_NOTIFY_ADMIN", "false")
+	t.Setenv("SPINNER_TRIAGE_ENABLED", "false")
+	t.Setenv("SPINNER_TRIAGE_NOTIFY_ADMIN", "false")
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "admin")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "origin")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "admin")
@@ -353,6 +363,12 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.HeartbeatNotifyAdmin {
 		t.Fatal("expected overridden heartbeat notify admin false")
+	}
+	if cfg.TriageEnabled {
+		t.Fatal("expected triage enabled false")
+	}
+	if cfg.TriageNotifyAdmin {
+		t.Fatal("expected triage notify admin false")
 	}
 	if cfg.TaskNotifyPolicy != "admin" {
 		t.Fatalf("expected overridden task notify policy admin, got %s", cfg.TaskNotifyPolicy)

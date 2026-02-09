@@ -12,22 +12,30 @@ import (
 var ErrTaskNotFound = errors.New("task not found")
 
 type TaskRecord struct {
-	ID            string
-	WorkspaceID   string
-	ContextID     string
-	Kind          string
-	Title         string
-	Prompt        string
-	Status        string
-	Attempts      int
-	WorkerID      int
-	StartedAt     time.Time
-	FinishedAt    time.Time
-	ResultSummary string
-	ResultPath    string
-	ErrorMessage  string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               string
+	WorkspaceID      string
+	ContextID        string
+	Kind             string
+	Title            string
+	Prompt           string
+	Status           string
+	RouteClass       string
+	Priority         string
+	DueAt            time.Time
+	AssignedLane     string
+	SourceConnector  string
+	SourceExternalID string
+	SourceUserID     string
+	SourceText       string
+	Attempts         int
+	WorkerID         int
+	StartedAt        time.Time
+	FinishedAt       time.Time
+	ResultSummary    string
+	ResultPath       string
+	ErrorMessage     string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type ListTasksInput struct {
@@ -142,12 +150,18 @@ func (s *Store) MarkTaskFailed(ctx context.Context, id string, finishedAt time.T
 func (s *Store) LookupTask(ctx context.Context, id string) (TaskRecord, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, kind, title, prompt, status, attempts, COALESCE(worker_id, 0), COALESCE(started_at_unix, 0), COALESCE(finished_at_unix, 0), COALESCE(result_summary, ''), COALESCE(result_path, ''), COALESCE(error_message, ''), created_at, COALESCE(updated_at_unix, 0)
+		`SELECT id, workspace_id, context_id, kind, title, prompt, status,
+		        COALESCE(route_class, ''), COALESCE(priority, ''), COALESCE(due_at_unix, 0),
+		        COALESCE(assigned_lane, ''), COALESCE(source_connector, ''), COALESCE(source_external_id, ''), COALESCE(source_user_id, ''), COALESCE(source_text, ''),
+		        attempts, COALESCE(worker_id, 0), COALESCE(started_at_unix, 0), COALESCE(finished_at_unix, 0),
+		        COALESCE(result_summary, ''), COALESCE(result_path, ''), COALESCE(error_message, ''),
+		        created_at, COALESCE(updated_at_unix, 0)
 		 FROM tasks
 		 WHERE id = ?`,
 		strings.TrimSpace(id),
 	)
 	var record TaskRecord
+	var dueAtUnix int64
 	var startedUnix int64
 	var finishedUnix int64
 	var updatedUnix int64
@@ -160,6 +174,14 @@ func (s *Store) LookupTask(ctx context.Context, id string) (TaskRecord, error) {
 		&record.Title,
 		&record.Prompt,
 		&record.Status,
+		&record.RouteClass,
+		&record.Priority,
+		&dueAtUnix,
+		&record.AssignedLane,
+		&record.SourceConnector,
+		&record.SourceExternalID,
+		&record.SourceUserID,
+		&record.SourceText,
 		&record.Attempts,
 		&record.WorkerID,
 		&startedUnix,
@@ -177,6 +199,9 @@ func (s *Store) LookupTask(ctx context.Context, id string) (TaskRecord, error) {
 	}
 	if startedUnix > 0 {
 		record.StartedAt = time.Unix(startedUnix, 0).UTC()
+	}
+	if dueAtUnix > 0 {
+		record.DueAt = time.Unix(dueAtUnix, 0).UTC()
 	}
 	if finishedUnix > 0 {
 		record.FinishedAt = time.Unix(finishedUnix, 0).UTC()
@@ -219,7 +244,11 @@ func (s *Store) ListTasks(ctx context.Context, input ListTasksInput) ([]TaskReco
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, kind, title, prompt, status, attempts, COALESCE(worker_id, 0), COALESCE(started_at_unix, 0), COALESCE(finished_at_unix, 0), COALESCE(result_summary, ''), COALESCE(result_path, ''), COALESCE(error_message, ''), created_at, COALESCE(updated_at_unix, 0)
+		`SELECT id, workspace_id, context_id, kind, title, prompt, status,
+		        COALESCE(route_class, ''), COALESCE(priority, ''), COALESCE(due_at_unix, 0),
+		        COALESCE(assigned_lane, ''), COALESCE(source_connector, ''), COALESCE(source_external_id, ''), COALESCE(source_user_id, ''), COALESCE(source_text, ''),
+		        attempts, COALESCE(worker_id, 0), COALESCE(started_at_unix, 0), COALESCE(finished_at_unix, 0),
+		        COALESCE(result_summary, ''), COALESCE(result_path, ''), COALESCE(error_message, ''), created_at, COALESCE(updated_at_unix, 0)
 		 FROM tasks
 		 WHERE `+strings.Join(whereParts, " AND ")+`
 		 ORDER BY COALESCE(updated_at_unix, 0) DESC, created_at DESC
@@ -234,6 +263,7 @@ func (s *Store) ListTasks(ctx context.Context, input ListTasksInput) ([]TaskReco
 	results := make([]TaskRecord, 0, limit)
 	for rows.Next() {
 		var record TaskRecord
+		var dueAtUnix int64
 		var startedUnix int64
 		var finishedUnix int64
 		var updatedUnix int64
@@ -246,6 +276,14 @@ func (s *Store) ListTasks(ctx context.Context, input ListTasksInput) ([]TaskReco
 			&record.Title,
 			&record.Prompt,
 			&record.Status,
+			&record.RouteClass,
+			&record.Priority,
+			&dueAtUnix,
+			&record.AssignedLane,
+			&record.SourceConnector,
+			&record.SourceExternalID,
+			&record.SourceUserID,
+			&record.SourceText,
 			&record.Attempts,
 			&record.WorkerID,
 			&startedUnix,
@@ -261,6 +299,9 @@ func (s *Store) ListTasks(ctx context.Context, input ListTasksInput) ([]TaskReco
 		if startedUnix > 0 {
 			record.StartedAt = time.Unix(startedUnix, 0).UTC()
 		}
+		if dueAtUnix > 0 {
+			record.DueAt = time.Unix(dueAtUnix, 0).UTC()
+		}
 		if finishedUnix > 0 {
 			record.FinishedAt = time.Unix(finishedUnix, 0).UTC()
 		}
@@ -271,6 +312,53 @@ func (s *Store) ListTasks(ctx context.Context, input ListTasksInput) ([]TaskReco
 		results = append(results, record)
 	}
 	return results, nil
+}
+
+type UpdateTaskRoutingInput struct {
+	ID           string
+	RouteClass   string
+	Priority     string
+	DueAt        time.Time
+	AssignedLane string
+}
+
+func (s *Store) UpdateTaskRouting(ctx context.Context, input UpdateTaskRoutingInput) (TaskRecord, error) {
+	taskID := strings.TrimSpace(input.ID)
+	if taskID == "" {
+		return TaskRecord{}, ErrTaskNotFound
+	}
+	routeClass := strings.ToLower(strings.TrimSpace(input.RouteClass))
+	priority := strings.ToLower(strings.TrimSpace(input.Priority))
+	assignedLane := strings.ToLower(strings.TrimSpace(input.AssignedLane))
+	dueAtUnix := int64(0)
+	if !input.DueAt.IsZero() {
+		dueAtUnix = input.DueAt.UTC().Unix()
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET route_class = ?,
+		     priority = ?,
+		     due_at_unix = ?,
+		     assigned_lane = ?,
+		     updated_at_unix = ?
+		 WHERE id = ?`,
+		nullIfEmpty(routeClass),
+		nullIfEmpty(priority),
+		nullIfZeroInt64(dueAtUnix),
+		nullIfEmpty(assignedLane),
+		time.Now().UTC().Unix(),
+		taskID,
+	)
+	if err != nil {
+		return TaskRecord{}, fmt.Errorf("update task routing: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected == 0 {
+		return TaskRecord{}, ErrTaskNotFound
+	}
+	return s.LookupTask(ctx, taskID)
 }
 
 func parseSQLiteDateTime(input string) time.Time {

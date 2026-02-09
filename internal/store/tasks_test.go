@@ -131,3 +131,69 @@ func TestListTasksFiltersByWorkspaceAndStatus(t *testing.T) {
 		t.Fatalf("expected task-b, got %s", items[0].ID)
 	}
 }
+
+func TestTaskRoutingMetadataPersistAndUpdate(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+	dueAt := time.Now().UTC().Add(6 * time.Hour)
+
+	if err := sqlStore.CreateTask(ctx, CreateTaskInput{
+		ID:               "task-route",
+		WorkspaceID:      "ws-1",
+		ContextID:        "ctx-1",
+		Kind:             "general",
+		Title:            "Route me",
+		Prompt:           "follow up",
+		Status:           "queued",
+		RouteClass:       "issue",
+		Priority:         "p2",
+		DueAt:            dueAt,
+		AssignedLane:     "operations",
+		SourceConnector:  "telegram",
+		SourceExternalID: "42",
+		SourceUserID:     "u1",
+		SourceText:       "this is broken",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	loaded, err := sqlStore.LookupTask(ctx, "task-route")
+	if err != nil {
+		t.Fatalf("lookup task: %v", err)
+	}
+	if loaded.RouteClass != "issue" {
+		t.Fatalf("expected route class issue, got %s", loaded.RouteClass)
+	}
+	if loaded.Priority != "p2" {
+		t.Fatalf("expected priority p2, got %s", loaded.Priority)
+	}
+	if loaded.AssignedLane != "operations" {
+		t.Fatalf("expected lane operations, got %s", loaded.AssignedLane)
+	}
+	if loaded.DueAt.IsZero() {
+		t.Fatal("expected due date to be set")
+	}
+	if loaded.SourceConnector != "telegram" {
+		t.Fatalf("expected source connector telegram, got %s", loaded.SourceConnector)
+	}
+
+	updated, err := sqlStore.UpdateTaskRouting(ctx, UpdateTaskRoutingInput{
+		ID:           "task-route",
+		RouteClass:   "moderation",
+		Priority:     "p1",
+		DueAt:        time.Now().UTC().Add(2 * time.Hour),
+		AssignedLane: "moderation",
+	})
+	if err != nil {
+		t.Fatalf("update task routing: %v", err)
+	}
+	if updated.RouteClass != "moderation" {
+		t.Fatalf("expected moderation route class, got %s", updated.RouteClass)
+	}
+	if updated.Priority != "p1" {
+		t.Fatalf("expected p1 priority, got %s", updated.Priority)
+	}
+	if updated.AssignedLane != "moderation" {
+		t.Fatalf("expected moderation lane, got %s", updated.AssignedLane)
+	}
+}

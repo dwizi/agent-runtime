@@ -82,6 +82,171 @@ func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	}
 }
 
+func TestRoutedTaskSuccessNotificationUsesNaturalReply(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "110", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:               "task-routed-success",
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             "general",
+		Title:            "Routed question",
+		Prompt:           "Who am I?",
+		Status:           "queued",
+		RouteClass:       "question",
+		Priority:         "p3",
+		AssignedLane:     "support",
+		SourceConnector:  "telegram",
+		SourceExternalID: "110",
+		SourceUserID:     "u1",
+		SourceText:       "Who am I?",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-routed-success",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Routed question",
+		Prompt:      "Who am I?",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: "You're Carlos.",
+	})
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 1 {
+		t.Fatalf("expected one published message, got %d", len(publisher.messages))
+	}
+	if publisher.messages[0].externalID != "110" {
+		t.Fatalf("expected publish to external id 110, got %s", publisher.messages[0].externalID)
+	}
+	if publisher.messages[0].text != "You're Carlos." {
+		t.Fatalf("expected natural routed reply, got %q", publisher.messages[0].text)
+	}
+}
+
+func TestRoutedTaskFailureSkipsNonAdminChannels(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "120", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:               "task-routed-failure",
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             "general",
+		Title:            "Routed failure",
+		Prompt:           "help",
+		Status:           "queued",
+		RouteClass:       "question",
+		Priority:         "p3",
+		AssignedLane:     "support",
+		SourceConnector:  "telegram",
+		SourceExternalID: "120",
+		SourceUserID:     "u2",
+		SourceText:       "help",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-routed-failure",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Routed failure",
+		Prompt:      "help",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskFailed(task, 1, context.DeadlineExceeded)
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 0 {
+		t.Fatalf("expected no routed failure message in non-admin channels, got %d", len(publisher.messages))
+	}
+}
+
+func TestRoutedTaskFailureNotifiesAdminChannelOnly(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	originContext, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "chan-a", "origin")
+	if err != nil {
+		t.Fatalf("ensure origin context: %v", err)
+	}
+	adminContext, err := sqlStore.SetContextAdminByExternal(ctx, "telegram", "CHAN-A", true)
+	if err != nil {
+		t.Fatalf("set admin context: %v", err)
+	}
+	if originContext.WorkspaceID != adminContext.WorkspaceID {
+		t.Fatalf("expected shared workspace for test setup, got %s and %s", originContext.WorkspaceID, adminContext.WorkspaceID)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:               "task-routed-admin-failure",
+		WorkspaceID:      originContext.WorkspaceID,
+		ContextID:        originContext.ID,
+		Kind:             "general",
+		Title:            "Routed admin failure",
+		Prompt:           "help",
+		Status:           "queued",
+		RouteClass:       "issue",
+		Priority:         "p2",
+		AssignedLane:     "operations",
+		SourceConnector:  "telegram",
+		SourceExternalID: "chan-a",
+		SourceUserID:     "u3",
+		SourceText:       "help",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	notifier := newTaskCompletionNotifier(sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-routed-admin-failure",
+		WorkspaceID: originContext.WorkspaceID,
+		ContextID:   originContext.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Routed admin failure",
+		Prompt:      "help",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskFailed(task, 1, context.DeadlineExceeded)
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 1 {
+		t.Fatalf("expected one admin failure message, got %d", len(publisher.messages))
+	}
+	if publisher.messages[0].externalID != "CHAN-A" {
+		t.Fatalf("expected publish to admin channel CHAN-A, got %s", publisher.messages[0].externalID)
+	}
+}
+
 func TestTaskCompletionNotificationToAdminContextForSystemTasks(t *testing.T) {
 	sqlStore := openAppTestStore(t)
 	ctx := context.Background()

@@ -20,6 +20,8 @@ type Store interface {
 	SetContextSystemPromptByExternal(ctx context.Context, connector, externalID, prompt string) (store.ContextPolicy, error)
 	LookupUserIdentity(ctx context.Context, connector, connectorUserID string) (store.UserIdentity, error)
 	CreateTask(ctx context.Context, input store.CreateTaskInput) error
+	LookupTask(ctx context.Context, id string) (store.TaskRecord, error)
+	UpdateTaskRouting(ctx context.Context, input store.UpdateTaskRoutingInput) (store.TaskRecord, error)
 	ApprovePairing(ctx context.Context, input store.ApprovePairingInput) (store.ApprovePairingResult, error)
 	DenyPairing(ctx context.Context, input store.DenyPairingInput) (store.PairingRequest, error)
 	CreateActionApproval(ctx context.Context, input store.CreateActionApprovalInput) (store.ActionApproval, error)
@@ -43,11 +45,17 @@ type ActionExecutor interface {
 	Execute(ctx context.Context, approval store.ActionApproval) (executor.Result, error)
 }
 
+type RoutingNotifier interface {
+	NotifyRoutingDecision(ctx context.Context, decision RouteDecision)
+}
+
 type Service struct {
 	store          Store
 	engine         Engine
 	retriever      Retriever
 	actionExecutor ActionExecutor
+	triageEnabled  bool
+	routingNotify  RoutingNotifier
 }
 
 type MessageInput struct {
@@ -69,7 +77,16 @@ func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionE
 		engine:         engine,
 		retriever:      retriever,
 		actionExecutor: actionExecutor,
+		triageEnabled:  true,
 	}
+}
+
+func (s *Service) SetTriageEnabled(enabled bool) {
+	s.triageEnabled = enabled
+}
+
+func (s *Service) SetRoutingNotifier(notifier RoutingNotifier) {
+	s.routingNotify = notifier
 }
 
 func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (MessageOutput, error) {
@@ -82,6 +99,8 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 	switch command {
 	case "task":
 		return s.handleTask(ctx, input, arg)
+	case "route":
+		return s.handleRouteOverride(ctx, input, arg)
 	case "search":
 		return s.handleSearch(ctx, input, arg)
 	case "open":
@@ -105,6 +124,9 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 	default:
 		if prompt, ok := parseIntentTask(text); ok {
 			return s.handleTask(ctx, input, prompt)
+		}
+		if err := s.handleAutoTriage(ctx, input, text); err != nil {
+			return MessageOutput{}, err
 		}
 		return MessageOutput{}, nil
 	}
@@ -491,31 +513,191 @@ func (s *Service) handleTask(ctx context.Context, input MessageInput, prompt str
 	if len(title) > 72 {
 		title = title[:72]
 	}
-	task, err := s.engine.Enqueue(orchestrator.Task{
-		WorkspaceID: contextRecord.WorkspaceID,
-		ContextID:   contextRecord.ID,
-		Kind:        orchestrator.TaskKindGeneral,
-		Title:       title,
-		Prompt:      prompt,
+	task, err := s.enqueueAndPersistTask(ctx, store.CreateTaskInput{
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             string(orchestrator.TaskKindGeneral),
+		Title:            title,
+		Prompt:           prompt,
+		Status:           "queued",
+		RouteClass:       string(TriageTask),
+		Priority:         string(TriagePriorityP2),
+		DueAt:            time.Now().UTC().Add(24 * time.Hour),
+		AssignedLane:     "operations",
+		SourceConnector:  strings.ToLower(strings.TrimSpace(input.Connector)),
+		SourceExternalID: strings.TrimSpace(input.ExternalID),
+		SourceUserID:     strings.TrimSpace(input.FromUserID),
+		SourceText:       prompt,
 	})
 	if err != nil {
-		return MessageOutput{}, err
-	}
-	if err := s.store.CreateTask(ctx, store.CreateTaskInput{
-		ID:          task.ID,
-		WorkspaceID: task.WorkspaceID,
-		ContextID:   task.ContextID,
-		Kind:        string(task.Kind),
-		Title:       task.Title,
-		Prompt:      task.Prompt,
-		Status:      "queued",
-	}); err != nil {
 		return MessageOutput{}, err
 	}
 	return MessageOutput{
 		Handled: true,
 		Reply:   fmt.Sprintf("Task queued: `%s`", task.ID),
 	}, nil
+}
+
+func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text string) error {
+	if !s.triageEnabled {
+		return nil
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return nil
+	}
+	if s.store == nil || s.engine == nil {
+		return nil
+	}
+	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+	if err != nil {
+		return err
+	}
+	decision := deriveRouteDecision(input, contextRecord.WorkspaceID, contextRecord.ID, trimmed)
+	if decision.Class == TriageNoise {
+		return nil
+	}
+	taskTitle := buildRoutedTaskTitle(decision.Class, decision.SourceText)
+	taskPrompt := buildRoutedTaskPrompt(decision)
+	task, err := s.enqueueAndPersistTask(ctx, store.CreateTaskInput{
+		WorkspaceID:      decision.WorkspaceID,
+		ContextID:        decision.ContextID,
+		Kind:             string(orchestrator.TaskKindGeneral),
+		Title:            taskTitle,
+		Prompt:           taskPrompt,
+		Status:           "queued",
+		RouteClass:       string(decision.Class),
+		Priority:         string(decision.Priority),
+		DueAt:            decision.DueAt,
+		AssignedLane:     decision.AssignedLane,
+		SourceConnector:  decision.SourceConnector,
+		SourceExternalID: decision.SourceExternalID,
+		SourceUserID:     decision.SourceUserID,
+		SourceText:       decision.SourceText,
+	})
+	if err != nil {
+		return err
+	}
+	decision.TaskID = task.ID
+	if s.routingNotify != nil {
+		s.routingNotify.NotifyRoutingDecision(ctx, decision)
+	}
+	return nil
+}
+
+func (s *Service) handleRouteOverride(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
+	identity, err := s.store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
+	if err != nil {
+		if errors.Is(err, store.ErrIdentityNotFound) {
+			return MessageOutput{Handled: true, Reply: "Access denied: link your admin identity first."}, nil
+		}
+		return MessageOutput{}, err
+	}
+	if !isAdminRole(identity.Role) {
+		return MessageOutput{Handled: true, Reply: "Access denied: admin role required."}, nil
+	}
+	policy, err := s.store.LookupContextPolicyByExternal(ctx, input.Connector, input.ExternalID)
+	if err != nil {
+		return MessageOutput{}, err
+	}
+	if !policy.IsAdmin {
+		return MessageOutput{Handled: true, Reply: "Access denied: route overrides are only allowed in admin channels."}, nil
+	}
+
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) < 2 {
+		return MessageOutput{Handled: true, Reply: "Usage: /route <task-id> <question|issue|task|moderation|noise> [p1|p2|p3] [due-window like 2h or 1d]"}, nil
+	}
+	taskID := strings.TrimSpace(fields[0])
+	taskRecord, err := s.store.LookupTask(ctx, taskID)
+	if err != nil {
+		if errors.Is(err, store.ErrTaskNotFound) {
+			return MessageOutput{Handled: true, Reply: "Task not found."}, nil
+		}
+		return MessageOutput{}, err
+	}
+	if strings.TrimSpace(taskRecord.WorkspaceID) != "" && strings.TrimSpace(policy.WorkspaceID) != "" &&
+		!strings.EqualFold(strings.TrimSpace(taskRecord.WorkspaceID), strings.TrimSpace(policy.WorkspaceID)) {
+		return MessageOutput{Handled: true, Reply: "Access denied: task belongs to a different workspace."}, nil
+	}
+	class, ok := normalizeTriageClass(fields[1])
+	if !ok {
+		return MessageOutput{Handled: true, Reply: "Invalid route class. Use: question, issue, task, moderation, noise."}, nil
+	}
+	priority, dueWindow, lane := routingDefaults(class)
+	if len(fields) >= 3 {
+		overridePriority, priorityOK := normalizeTriagePriority(fields[2])
+		if priorityOK {
+			priority = overridePriority
+		} else {
+			parsedWindow, dueErr := parseDueWindow(fields[2])
+			if dueErr == nil {
+				dueWindow = parsedWindow
+			}
+		}
+	}
+	if len(fields) >= 4 {
+		parsedWindow, dueErr := parseDueWindow(fields[3])
+		if dueErr != nil {
+			return MessageOutput{Handled: true, Reply: "Invalid due window. Examples: `2h`, `8h`, `1d`, `2d`."}, nil
+		}
+		dueWindow = parsedWindow
+	}
+	if class == TriageNoise {
+		priority = TriagePriorityP3
+		dueWindow = 0
+		lane = "backlog"
+	}
+	dueAt := time.Time{}
+	if dueWindow > 0 {
+		dueAt = time.Now().UTC().Add(dueWindow)
+	}
+	updated, err := s.store.UpdateTaskRouting(ctx, store.UpdateTaskRoutingInput{
+		ID:           taskID,
+		RouteClass:   string(class),
+		Priority:     string(priority),
+		DueAt:        dueAt,
+		AssignedLane: lane,
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrTaskNotFound) {
+			return MessageOutput{Handled: true, Reply: "Task not found."}, nil
+		}
+		return MessageOutput{}, err
+	}
+	reply := fmt.Sprintf("Routing updated for `%s`:\n- class: `%s`\n- priority: `%s`\n- lane: `%s`", updated.ID, class, priority, lane)
+	if !dueAt.IsZero() {
+		reply += fmt.Sprintf("\n- due: `%s`", dueAt.UTC().Format(time.RFC3339))
+	} else {
+		reply += "\n- due: `(none)`"
+	}
+	return MessageOutput{Handled: true, Reply: reply}, nil
+}
+
+func (s *Service) enqueueAndPersistTask(ctx context.Context, input store.CreateTaskInput) (orchestrator.Task, error) {
+	task, err := s.engine.Enqueue(orchestrator.Task{
+		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
+		ContextID:   strings.TrimSpace(input.ContextID),
+		Kind:        orchestrator.TaskKind(strings.TrimSpace(input.Kind)),
+		Title:       strings.TrimSpace(input.Title),
+		Prompt:      strings.TrimSpace(input.Prompt),
+	})
+	if err != nil {
+		return orchestrator.Task{}, err
+	}
+	input.ID = task.ID
+	input.WorkspaceID = task.WorkspaceID
+	input.ContextID = task.ContextID
+	input.Kind = string(task.Kind)
+	input.Title = task.Title
+	input.Prompt = task.Prompt
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "queued"
+	}
+	if err := s.store.CreateTask(ctx, input); err != nil {
+		return orchestrator.Task{}, err
+	}
+	return task, nil
 }
 
 func (s *Service) handleAdminChannel(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {

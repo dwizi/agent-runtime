@@ -19,6 +19,7 @@ type fakeStore struct {
 	identity               store.UserIdentity
 	identityErr            error
 	lastTask               store.CreateTaskInput
+	tasks                  map[string]store.TaskRecord
 	adminUpdated           bool
 	approved               bool
 	denied                 bool
@@ -71,7 +72,54 @@ func (f *fakeStore) LookupUserIdentity(ctx context.Context, connector, connector
 
 func (f *fakeStore) CreateTask(ctx context.Context, input store.CreateTaskInput) error {
 	f.lastTask = input
+	if f.tasks == nil {
+		f.tasks = map[string]store.TaskRecord{}
+	}
+	f.tasks[input.ID] = store.TaskRecord{
+		ID:               input.ID,
+		WorkspaceID:      input.WorkspaceID,
+		ContextID:        input.ContextID,
+		Kind:             input.Kind,
+		Title:            input.Title,
+		Prompt:           input.Prompt,
+		Status:           input.Status,
+		RouteClass:       input.RouteClass,
+		Priority:         input.Priority,
+		DueAt:            input.DueAt,
+		AssignedLane:     input.AssignedLane,
+		SourceConnector:  input.SourceConnector,
+		SourceExternalID: input.SourceExternalID,
+		SourceUserID:     input.SourceUserID,
+		SourceText:       input.SourceText,
+	}
 	return nil
+}
+
+func (f *fakeStore) LookupTask(ctx context.Context, id string) (store.TaskRecord, error) {
+	if f.tasks == nil {
+		return store.TaskRecord{}, store.ErrTaskNotFound
+	}
+	record, ok := f.tasks[id]
+	if !ok {
+		return store.TaskRecord{}, store.ErrTaskNotFound
+	}
+	return record, nil
+}
+
+func (f *fakeStore) UpdateTaskRouting(ctx context.Context, input store.UpdateTaskRoutingInput) (store.TaskRecord, error) {
+	if f.tasks == nil {
+		return store.TaskRecord{}, store.ErrTaskNotFound
+	}
+	record, ok := f.tasks[input.ID]
+	if !ok {
+		return store.TaskRecord{}, store.ErrTaskNotFound
+	}
+	record.RouteClass = strings.TrimSpace(input.RouteClass)
+	record.Priority = strings.TrimSpace(input.Priority)
+	record.AssignedLane = strings.TrimSpace(input.AssignedLane)
+	record.DueAt = input.DueAt
+	f.tasks[input.ID] = record
+	return record, nil
 }
 
 func (f *fakeStore) ApprovePairing(ctx context.Context, input store.ApprovePairingInput) (store.ApprovePairingResult, error) {
@@ -185,6 +233,16 @@ type fakeRetriever struct {
 type fakeActionExecutor struct {
 	result executor.Result
 	err    error
+}
+
+type fakeRoutingNotifier struct {
+	lastDecision RouteDecision
+	invoked      bool
+}
+
+func (f *fakeRoutingNotifier) NotifyRoutingDecision(ctx context.Context, decision RouteDecision) {
+	f.lastDecision = decision
+	f.invoked = true
 }
 
 func (f *fakeActionExecutor) Execute(ctx context.Context, approval store.ActionApproval) (executor.Result, error) {
@@ -307,8 +365,9 @@ func TestHandleApproveCommand(t *testing.T) {
 	}
 }
 
-func TestHandleIgnoresUnknownMessage(t *testing.T) {
-	service := New(&fakeStore{}, &fakeEngine{}, nil, nil)
+func TestHandleRoutesUnknownMessage(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector: "telegram",
 		Text:      "hello world",
@@ -317,7 +376,171 @@ func TestHandleIgnoresUnknownMessage(t *testing.T) {
 		t.Fatalf("handle message failed: %v", err)
 	}
 	if output.Handled {
-		t.Fatal("expected unknown message to be ignored")
+		t.Fatal("expected routed unknown message to stay silent in origin channel")
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected unknown message to produce triaged task")
+	}
+}
+
+func TestHandleAutoTriageCreatesTaskAndNotifies(t *testing.T) {
+	fStore := &fakeStore{}
+	fEngine := &fakeEngine{}
+	service := New(fStore, fEngine, nil, nil)
+	notifier := &fakeRoutingNotifier{}
+	service.SetRoutingNotifier(notifier)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "There is a bug in the onboarding flow and it keeps failing",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if output.Handled {
+		t.Fatal("expected auto triage to be silent in origin channel")
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected triaged task to be created")
+	}
+	if fStore.lastTask.RouteClass != "issue" {
+		t.Fatalf("expected issue route class, got %s", fStore.lastTask.RouteClass)
+	}
+	if fStore.lastTask.Priority != "p2" {
+		t.Fatalf("expected p2 priority, got %s", fStore.lastTask.Priority)
+	}
+	if !notifier.invoked {
+		t.Fatal("expected routing notifier invocation")
+	}
+	if notifier.lastDecision.TaskID == "" {
+		t.Fatal("expected notifier decision to include task id")
+	}
+}
+
+func TestHandleRouteOverrideCommand(t *testing.T) {
+	fStore := &fakeStore{
+		contextPolicy: store.ContextPolicy{
+			ContextID:   "ctx-admin",
+			WorkspaceID: "ws-1",
+			IsAdmin:     true,
+		},
+		identity: store.UserIdentity{
+			UserID: "admin-1",
+			Role:   "admin",
+		},
+		tasks: map[string]store.TaskRecord{
+			"task-1": {ID: "task-1", WorkspaceID: "ws-1", ContextID: "ctx-1"},
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "admin-user",
+		Text:       "/route task-1 moderation p1 2h",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected /route to be handled")
+	}
+	updated := fStore.tasks["task-1"]
+	if updated.RouteClass != "moderation" {
+		t.Fatalf("expected moderation class, got %s", updated.RouteClass)
+	}
+	if updated.Priority != "p1" {
+		t.Fatalf("expected p1 priority, got %s", updated.Priority)
+	}
+	if updated.AssignedLane != "moderation" {
+		t.Fatalf("expected moderation lane, got %s", updated.AssignedLane)
+	}
+	if updated.DueAt.IsZero() {
+		t.Fatal("expected due at to be set")
+	}
+}
+
+func TestHandleRouteOverrideRequiresAdminChannel(t *testing.T) {
+	fStore := &fakeStore{
+		contextPolicy: store.ContextPolicy{
+			ContextID:   "ctx-1",
+			WorkspaceID: "ws-1",
+			IsAdmin:     false,
+		},
+		identity: store.UserIdentity{
+			UserID: "admin-1",
+			Role:   "admin",
+		},
+		tasks: map[string]store.TaskRecord{
+			"task-1": {ID: "task-1", WorkspaceID: "ws-1", ContextID: "ctx-1"},
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "admin-user",
+		Text:       "/route task-1 moderation p1 2h",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected /route to be handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "admin channels") {
+		t.Fatalf("expected admin channel denial, got %q", output.Reply)
+	}
+}
+
+func TestHandleRouteOverrideRejectsCrossWorkspaceTask(t *testing.T) {
+	fStore := &fakeStore{
+		contextPolicy: store.ContextPolicy{
+			ContextID:   "ctx-admin",
+			WorkspaceID: "ws-1",
+			IsAdmin:     true,
+		},
+		identity: store.UserIdentity{
+			UserID: "admin-1",
+			Role:   "admin",
+		},
+		tasks: map[string]store.TaskRecord{
+			"task-1": {ID: "task-1", WorkspaceID: "ws-2", ContextID: "ctx-other"},
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "admin-user",
+		Text:       "/route task-1 moderation p1 2h",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected /route to be handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "different workspace") {
+		t.Fatalf("expected workspace denial, got %q", output.Reply)
+	}
+}
+
+func TestHandleAutoTriageSkipsNoise(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	_, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector: "telegram",
+		Text:      "ok",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if fStore.lastTask.ID != "" {
+		t.Fatal("expected noise message to skip task routing")
 	}
 }
 

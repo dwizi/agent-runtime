@@ -83,11 +83,19 @@ func (r *router) handleInfo(w http.ResponseWriter, req *http.Request) {
 }
 
 type taskRequest struct {
-	WorkspaceID string `json:"workspace_id"`
-	ContextID   string `json:"context_id"`
-	Title       string `json:"title"`
-	Prompt      string `json:"prompt"`
-	Kind        string `json:"kind"`
+	WorkspaceID      string `json:"workspace_id"`
+	ContextID        string `json:"context_id"`
+	Title            string `json:"title"`
+	Prompt           string `json:"prompt"`
+	Kind             string `json:"kind"`
+	RouteClass       string `json:"route_class"`
+	Priority         string `json:"priority"`
+	AssignedLane     string `json:"assigned_lane"`
+	DueAtUnix        int64  `json:"due_at_unix"`
+	SourceConnector  string `json:"source_connector"`
+	SourceExternalID string `json:"source_external_id"`
+	SourceUserID     string `json:"source_user_id"`
+	SourceText       string `json:"source_text"`
 }
 
 func (r *router) handleTasks(w http.ResponseWriter, req *http.Request) {
@@ -116,7 +124,26 @@ func (r *router) handleTaskCreate(w http.ResponseWriter, req *http.Request) {
 	if kind == "" {
 		kind = orchestrator.TaskKindGeneral
 	}
-	task, err := r.enqueueAndPersistTask(req.Context(), payload.WorkspaceID, payload.ContextID, payload.Title, payload.Prompt, kind)
+	dueAt := time.Time{}
+	if payload.DueAtUnix > 0 {
+		dueAt = time.Unix(payload.DueAtUnix, 0).UTC()
+	}
+	task, err := r.enqueueAndPersistTask(req.Context(), store.CreateTaskInput{
+		WorkspaceID:      payload.WorkspaceID,
+		ContextID:        payload.ContextID,
+		Kind:             string(kind),
+		Title:            payload.Title,
+		Prompt:           payload.Prompt,
+		Status:           "queued",
+		RouteClass:       payload.RouteClass,
+		Priority:         payload.Priority,
+		AssignedLane:     payload.AssignedLane,
+		DueAt:            dueAt,
+		SourceConnector:  payload.SourceConnector,
+		SourceExternalID: payload.SourceExternalID,
+		SourceUserID:     payload.SourceUserID,
+		SourceText:       payload.SourceText,
+	})
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, orchestrator.ErrQueueFull) {
@@ -224,7 +251,22 @@ func (r *router) handleTaskRetry(w http.ResponseWriter, req *http.Request) {
 	if kind == "" {
 		kind = orchestrator.TaskKindGeneral
 	}
-	task, err := r.enqueueAndPersistTask(req.Context(), original.WorkspaceID, original.ContextID, original.Title, original.Prompt, kind)
+	task, err := r.enqueueAndPersistTask(req.Context(), store.CreateTaskInput{
+		WorkspaceID:      original.WorkspaceID,
+		ContextID:        original.ContextID,
+		Kind:             string(kind),
+		Title:            original.Title,
+		Prompt:           original.Prompt,
+		Status:           "queued",
+		RouteClass:       original.RouteClass,
+		Priority:         original.Priority,
+		DueAt:            original.DueAt,
+		AssignedLane:     original.AssignedLane,
+		SourceConnector:  original.SourceConnector,
+		SourceExternalID: original.SourceExternalID,
+		SourceUserID:     original.SourceUserID,
+		SourceText:       original.SourceText,
+	})
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, orchestrator.ErrQueueFull) {
@@ -243,13 +285,13 @@ func (r *router) handleTaskRetry(w http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (r *router) enqueueAndPersistTask(ctx context.Context, workspaceID, contextID, title, prompt string, kind orchestrator.TaskKind) (orchestrator.Task, error) {
+func (r *router) enqueueAndPersistTask(ctx context.Context, input store.CreateTaskInput) (orchestrator.Task, error) {
 	task, err := r.deps.Engine.Enqueue(orchestrator.Task{
-		WorkspaceID: strings.TrimSpace(workspaceID),
-		ContextID:   strings.TrimSpace(contextID),
-		Title:       strings.TrimSpace(title),
-		Prompt:      strings.TrimSpace(prompt),
-		Kind:        kind,
+		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
+		ContextID:   strings.TrimSpace(input.ContextID),
+		Title:       strings.TrimSpace(input.Title),
+		Prompt:      strings.TrimSpace(input.Prompt),
+		Kind:        orchestrator.TaskKind(strings.TrimSpace(input.Kind)),
 	})
 	if err != nil {
 		return orchestrator.Task{}, err
@@ -257,15 +299,16 @@ func (r *router) enqueueAndPersistTask(ctx context.Context, workspaceID, context
 
 	storeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if err := r.deps.Store.CreateTask(storeCtx, store.CreateTaskInput{
-		ID:          task.ID,
-		WorkspaceID: task.WorkspaceID,
-		ContextID:   task.ContextID,
-		Kind:        string(task.Kind),
-		Title:       task.Title,
-		Prompt:      task.Prompt,
-		Status:      "queued",
-	}); err != nil {
+	input.ID = task.ID
+	input.WorkspaceID = task.WorkspaceID
+	input.ContextID = task.ContextID
+	input.Kind = string(task.Kind)
+	input.Title = task.Title
+	input.Prompt = task.Prompt
+	if strings.TrimSpace(input.Status) == "" {
+		input.Status = "queued"
+	}
+	if err := r.deps.Store.CreateTask(storeCtx, input); err != nil {
 		r.deps.Logger.Error("failed to persist task", "error", err, "task_id", task.ID)
 		return orchestrator.Task{}, err
 	}
@@ -273,6 +316,10 @@ func (r *router) enqueueAndPersistTask(ctx context.Context, workspaceID, context
 }
 
 func taskRecordResponse(record store.TaskRecord) map[string]any {
+	dueAtUnix := int64(0)
+	if !record.DueAt.IsZero() {
+		dueAtUnix = record.DueAt.Unix()
+	}
 	startedAtUnix := int64(0)
 	if !record.StartedAt.IsZero() {
 		startedAtUnix = record.StartedAt.Unix()
@@ -290,22 +337,30 @@ func taskRecordResponse(record store.TaskRecord) map[string]any {
 		updatedAtUnix = record.UpdatedAt.Unix()
 	}
 	return map[string]any{
-		"id":               record.ID,
-		"workspace_id":     record.WorkspaceID,
-		"context_id":       record.ContextID,
-		"kind":             record.Kind,
-		"title":            record.Title,
-		"prompt":           record.Prompt,
-		"status":           record.Status,
-		"attempts":         record.Attempts,
-		"worker_id":        record.WorkerID,
-		"started_at_unix":  startedAtUnix,
-		"finished_at_unix": finishedAtUnix,
-		"result_summary":   record.ResultSummary,
-		"result_path":      record.ResultPath,
-		"error_message":    record.ErrorMessage,
-		"created_at_unix":  createdAtUnix,
-		"updated_at_unix":  updatedAtUnix,
+		"id":                 record.ID,
+		"workspace_id":       record.WorkspaceID,
+		"context_id":         record.ContextID,
+		"kind":               record.Kind,
+		"title":              record.Title,
+		"prompt":             record.Prompt,
+		"status":             record.Status,
+		"route_class":        record.RouteClass,
+		"priority":           record.Priority,
+		"due_at_unix":        dueAtUnix,
+		"assigned_lane":      record.AssignedLane,
+		"source_connector":   record.SourceConnector,
+		"source_external_id": record.SourceExternalID,
+		"source_user_id":     record.SourceUserID,
+		"source_text":        record.SourceText,
+		"attempts":           record.Attempts,
+		"worker_id":          record.WorkerID,
+		"started_at_unix":    startedAtUnix,
+		"finished_at_unix":   finishedAtUnix,
+		"result_summary":     record.ResultSummary,
+		"result_path":        record.ResultPath,
+		"error_message":      record.ErrorMessage,
+		"created_at_unix":    createdAtUnix,
+		"updated_at_unix":    updatedAtUnix,
 	}
 }
 

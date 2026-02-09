@@ -120,6 +120,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	}
 	actionExecutor := executor.NewRegistry(plugins...)
 	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor)
+	commandGateway.SetTriageEnabled(cfg.TriageEnabled)
 	responder := zai.New(zai.Config{
 		APIKey:  cfg.ZAIAPIKey,
 		BaseURL: cfg.ZAIBaseURL,
@@ -248,6 +249,12 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}
 		publishers[strings.ToLower(strings.TrimSpace(connector.Name()))] = publisher
 	}
+	commandGateway.SetRoutingNotifier(newRoutingNotifier(
+		sqlStore,
+		publishers,
+		cfg.TriageNotifyAdmin,
+		logger.With("component", "routing-notifier"),
+	))
 	notifier := newTaskCompletionNotifier(
 		sqlStore,
 		publishers,

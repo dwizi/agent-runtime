@@ -70,6 +70,7 @@ Telegram command gateway:
 - `/prompt set <text>` sets a context-specific system prompt (admin/overlord only)
 - `/prompt clear` clears the context-specific system prompt (admin/overlord only)
 - `/admin-channel enable` marks the current chat context as admin-only (requires linked `admin` or `overlord`)
+- `/route <task-id> <question|issue|task|moderation|noise> [p1|p2|p3] [due-window]` overrides triage routing (admin/overlord)
 - `/approve <pairing-token>` approves a pending pairing (requires linked `admin` or `overlord`)
 - `/deny <pairing-token> [reason]` denies a pending pairing (requires linked `admin` or `overlord`)
 - `/pending-actions` lists pending LLM-proposed actions (admin/overlord)
@@ -84,7 +85,7 @@ Telegram command gateway:
 
 Discord command gateway:
 - Listens to Discord Gateway `MESSAGE_CREATE` events (bot token + intents required)
-- Uses the same command set as Telegram from plain message content (`/task`, `/search`, `/open`, `/status`, `/prompt`, `/admin-channel enable`, `/approve`, `/deny`, `/pending-actions`, `/approve-action`, `/deny-action`)
+- Uses the same command set as Telegram from plain message content (`/task`, `/search`, `/open`, `/status`, `/prompt`, `/admin-channel enable`, `/route`, `/approve`, `/deny`, `/pending-actions`, `/approve-action`, `/deny-action`)
 - Supports DM `pair` for one-time token generation
 - `.md` attachments are ingested into workspace storage under `inbox/discord/<channel-id>/...`
 - every inbound/outbound channel message is persisted to Markdown at `logs/chats/discord/<channel-id>.md`
@@ -128,6 +129,12 @@ Heartbeat behavior:
 - exposes current health states at `GET /api/v1/heartbeat`
 - emits admin notifications on degraded/recovered state transitions
 - appends transition log entries to `/data/workspaces/<workspace-id>/ops/heartbeat.md` for workspaces with admin channels
+
+Message triage behavior:
+- non-command inbound messages are auto-classified (`question`, `issue`, `task`, `moderation`, `noise`)
+- non-noise classifications auto-create routed tasks with priority and due windows
+- routed tasks persist source metadata and assignment lane for audit and operations
+- routing decisions are posted to workspace admin channels with `/route ...` override examples
 
 Objectives and proactivity:
 - objectives can be stored as:
