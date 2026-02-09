@@ -12,6 +12,8 @@ This documentation is written for the operators who install, secure, and run Spi
    - `docs/channels/README.md`
 4. Run day-2 operations:
    - `docs/operations.md`
+5. Run go-live gate:
+   - `docs/production-checklist.md`
 
 ## Product Planning Docs
 
