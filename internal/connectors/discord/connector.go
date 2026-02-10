@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions"
+	"github.com/carlos/spinner/internal/connectors/contextack"
 	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/gorilla/websocket"
 
@@ -482,6 +483,22 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 	}
 	if prompt == "" {
 		return "", "", nil
+	}
+	_, ack := contextack.PlanAndGenerate(ctx, c.responder, llm.MessageInput{
+		Connector:   "discord",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		ExternalID:  message.ChannelID,
+		DisplayName: displayName,
+		FromUserID:  message.Author.ID,
+		Text:        prompt,
+		IsDM:        message.GuildID == "",
+	})
+	if ack != "" {
+		c.logOutbound(contextRecord, message, ack)
+		if ackErr := c.sendChannelMessage(ctx, message.ChannelID, ack); ackErr != nil {
+			c.logger.Error("send context-loading acknowledgement failed", "error", ackErr, "channel_id", message.ChannelID)
+		}
 	}
 	reply, err := c.responder.Reply(ctx, llm.MessageInput{
 		Connector:   "discord",

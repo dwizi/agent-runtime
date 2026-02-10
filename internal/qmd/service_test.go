@@ -50,7 +50,7 @@ func TestSearchReturnsParsedResults(t *testing.T) {
 		resolver: func(cmd *exec.Cmd) ([]byte, error) {
 			args := strings.Join(cmd.Args, " ")
 			switch {
-			case strings.Contains(args, " query "):
+			case strings.Contains(args, " search "):
 				return []byte(`[{"path":"notes/today.md","docid":"#abc123","score":0.91,"snippet":"release prep notes"}]`), nil
 			default:
 				return []byte("ok"), nil
@@ -81,9 +81,9 @@ func TestSearchReturnsParsedResults(t *testing.T) {
 	}
 }
 
-func TestSearchFallsBackWhenQueryExpansionIsKilled(t *testing.T) {
+func TestSearchUsesBM25AndSkipsQueryExpansion(t *testing.T) {
 	root := t.TempDir()
-	workspaceID := "ws-query-fallback"
+	workspaceID := "ws-bm25-only"
 	workspacePath := filepath.Join(root, workspaceID)
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -92,14 +92,10 @@ func TestSearchFallsBackWhenQueryExpansionIsKilled(t *testing.T) {
 	runner := &fakeRunner{
 		resolver: func(cmd *exec.Cmd) ([]byte, error) {
 			args := strings.Join(cmd.Args, " ")
-			switch {
-			case strings.Contains(args, " query "):
-				return []byte("signal: killed: Expanding query..."), errors.New("exit status 1")
-			case strings.Contains(args, " search "):
+			if strings.Contains(args, " search ") {
 				return []byte(`[{"path":"pricing.md","docid":"#p1","score":0.88,"snippet":"pricing details"}]`), nil
-			default:
-				return []byte("ok"), nil
 			}
+			return []byte("ok"), nil
 		},
 	}
 	service := newService(
@@ -123,18 +119,19 @@ func TestSearchFallsBackWhenQueryExpansionIsKilled(t *testing.T) {
 	}
 
 	calls := runner.callsSnapshot()
-	seenQuery := false
 	seenSearch := false
 	for _, call := range calls {
-		if strings.Contains(call, " query ") {
-			seenQuery = true
-		}
 		if strings.Contains(call, " search ") {
 			seenSearch = true
 		}
 	}
-	if !seenQuery || !seenSearch {
-		t.Fatalf("expected query then search fallback calls, got %v", calls)
+	if !seenSearch {
+		t.Fatalf("expected BM25 search call, got %v", calls)
+	}
+	for _, call := range calls {
+		if strings.Contains(call, " query ") {
+			t.Fatalf("expected query-expansion to be skipped, got %v", calls)
+		}
 	}
 }
 
@@ -194,63 +191,6 @@ func TestSearchUsesFastBM25ForLongMultilinePrompts(t *testing.T) {
 	}
 }
 
-func TestSearchFallsBackWhenQueryExpansionTimesOut(t *testing.T) {
-	root := t.TempDir()
-	workspaceID := "ws-query-timeout-fallback"
-	workspacePath := filepath.Join(root, workspaceID)
-	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
-		t.Fatalf("create workspace: %v", err)
-	}
-
-	runner := &fakeRunner{
-		resolver: func(cmd *exec.Cmd) ([]byte, error) {
-			args := strings.Join(cmd.Args, " ")
-			switch {
-			case strings.Contains(args, " query "):
-				return []byte("timed out after 30s: Expanding query..."), errors.New("exit status 1")
-			case strings.Contains(args, " search "):
-				return []byte(`[{"path":"faq.md","docid":"#f1","score":0.82,"snippet":"pricing faq"}]`), nil
-			default:
-				return []byte("ok"), nil
-			}
-		},
-	}
-	service := newService(
-		Config{
-			WorkspaceRoot: root,
-			AutoEmbed:     false,
-		},
-		slog.Default(),
-		runner,
-	)
-
-	results, err := service.Search(context.Background(), workspaceID, "pricing", 3)
-	if err != nil {
-		t.Fatalf("search failed: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one fallback result, got %d", len(results))
-	}
-	if results[0].Path != "faq.md" {
-		t.Fatalf("unexpected path: %s", results[0].Path)
-	}
-
-	calls := runner.callsSnapshot()
-	seenQuery := false
-	seenSearch := false
-	for _, call := range calls {
-		if strings.Contains(call, " query ") {
-			seenQuery = true
-		}
-		if strings.Contains(call, " search ") {
-			seenSearch = true
-		}
-	}
-	if !seenQuery || !seenSearch {
-		t.Fatalf("expected query then search fallback calls, got %v", calls)
-	}
-}
-
 func TestSearchReturnsEmptyAndQueuesIndexWhenCollectionMissing(t *testing.T) {
 	root := t.TempDir()
 	workspaceID := "ws-search-missing-index"
@@ -262,7 +202,7 @@ func TestSearchReturnsEmptyAndQueuesIndexWhenCollectionMissing(t *testing.T) {
 	runner := &fakeRunner{
 		resolver: func(cmd *exec.Cmd) ([]byte, error) {
 			args := strings.Join(cmd.Args, " ")
-			if strings.Contains(args, " query ") {
+			if strings.Contains(args, " search ") {
 				return []byte("Collection 'workspace' not found"), errors.New("exit status 1")
 			}
 			return []byte("ok"), nil

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions"
+	"github.com/carlos/spinner/internal/connectors/contextack"
 	"github.com/carlos/spinner/internal/gateway"
 	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/llm"
@@ -376,6 +377,22 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 	}
 	if prompt == "" {
 		return "", "", nil
+	}
+	_, ack := contextack.PlanAndGenerate(ctx, c.responder, llm.MessageInput{
+		Connector:   "telegram",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		ExternalID:  strconv.FormatInt(message.Chat.ID, 10),
+		DisplayName: message.Chat.Title,
+		FromUserID:  strconv.FormatInt(message.From.ID, 10),
+		Text:        prompt,
+		IsDM:        message.Chat.Type == "private",
+	})
+	if ack != "" {
+		c.logOutbound(contextRecord, message, ack)
+		if ackErr := c.sendMessage(ctx, message.Chat.ID, ack); ackErr != nil {
+			c.logger.Error("send context-loading acknowledgement failed", "error", ackErr, "chat_id", message.Chat.ID)
+		}
 	}
 	reply, err := c.responder.Reply(ctx, llm.MessageInput{
 		Connector:   "telegram",

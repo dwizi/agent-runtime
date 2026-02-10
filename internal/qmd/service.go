@@ -352,18 +352,8 @@ func (s *Service) Search(ctx context.Context, workspaceID, query string, limit i
 	searchCtx, cancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
 	defer cancel()
 
-	command := "query"
-	if shouldUseFastSearch(query) {
-		command = "search"
-	}
-	output, err := s.runQMD(searchCtx, workspaceDir, command, query, "--json", "-n", strconv.Itoa(limit))
+	output, err := s.runQMD(searchCtx, workspaceDir, "search", query, "--json", "-n", strconv.Itoa(limit))
 	if err != nil {
-		if command == "query" && looksLikeQueryExpansionKilled(err) {
-			s.logger.Warn("qmd query expansion failed; falling back to bm25 search", "workspace", workspaceID, "error", err)
-			fallbackCtx, fallbackCancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
-			defer fallbackCancel()
-			output, err = s.runQMD(fallbackCtx, workspaceDir, "search", query, "--json", "-n", strconv.Itoa(limit))
-		}
 		if err != nil && looksLikeIndexNotReady(err) {
 			s.logger.Debug("qmd index not ready during search; queueing async index", "workspace_id", workspaceID, "error", err)
 			s.QueueWorkspaceIndex(workspaceID)
