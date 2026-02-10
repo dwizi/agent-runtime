@@ -40,7 +40,8 @@ No web frontend is required; operations happen through chat + TUI + API.
 
 - Connectors: Telegram, Discord, IMAP
 - Storage: filesystem + SQLite
-- Reasoning: LLM-based agent loop (observe-think-act)
+- Reasoning: LLM-based agent loop with Tool-Use architecture
+  - Tools: `search_knowledge_base`, `create_task`
 - Retrieval: qmd over Markdown
 - Scheduling:
   - interval-based objectives

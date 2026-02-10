@@ -57,10 +57,13 @@ Discord startup behavior:
 
 ## LLM Provider and Policy
 
-- `SPINNER_ZAI_API_KEY`
-- `SPINNER_ZAI_BASE_URL`
-- `SPINNER_ZAI_MODEL`
-- `SPINNER_ZAI_TIMEOUT_SECONDS`
+- `SPINNER_LLM_PROVIDER` (default: `openai`)
+  - `openai`: Use for OpenAI, Z.ai, local Ollama/vLLM, or any OpenAI-compatible API.
+  - `anthropic`: Use for Claude.
+- `SPINNER_LLM_BASE_URL` (default: `https://api.openai.com/v1`)
+- `SPINNER_LLM_API_KEY`
+- `SPINNER_LLM_MODEL` (default: `gpt-4o`)
+- `SPINNER_LLM_TIMEOUT_SECONDS` (default: `60`)
 - `SPINNER_LLM_ENABLED`
 - `SPINNER_LLM_ALLOW_DM`
 - `SPINNER_LLM_REQUIRE_MENTION_IN_GROUPS`
@@ -70,6 +73,7 @@ Discord startup behavior:
 - `SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS`
 - `SPINNER_LLM_ADMIN_SYSTEM_PROMPT`
 - `SPINNER_LLM_PUBLIC_SYSTEM_PROMPT`
+- `SPINNER_REASONING_PROMPT_FILE` (default: `/context/REASONING.md`)
 - `SPINNER_SOUL_GLOBAL_FILE`
 - `SPINNER_SOUL_WORKSPACE_REL_PATH`
 - `SPINNER_SOUL_CONTEXT_REL_PATH`
@@ -77,6 +81,40 @@ Discord startup behavior:
 - `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
 - `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
 - `SPINNER_SKILLS_GLOBAL_ROOT`
+
+### Provider Configuration Examples
+
+**OpenAI (Default):**
+```bash
+SPINNER_LLM_PROVIDER=openai
+SPINNER_LLM_BASE_URL=https://api.openai.com/v1
+SPINNER_LLM_API_KEY=sk-...
+SPINNER_LLM_MODEL=gpt-4o
+```
+
+**Z.ai:**
+```bash
+SPINNER_LLM_PROVIDER=openai
+SPINNER_LLM_BASE_URL=https://api.z.ai/api/paas/v4
+SPINNER_LLM_API_KEY=z-...
+SPINNER_LLM_MODEL=glm-4.7-flash
+```
+
+**Local (Ollama/vLLM):**
+```bash
+SPINNER_LLM_PROVIDER=openai
+SPINNER_LLM_BASE_URL=http://host.docker.internal:11434/v1
+SPINNER_LLM_API_KEY=
+SPINNER_LLM_MODEL=qwen2.5:7b
+```
+
+**Anthropic (Claude):**
+```bash
+SPINNER_LLM_PROVIDER=anthropic
+SPINNER_LLM_BASE_URL=https://api.anthropic.com/v1
+SPINNER_LLM_API_KEY=sk-ant-...
+SPINNER_LLM_MODEL=claude-3-5-sonnet-latest
+```
 
 System prompt file precedence:
 1. global file (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
@@ -97,8 +135,8 @@ Skill template loading order:
 6. global common (`SPINNER_SKILLS_GLOBAL_ROOT/common`)
 
 Notes:
-- LLM endpoint is OpenAI-compatible `POST /chat/completions`. You can point it to local Qwen (for example Ollama/vLLM) by setting `SPINNER_ZAI_BASE_URL` to a local URL and `SPINNER_ZAI_MODEL` to your local model name.
-- `SPINNER_ZAI_API_KEY` is required for `api.z.ai`; for local endpoints it can be left empty.
+- LLM endpoint is OpenAI-compatible `POST /chat/completions`. Update `SPINNER_LLM_BASE_URL` to point to your local server (for example Ollama/vLLM) or hosted provider, and use `SPINNER_LLM_MODEL` to pick the desired model.
+- `SPINNER_LLM_API_KEY` is required for remote providers that enforce auth (OpenAI, Z.ai, Claude) but may stay empty for local endpoints configured without a key.
 - workspace templates override global templates when filenames match.
 - templates are summarized into system prompt context; keep each file concise.
 

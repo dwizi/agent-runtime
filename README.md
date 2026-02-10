@@ -142,11 +142,17 @@ Notes:
 - Discord slash registration currently covers the shared command catalog above; `route` remains text-only.
 - Natural-language intents (for example, `please create a task ...`) are text parsing features, not slash/menu commands.
 
-z.ai runtime env:
-- `SPINNER_ZAI_API_KEY` (required for channel LLM replies)
-- `SPINNER_ZAI_BASE_URL` (default: `https://api.z.ai/api/paas/v4`)
-- `SPINNER_ZAI_MODEL` (default: `glm-4.7-flash`)
-- `SPINNER_ZAI_TIMEOUT_SECONDS` (default: `45`)
+LLM runtime env:
+- `SPINNER_LLM_PROVIDER` (default: `openai`; selects the adapter that handles OpenAI-compatible APIs, while `anthropic` routes calls to Claude)
+- `SPINNER_LLM_BASE_URL` (default: `https://api.openai.com/v1`; point it at any OpenAI-compatible endpoint or Claude base URL)
+- `SPINNER_LLM_API_KEY` (provider key for OpenAI/Z.ai/Claude; leave empty for unauthenticated local endpoints)
+- `SPINNER_LLM_MODEL` (default: `gpt-4o`; can override with Z.ai/Claude/local model names such as `glm-4.7-flash`, `claude-3.5-sonic`, or `qwen2.5`)
+- `SPINNER_LLM_TIMEOUT_SECONDS` (default: `60`; request timeout per attempt)
+Notes:
+- Setting `SPINNER_LLM_PROVIDER=openai` routes LLM calls through `internal/llm/openai`, which can talk to any OpenAI-compatible endpoint (OpenAI itself, Z.ai, Ollama, vLLM, etc.).
+- Run locally against Ollama or vLLM by pointing `SPINNER_LLM_BASE_URL` at your local server (`http://localhost:11434/v1`) and updating `SPINNER_LLM_MODEL` accordingly.
+- Use Z.ai by keeping `SPINNER_LLM_PROVIDER=openai`, setting `SPINNER_LLM_BASE_URL=https://api.z.ai/api/paas/v4`, `SPINNER_LLM_MODEL=glm-4.7-flash`, and supplying `SPINNER_LLM_API_KEY`.
+- Switch to Claude by setting `SPINNER_LLM_PROVIDER=anthropic`, providing `SPINNER_LLM_API_KEY`, and picking a Claude model name (for example `claude-3.5-sonic`).
 
 Command sync runtime env:
 - `SPINNER_COMMAND_SYNC_ENABLED` (default: `true`)

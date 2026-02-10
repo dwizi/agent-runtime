@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions/executor"
+	"github.com/carlos/spinner/internal/agent"
+	"github.com/carlos/spinner/internal/agent/tools"
 	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
@@ -53,15 +55,16 @@ type RoutingNotifier interface {
 }
 
 type Service struct {
-	store              Store
-	engine             Engine
+	store                   Store
+	engine                  Engine
 	retriever               Retriever
 	actionExecutor          ActionExecutor
-	reasoner                *ReasoningEngine
+	agent                   *agent.Agent
+	toolRegistry            *tools.Registry
 	reasoningPromptTemplate string
 	triageAcknowledger      llm.Responder
 	triageEnabled           bool
-	routingNotify      RoutingNotifier
+	routingNotify           RoutingNotifier
 }
 
 type MessageInput struct {
@@ -80,11 +83,16 @@ type MessageOutput struct {
 const latestPendingActionAlias = "__latest_pending__"
 
 func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor) *Service {
+	registry := tools.NewRegistry()
+	registry.Register(NewSearchTool(retriever))
+	registry.Register(NewCreateTaskTool(store, engine))
+
 	return &Service{
 		store:          store,
 		engine:         engine,
 		retriever:      retriever,
 		actionExecutor: actionExecutor,
+		toolRegistry:   registry,
 		triageEnabled:  true,
 	}
 }
@@ -95,16 +103,15 @@ func (s *Service) SetTriageEnabled(enabled bool) {
 
 func (s *Service) SetReasoningPromptTemplate(template string) {
 	s.reasoningPromptTemplate = template
-	// Re-initialize reasoner if responder already exists
 	if s.triageAcknowledger != nil {
-		s.reasoner = NewReasoningEngine(s.triageAcknowledger, s.reasoningPromptTemplate)
+		s.agent = agent.New(s.triageAcknowledger, s.toolRegistry, s.reasoningPromptTemplate)
 	}
 }
 
 func (s *Service) SetTriageAcknowledger(responder llm.Responder) {
 	s.triageAcknowledger = responder
 	if responder != nil {
-		s.reasoner = NewReasoningEngine(responder, s.reasoningPromptTemplate)
+		s.agent = agent.New(responder, s.toolRegistry, s.reasoningPromptTemplate)
 	}
 }
 
@@ -677,107 +684,38 @@ func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text
 	if !s.triageEnabled {
 		return MessageOutput{}, nil
 	}
-	// Fallback to regex if no reasoner (LLM) is configured
-	if s.reasoner == nil {
-		return s.handleLegacyAutoTriage(ctx, input, text)
-	}
-
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
-		return MessageOutput{}, nil
-	}
-
-	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+	legacyOutput, err := s.handleLegacyAutoTriage(ctx, input, text)
 	if err != nil {
 		return MessageOutput{}, err
 	}
-
-	// 1. OBSERVE & THINK: Call the LLM to decide what to do
-	decision, err := s.reasoner.Decide(ctx, input, "Current Channel: "+input.DisplayName)
-	if err != nil {
-		// Log error? For now, fall back to legacy
-		return s.handleLegacyAutoTriage(ctx, input, text)
+	if legacyOutput.Handled {
+		return legacyOutput, nil
 	}
-
-	// 2. ACT: Execute based on intention
-	switch decision.Intention {
-	case IntentionTask:
-		return s.executeAgentTask(ctx, input, contextRecord, decision, trimmed)
-	case IntentionSearch:
-		return s.executeAgentSearch(ctx, input, contextRecord, decision)
-	case IntentionAnswer:
-		// For "Answer", we technically just want to chat. 
-		// If the decision.Reasoning is good, we might output that, or we might let the system 
-		// handle it as a standard chat flow (if we had one). 
-		// For now, let's treat it as a "Answer" type task or just acknowledge if it's simple.
-		// Use the legacy ack for now, but grounded in the decision.
-		return MessageOutput{
-			Handled: true, 
-			Reply: fmt.Sprintf("I'll help with that. %s", decision.Reasoning),
-		}, nil
-	case IntentionNone:
-		return MessageOutput{}, nil
-	default:
-		return MessageOutput{}, nil
-	}
+	return s.handleAgentAutoTriage(ctx, input, text), nil
 }
 
-func (s *Service) executeAgentTask(ctx context.Context, input MessageInput, contextRecord store.ContextRecord, decision AgentDecision, sourceText string) (MessageOutput, error) {
-	// Map LLM priority to system priority
-	priority := TriagePriorityP3
-	if p, ok := normalizeTriagePriority(decision.Priority); ok {
-		priority = p
+func (s *Service) handleAgentAutoTriage(ctx context.Context, input MessageInput, text string) MessageOutput {
+	if s.agent == nil {
+		return MessageOutput{}
 	}
-
-	task, err := s.enqueueAndPersistTask(ctx, store.CreateTaskInput{
-		WorkspaceID:      contextRecord.WorkspaceID,
-		ContextID:        contextRecord.ID,
-		Kind:             string(orchestrator.TaskKindGeneral),
-		Title:            decision.Title,
-		Prompt:           buildAgentTaskPrompt(decision, sourceText),
-		Status:           "queued",
-		RouteClass:       string(TriageTask), // Generic "Task" class for now
-		Priority:         string(priority),
-		DueAt:            time.Now().UTC().Add(24 * time.Hour), // Default SLA
-		AssignedLane:     "operations",
-		SourceConnector:  strings.ToLower(strings.TrimSpace(input.Connector)),
-		SourceExternalID: strings.TrimSpace(input.ExternalID),
-		SourceUserID:     strings.TrimSpace(input.FromUserID),
-		SourceText:       sourceText,
+	result := s.agent.Execute(ctx, llm.MessageInput{
+		Connector:   strings.TrimSpace(input.Connector),
+		ExternalID:  strings.TrimSpace(input.ExternalID),
+		DisplayName: strings.TrimSpace(input.DisplayName),
+		FromUserID:  strings.TrimSpace(input.FromUserID),
+		Text:        strings.TrimSpace(text),
 	})
-	if err != nil {
-		return MessageOutput{}, err
+	if result.Error != nil {
+		return MessageOutput{}
 	}
-
+	reply := strings.TrimSpace(result.Reply)
+	if reply == "" {
+		return MessageOutput{}
+	}
 	return MessageOutput{
 		Handled: true,
-		Reply:   fmt.Sprintf("Task Queued: `%s` (%s)\n> %s", task.ID, decision.Title, decision.Reasoning),
-	}, nil
-}
-
-func (s *Service) executeAgentSearch(ctx context.Context, input MessageInput, contextRecord store.ContextRecord, decision AgentDecision) (MessageOutput, error) {
-	if s.retriever == nil {
-		return MessageOutput{Handled: true, Reply: "I wanted to search, but search is not configured."}, nil
+		Reply:   reply,
 	}
-	
-	results, err := s.retriever.Search(ctx, contextRecord.WorkspaceID, decision.Query, 3)
-	if err != nil {
-		return MessageOutput{}, err
-	}
-	
-	if len(results) == 0 {
-		return MessageOutput{Handled: true, Reply: fmt.Sprintf("I searched for '%s' but found no results.", decision.Query)}, nil
-	}
-
-	lines := []string{fmt.Sprintf("I searched for '%s' and found:", decision.Query)}
-	for i, r := range results {
-		lines = append(lines, fmt.Sprintf("%d. `%s` (%s)", i+1, r.Path, compactSnippet(r.Snippet)))
-	}
-	return MessageOutput{Handled: true, Reply: strings.Join(lines, "\n")}, nil
-}
-
-func buildAgentTaskPrompt(decision AgentDecision, sourceText string) string {
-	return fmt.Sprintf("Agent Instructions: %s\n\nOriginal Request:\n%s", decision.Reasoning, sourceText)
 }
 
 func (s *Service) handleLegacyAutoTriage(ctx context.Context, input MessageInput, text string) (MessageOutput, error) {

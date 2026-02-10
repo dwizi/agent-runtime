@@ -7,7 +7,7 @@ Use this as a go-live gate for Spinner deployments.
 - [ ] Deployment host has Docker + Docker Compose plugin installed.
 - [ ] DNS for `PUBLIC_HOST` and `ADMIN_HOST` resolves to target host.
 - [ ] `.env` exists and is not committed to git.
-- [ ] `SPINNER_ZAI_API_KEY` set and validated.
+- [ ] `SPINNER_LLM_PROVIDER` (with matching `SPINNER_LLM_BASE_URL`, `SPINNER_LLM_MODEL`, and `SPINNER_LLM_API_KEY` when required) configured for your OpenAI-compatible provider, Claude, or local runtime.
 - [ ] At least one channel token configured (`SPINNER_TELEGRAM_TOKEN` and/or `SPINNER_DISCORD_TOKEN`).
 - [ ] `SPINNER_IMAP_*` and `SPINNER_SMTP_*` set only if email workflows are enabled.
 - [ ] `SPINNER_SANDBOX_ALLOWED_COMMANDS` reduced to minimum required commands.

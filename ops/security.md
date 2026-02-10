@@ -8,7 +8,7 @@ This checklist is for running Spinner in production with a strong default postur
 - Store secrets in a secret manager (not plaintext on developer laptops):
   - `SPINNER_DISCORD_TOKEN`
   - `SPINNER_TELEGRAM_TOKEN`
-  - `SPINNER_ZAI_API_KEY`
+  - `SPINNER_LLM_API_KEY` (and keep `SPINNER_LLM_BASE_URL`/`SPINNER_LLM_PROVIDER` guarded as needed)
 - Use separate credentials per environment (`dev`, `staging`, `prod`).
 - Rotate all connector/API tokens on a schedule and after personnel changes.
 

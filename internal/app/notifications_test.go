@@ -182,14 +182,20 @@ func TestRoutedTaskSuccessNotificationUsesNaturalReply(t *testing.T) {
 
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
-	if len(publisher.messages) != 1 {
-		t.Fatalf("expected one published message, got %d", len(publisher.messages))
+	if len(publisher.messages) != 2 {
+		t.Fatalf("expected two published messages, got %d", len(publisher.messages))
 	}
 	if publisher.messages[0].externalID != "110" {
-		t.Fatalf("expected publish to external id 110, got %s", publisher.messages[0].externalID)
+		t.Fatalf("expected in-progress publish to external id 110, got %s", publisher.messages[0].externalID)
 	}
-	if publisher.messages[0].text != "You're Carlos." {
-		t.Fatalf("expected natural routed reply, got %q", publisher.messages[0].text)
+	if !strings.Contains(strings.ToLower(publisher.messages[0].text), "still working") {
+		t.Fatalf("expected in-progress lifecycle update, got %q", publisher.messages[0].text)
+	}
+	if publisher.messages[1].externalID != "110" {
+		t.Fatalf("expected completion publish to external id 110, got %s", publisher.messages[1].externalID)
+	}
+	if publisher.messages[1].text != "You're Carlos." {
+		t.Fatalf("expected natural routed reply, got %q", publisher.messages[1].text)
 	}
 }
 
@@ -237,8 +243,14 @@ func TestRoutedTaskFailureSkipsNonAdminChannels(t *testing.T) {
 
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
-	if len(publisher.messages) != 0 {
-		t.Fatalf("expected no routed failure message in non-admin channels, got %d", len(publisher.messages))
+	if len(publisher.messages) != 1 {
+		t.Fatalf("expected one in-progress routed message in non-admin channels, got %d", len(publisher.messages))
+	}
+	if publisher.messages[0].externalID != "120" {
+		t.Fatalf("expected in-progress publish to origin channel 120, got %s", publisher.messages[0].externalID)
+	}
+	if !strings.Contains(strings.ToLower(publisher.messages[0].text), "still working") {
+		t.Fatalf("expected in-progress lifecycle text, got %q", publisher.messages[0].text)
 	}
 }
 
@@ -293,11 +305,14 @@ func TestRoutedTaskFailureNotifiesAdminChannelOnly(t *testing.T) {
 
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
-	if len(publisher.messages) != 1 {
-		t.Fatalf("expected one admin failure message, got %d", len(publisher.messages))
+	if len(publisher.messages) != 2 {
+		t.Fatalf("expected one in-progress message plus one admin failure message, got %d", len(publisher.messages))
 	}
-	if publisher.messages[0].externalID != "CHAN-A" {
-		t.Fatalf("expected publish to admin channel CHAN-A, got %s", publisher.messages[0].externalID)
+	if publisher.messages[0].externalID != "chan-a" {
+		t.Fatalf("expected in-progress publish to origin channel chan-a, got %s", publisher.messages[0].externalID)
+	}
+	if publisher.messages[1].externalID != "CHAN-A" {
+		t.Fatalf("expected publish to admin channel CHAN-A, got %s", publisher.messages[1].externalID)
 	}
 }
 

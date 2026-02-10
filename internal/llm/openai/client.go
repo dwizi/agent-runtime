@@ -1,4 +1,4 @@
-package zai
+package openai
 
 import (
 	"bytes"
@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -33,16 +31,13 @@ type Client struct {
 
 func New(cfg Config, logger *slog.Logger) *Client {
 	if strings.TrimSpace(cfg.BaseURL) == "" {
-		cfg.BaseURL = "https://api.z.ai/api/paas/v4"
+		cfg.BaseURL = "https://api.openai.com/v1"
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
-		cfg.Model = "glm-4.7-flash"
+		cfg.Model = "gpt-4o"
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 45 * time.Second
-	}
-	if strings.TrimSpace(cfg.SystemPrompt) == "" {
-		cfg.SystemPrompt = "You are Spinner, a concise community operations assistant. Provide practical, accurate, policy-safe replies."
+		cfg.Timeout = 60 * time.Second
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -58,15 +53,19 @@ func New(cfg Config, logger *slog.Logger) *Client {
 }
 
 func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, error) {
+	// Only require API key if not local
 	if requiresAPIKey(c.cfg.BaseURL) && strings.TrimSpace(c.cfg.APIKey) == "" {
-		return "", fmt.Errorf("%w: missing SPINNER_ZAI_API_KEY", llm.ErrUnavailable)
+		return "", fmt.Errorf("%w: missing API key for %s", llm.ErrUnavailable, c.cfg.BaseURL)
 	}
+	
 	userText := strings.TrimSpace(input.Text)
 	if userText == "" {
 		return "", nil
 	}
 
-	userPrompt := buildUserPrompt(input)
+	messages := []map[string]string{}
+
+	// 1. System Prompt
 	systemPrompt := strings.TrimSpace(c.cfg.SystemPrompt)
 	if strings.TrimSpace(input.SystemPrompt) != "" {
 		if systemPrompt != "" {
@@ -74,22 +73,29 @@ func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, err
 		}
 		systemPrompt += strings.TrimSpace(input.SystemPrompt)
 	}
-	payload := map[string]any{
-		"model": c.cfg.Model,
-		"messages": []map[string]string{
-			{
-				"role":    "system",
-				"content": systemPrompt,
-			},
-			{
-				"role":    "user",
-				"content": userPrompt,
-			},
-		},
+	if systemPrompt != "" {
+		messages = append(messages, map[string]string{
+			"role":    "system",
+			"content": systemPrompt,
+		})
 	}
+
+	// 2. User Prompt
+	// We combine metadata into the user message because standard chat APIs don't have "context" fields
+	userContent := buildUserPrompt(input)
+	messages = append(messages, map[string]string{
+		"role":    "user",
+		"content": userContent,
+	})
+
+	payload := map[string]any{
+		"model":    c.cfg.Model,
+		"messages": messages,
+	}
+	
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshal zai request: %w", err)
+		return "", fmt.Errorf("marshal openai request: %w", err)
 	}
 
 	endpoint := strings.TrimRight(c.cfg.BaseURL, "/") + "/chat/completions"
@@ -113,22 +119,19 @@ func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, err
 		return "", err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		c.logger.Error("z.ai chat completion failed", "status", res.StatusCode, "body", strings.TrimSpace(string(respBody)))
-		return "", fmt.Errorf("z.ai completion failed with status %d", res.StatusCode)
+		c.logger.Error("openai chat completion failed", "status", res.StatusCode, "body", strings.TrimSpace(string(respBody)))
+		return "", fmt.Errorf("openai completion failed with status %d", res.StatusCode)
 	}
 
 	var response chatCompletionResponse
 	if err := json.Unmarshal(respBody, &response); err != nil {
-		return "", fmt.Errorf("decode zai response: %w", err)
+		return "", fmt.Errorf("decode openai response: %w", err)
 	}
 	if len(response.Choices) == 0 {
-		return "", fmt.Errorf("z.ai response returned no choices")
+		return "", fmt.Errorf("openai response returned no choices")
 	}
 	content := strings.TrimSpace(response.Choices[0].Message.Content)
 	content = sanitizeModelReply(content)
-	if content == "" {
-		return "", nil
-	}
 	return content, nil
 }
 
@@ -150,21 +153,13 @@ func sanitizeModelReply(input string) string {
 }
 
 func buildUserPrompt(input llm.MessageInput) string {
-	channelType := "channel"
-	if input.IsDM {
-		channelType = "direct-message"
-	}
-	return fmt.Sprintf(
-		"Connector: %s\nWorkspace: %s\nContext: %s\nChannel: %s (%s)\nUser: %s\nType: %s\n\nUser message:\n%s",
-		strings.TrimSpace(input.Connector),
-		strings.TrimSpace(input.WorkspaceID),
-		strings.TrimSpace(input.ContextID),
-		strings.TrimSpace(input.ExternalID),
-		strings.TrimSpace(input.DisplayName),
-		strings.TrimSpace(input.FromUserID),
-		channelType,
-		strings.TrimSpace(input.Text),
+	// If it's a direct conversation, we can just use the text if we want to be less verbose,
+	// but keeping the context header is usually helpful for the agent to know WHO it is talking to.
+	header := fmt.Sprintf(
+		"Context: connector=%s workspace=%s user=%s (%s)",
+		input.Connector, input.WorkspaceID, input.FromUserID, input.DisplayName,
 	)
+	return header + "\n\n" + input.Text
 }
 
 type chatCompletionResponse struct {
@@ -176,26 +171,10 @@ type chatCompletionResponse struct {
 }
 
 func requiresAPIKey(baseURL string) bool {
-	trimmed := strings.TrimSpace(baseURL)
-	if trimmed == "" {
-		return true
-	}
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return true
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if host == "" {
-		return true
-	}
-	if host == "api.z.ai" {
-		return true
-	}
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+	// Heuristic: localhost/ollama usually don't need keys
+	lower := strings.ToLower(baseURL)
+	if strings.Contains(lower, "localhost") || strings.Contains(lower, "127.0.0.1") || strings.Contains(lower, "ollama") {
 		return false
 	}
-	if parsedIP := net.ParseIP(host); parsedIP != nil {
-		return parsedIP.IsLoopback()
-	}
-	return false
+	return true
 }

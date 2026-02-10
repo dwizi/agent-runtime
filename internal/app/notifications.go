@@ -64,6 +64,50 @@ func (n *taskCompletionNotifier) NotifyFailed(task orchestrator.Task, taskErr er
 	n.notify(task, orchestrator.TaskResult{}, taskErr, n.failurePolicy)
 }
 
+func (n *taskCompletionNotifier) NotifyStarted(task orchestrator.Task) {
+	if n == nil || n.store == nil || len(n.publishers) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	taskRecord, hasTaskRecord := n.lookupTaskRecord(ctx, task.ID)
+	if !hasTaskRecord {
+		return
+	}
+	if strings.TrimSpace(taskRecord.RouteClass) == "" {
+		return
+	}
+	if taskRecord.Attempts > 1 {
+		return
+	}
+
+	message := buildTaskStartedMessage(taskRecord)
+	if message == "" {
+		return
+	}
+	targets := n.resolveTargets(ctx, task, n.successPolicy)
+	for _, target := range targets {
+		if target.IsAdmin {
+			continue
+		}
+		publisher := n.publishers[strings.ToLower(strings.TrimSpace(target.Connector))]
+		if publisher == nil {
+			continue
+		}
+		if err := publisher.Publish(ctx, target.ExternalID, message); err != nil {
+			n.logger.Error("task start notification publish failed",
+				"task_id", task.ID,
+				"connector", target.Connector,
+				"external_id", target.ExternalID,
+				"error", err,
+			)
+			continue
+		}
+		appendOutboundChatLog(n.workspaceRoot, target.WorkspaceID, target.Connector, target.ExternalID, message)
+	}
+}
+
 func (n *taskCompletionNotifier) notify(task orchestrator.Task, result orchestrator.TaskResult, taskErr error, policy string) {
 	if n == nil || n.store == nil || len(n.publishers) == 0 {
 		return
@@ -221,6 +265,13 @@ func buildTaskFailureMessage(task orchestrator.Task, taskErr error, hasTaskRecor
 		return compactLineBreaks(fmt.Sprintf("Routed %s follow-up failed (`%s`): %s", class, strings.TrimSpace(task.ID), truncateSingleLine(errorText, 1100)), 1400)
 	}
 	return compactLineBreaks(fmt.Sprintf("Task `%s` failed: %s", strings.TrimSpace(task.ID), truncateSingleLine(errorText, 1200)), 1400)
+}
+
+func buildTaskStartedMessage(taskRecord store.TaskRecord) string {
+	if strings.TrimSpace(taskRecord.RouteClass) == "" {
+		return ""
+	}
+	return "I ran some tools and I'm still working on this."
 }
 
 func includeOriginTarget(policy string) bool {

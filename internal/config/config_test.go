@@ -48,8 +48,11 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_IMAP_MAILBOX", "")
 	t.Setenv("SPINNER_IMAP_POLL_SECONDS", "")
 	t.Setenv("SPINNER_IMAP_TLS_SKIP_VERIFY", "")
-	t.Setenv("SPINNER_ZAI_MODEL", "")
-	t.Setenv("SPINNER_ZAI_TIMEOUT_SECONDS", "")
+	t.Setenv("SPINNER_LLM_PROVIDER", "")
+	t.Setenv("SPINNER_LLM_BASE_URL", "")
+	t.Setenv("SPINNER_LLM_API_KEY", "")
+	t.Setenv("SPINNER_LLM_MODEL", "")
+	t.Setenv("SPINNER_LLM_TIMEOUT_SECONDS", "")
 	t.Setenv("SPINNER_SMTP_HOST", "")
 	t.Setenv("SPINNER_SMTP_PORT", "")
 	t.Setenv("SPINNER_SMTP_USERNAME", "")
@@ -201,11 +204,20 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.IMAPTLSSkipVerify {
 		t.Fatal("expected default imap tls skip verify false")
 	}
-	if cfg.ZAIModel != "glm-4.7-flash" {
-		t.Fatalf("expected default z.ai model glm-4.7-flash, got %s", cfg.ZAIModel)
+	if cfg.LLMProvider != "openai" {
+		t.Fatalf("expected default llm provider openai, got %s", cfg.LLMProvider)
 	}
-	if cfg.ZAITimeoutSec != 45 {
-		t.Fatalf("expected default z.ai timeout 45, got %d", cfg.ZAITimeoutSec)
+	if cfg.LLMBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("expected default llm base url https://api.openai.com/v1, got %s", cfg.LLMBaseURL)
+	}
+	if cfg.LLMAPIKey != "" {
+		t.Fatalf("expected default llm api key empty, got %s", cfg.LLMAPIKey)
+	}
+	if cfg.LLMModel != "gpt-4o" {
+		t.Fatalf("expected default llm model gpt-4o, got %s", cfg.LLMModel)
+	}
+	if cfg.LLMTimeoutSec != 60 {
+		t.Fatalf("expected default llm timeout 60, got %d", cfg.LLMTimeoutSec)
 	}
 	if cfg.SMTPHost != "" {
 		t.Fatalf("expected default smtp host empty, got %s", cfg.SMTPHost)
@@ -329,8 +341,11 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_IMAP_MAILBOX", "Support")
 	t.Setenv("SPINNER_IMAP_POLL_SECONDS", "33")
 	t.Setenv("SPINNER_IMAP_TLS_SKIP_VERIFY", "true")
-	t.Setenv("SPINNER_ZAI_MODEL", "glm-4.7-flash")
-	t.Setenv("SPINNER_ZAI_TIMEOUT_SECONDS", "90")
+	t.Setenv("SPINNER_LLM_PROVIDER", "anthropic")
+	t.Setenv("SPINNER_LLM_BASE_URL", "https://api.anthropic.com")
+	t.Setenv("SPINNER_LLM_API_KEY", "anthropic-key")
+	t.Setenv("SPINNER_LLM_MODEL", "claude-3.5-sonic")
+	t.Setenv("SPINNER_LLM_TIMEOUT_SECONDS", "90")
 	t.Setenv("SPINNER_SMTP_HOST", "smtp.example.com")
 	t.Setenv("SPINNER_SMTP_PORT", "2525")
 	t.Setenv("SPINNER_SMTP_USERNAME", "bot@example.com")
@@ -488,11 +503,20 @@ func TestFromEnvOverrides(t *testing.T) {
 	if !cfg.IMAPTLSSkipVerify {
 		t.Fatal("expected overridden imap tls skip verify true")
 	}
-	if cfg.ZAIModel != "glm-4.7-flash" {
-		t.Fatalf("expected overridden z.ai model, got %s", cfg.ZAIModel)
+	if cfg.LLMProvider != "anthropic" {
+		t.Fatalf("expected overridden llm provider anthropic, got %s", cfg.LLMProvider)
 	}
-	if cfg.ZAITimeoutSec != 90 {
-		t.Fatalf("expected overridden z.ai timeout, got %d", cfg.ZAITimeoutSec)
+	if cfg.LLMBaseURL != "https://api.anthropic.com" {
+		t.Fatalf("expected overridden llm base url, got %s", cfg.LLMBaseURL)
+	}
+	if cfg.LLMAPIKey != "anthropic-key" {
+		t.Fatalf("expected overridden llm api key, got %s", cfg.LLMAPIKey)
+	}
+	if cfg.LLMModel != "claude-3.5-sonic" {
+		t.Fatalf("expected overridden llm model, got %s", cfg.LLMModel)
+	}
+	if cfg.LLMTimeoutSec != 90 {
+		t.Fatalf("expected overridden llm timeout, got %d", cfg.LLMTimeoutSec)
 	}
 	if cfg.SMTPHost != "smtp.example.com" {
 		t.Fatalf("expected overridden smtp host, got %s", cfg.SMTPHost)

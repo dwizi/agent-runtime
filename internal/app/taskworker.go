@@ -568,6 +568,9 @@ func (o *taskObserver) OnTaskStarted(task orchestrator.Task, workerID int) {
 	if err := o.store.MarkTaskRunning(ctx, task.ID, workerID, time.Now().UTC()); err != nil && !errorsIsTaskNotFound(err) {
 		o.logger.Error("mark task running failed", "task_id", task.ID, "error", err)
 	}
+	if o.notifier != nil {
+		o.notifier.NotifyStarted(task)
+	}
 }
 
 func (o *taskObserver) OnTaskCompleted(task orchestrator.Task, workerID int, result orchestrator.TaskResult) {

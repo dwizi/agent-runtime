@@ -26,10 +26,12 @@ import (
 	"github.com/carlos/spinner/internal/gateway"
 	"github.com/carlos/spinner/internal/heartbeat"
 	"github.com/carlos/spinner/internal/httpapi"
+	"github.com/carlos/spinner/internal/llm"
+	"github.com/carlos/spinner/internal/llm/anthropic"
 	"github.com/carlos/spinner/internal/llm/grounded"
+	"github.com/carlos/spinner/internal/llm/openai"
 	"github.com/carlos/spinner/internal/llm/promptpolicy"
 	"github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/llm/zai"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/scheduler"
@@ -141,12 +143,33 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}
 	}
 
-	responder := zai.New(zai.Config{
-		APIKey:  cfg.ZAIAPIKey,
-		BaseURL: cfg.ZAIBaseURL,
-		Model:   cfg.ZAIModel,
-		Timeout: time.Duration(cfg.ZAITimeoutSec) * time.Second,
-	}, logger.With("component", "llm-zai"))
+	var responder llm.Responder
+	switch strings.ToLower(cfg.LLMProvider) {
+	case "anthropic", "claude":
+		responder = anthropic.New(anthropic.Config{
+			APIKey:  cfg.LLMAPIKey,
+			BaseURL: cfg.LLMBaseURL,
+			Model:   cfg.LLMModel,
+			Timeout: time.Duration(cfg.LLMTimeoutSec) * time.Second,
+		}, logger.With("component", "llm-anthropic"))
+	case "openai", "z.ai", "local":
+		// Default to OpenAI adapter for z.ai and local as well
+		responder = openai.New(openai.Config{
+			APIKey:  cfg.LLMAPIKey,
+			BaseURL: cfg.LLMBaseURL,
+			Model:   cfg.LLMModel,
+			Timeout: time.Duration(cfg.LLMTimeoutSec) * time.Second,
+		}, logger.With("component", "llm-openai"))
+	default:
+		// Fallback to OpenAI
+		responder = openai.New(openai.Config{
+			APIKey:  cfg.LLMAPIKey,
+			BaseURL: cfg.LLMBaseURL,
+			Model:   cfg.LLMModel,
+			Timeout: time.Duration(cfg.LLMTimeoutSec) * time.Second,
+		}, logger.With("component", "llm-openai"))
+	}
+
 	policyResponder := promptpolicy.New(responder, sqlStore, promptpolicy.Config{
 		WorkspaceRoot:        cfg.WorkspaceRoot,
 		AdminSystemPrompt:    cfg.LLMAdminSystemPrompt,

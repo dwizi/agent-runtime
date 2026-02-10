@@ -54,10 +54,13 @@ type Config struct {
 	IMAPMailbox               string
 	IMAPPollSeconds           int
 	IMAPTLSSkipVerify         bool
-	ZAIAPIKey                 string
-	ZAIBaseURL                string
-	ZAIModel                  string
-	ZAITimeoutSec             int
+
+	LLMProvider   string // openai | anthropic
+	LLMBaseURL    string
+	LLMAPIKey     string
+	LLMModel      string
+	LLMTimeoutSec int
+
 	SMTPHost                  string
 	SMTPPort                  int
 	SMTPUsername              string
@@ -150,10 +153,13 @@ func FromEnv() Config {
 		IMAPMailbox:               stringOrDefault("SPINNER_IMAP_MAILBOX", "INBOX"),
 		IMAPPollSeconds:           intOrDefault("SPINNER_IMAP_POLL_SECONDS", 60),
 		IMAPTLSSkipVerify:         boolOrDefault("SPINNER_IMAP_TLS_SKIP_VERIFY", false),
-		ZAIAPIKey:                 os.Getenv("SPINNER_ZAI_API_KEY"),
-		ZAIBaseURL:                stringOrDefault("SPINNER_ZAI_BASE_URL", "https://api.z.ai/api/paas/v4"),
-		ZAIModel:                  stringOrDefault("SPINNER_ZAI_MODEL", "glm-4.7-flash"),
-		ZAITimeoutSec:             intOrDefault("SPINNER_ZAI_TIMEOUT_SECONDS", 45),
+
+		LLMProvider:   stringOrDefault("SPINNER_LLM_PROVIDER", "openai"),
+		LLMBaseURL:    stringOrDefault("SPINNER_LLM_BASE_URL", "https://api.openai.com/v1"),
+		LLMAPIKey:     strings.TrimSpace(os.Getenv("SPINNER_LLM_API_KEY")),
+		LLMModel:      stringOrDefault("SPINNER_LLM_MODEL", "gpt-4o"),
+		LLMTimeoutSec: intOrDefault("SPINNER_LLM_TIMEOUT_SECONDS", 60),
+
 		SMTPHost:                  strings.TrimSpace(os.Getenv("SPINNER_SMTP_HOST")),
 		SMTPPort:                  intOrDefault("SPINNER_SMTP_PORT", 587),
 		SMTPUsername:              strings.TrimSpace(os.Getenv("SPINNER_SMTP_USERNAME")),

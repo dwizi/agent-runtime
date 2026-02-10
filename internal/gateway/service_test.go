@@ -593,6 +593,38 @@ func TestHandleAutoTriageQuestionWithoutFollowUpSkipsTask(t *testing.T) {
 	}
 }
 
+func TestHandleAutoTriageFallsBackToAgentWhenLegacySkips(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	ack := &fakeTriageAcknowledger{
+		reply: "I ran some checks and here is the answer.",
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback agent response to handle conversational message")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "answer") {
+		t.Fatalf("expected fallback reply, got %q", output.Reply)
+	}
+	if fStore.lastTask.ID != "" {
+		t.Fatalf("expected no routed task, got %s", fStore.lastTask.ID)
+	}
+	if ack.callCount != 1 {
+		t.Fatalf("expected one llm call from fallback agent, got %d", ack.callCount)
+	}
+}
+
 func TestHandleAutoTriageQuestionWithExternalResearchRoutesTask(t *testing.T) {
 	fStore := &fakeStore{}
 	service := New(fStore, &fakeEngine{}, nil, nil)
@@ -614,6 +646,35 @@ func TestHandleAutoTriageQuestionWithExternalResearchRoutesTask(t *testing.T) {
 	}
 	if fStore.lastTask.RouteClass != "question" {
 		t.Fatalf("expected question route class, got %s", fStore.lastTask.RouteClass)
+	}
+}
+
+func TestHandleAutoTriageLegacyRoutingSkipsAgentFallback(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	ack := &fakeTriageAcknowledger{
+		reply: "Absolutely - I am investigating and will report back shortly.",
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "There is a bug in the onboarding flow and it keeps failing",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected legacy triage to handle routed issue")
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected routed task to be created")
+	}
+	if ack.callCount != 1 {
+		t.Fatalf("expected one llm call for triage ack only, got %d", ack.callCount)
 	}
 }
 

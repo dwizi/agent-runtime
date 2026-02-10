@@ -28,12 +28,14 @@ If you need to force architecture (for example, run x86_64 images on arm64 hosts
 
 Minimum for production bootstrap:
 
-- `SPINNER_ZAI_API_KEY`
+- `SPINNER_LLM_PROVIDER` (default `openai`; set to `anthropic` for Claude, and configure `SPINNER_LLM_BASE_URL`, `SPINNER_LLM_MODEL`, and `SPINNER_LLM_API_KEY` as needed)
 - `SPINNER_DISCORD_TOKEN` (if enabling Discord)
 - `SPINNER_TELEGRAM_TOKEN` (if enabling Telegram)
 - `PUBLIC_HOST`
 - `ADMIN_HOST`
 - `ACME_EMAIL`
+
+`SPINNER_LLM_API_KEY` is required for authenticated remote providers (OpenAI, Z.ai, Claude) but may stay empty when pointing `SPINNER_LLM_BASE_URL` at a local Ollama/vLLM endpoint.
 
 Optional but recommended for connector command UX:
 - `SPINNER_COMMAND_SYNC_ENABLED=true`
