@@ -82,6 +82,8 @@ Skill template loading order:
 6. global common (`SPINNER_SKILLS_GLOBAL_ROOT/common`)
 
 Notes:
+- LLM endpoint is OpenAI-compatible `POST /chat/completions`. You can point it to local Qwen (for example Ollama/vLLM) by setting `SPINNER_ZAI_BASE_URL` to a local URL and `SPINNER_ZAI_MODEL` to your local model name.
+- `SPINNER_ZAI_API_KEY` is required for `api.z.ai`; for local endpoints it can be left empty.
 - workspace templates override global templates when filenames match.
 - templates are summarized into system prompt context; keep each file concise.
 

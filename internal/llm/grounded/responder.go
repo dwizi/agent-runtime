@@ -64,6 +64,9 @@ func (r *Responder) buildPrompt(ctx context.Context, input llm.MessageInput) str
 	if original == "" {
 		return original
 	}
+	if input.SkipGrounding {
+		return original
+	}
 	if r.retriever == nil || strings.TrimSpace(input.WorkspaceID) == "" {
 		return original
 	}

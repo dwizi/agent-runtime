@@ -136,22 +136,29 @@ func (p *Plugin) resolveWorkingDir(approval store.ActionApproval) (string, error
 
 func parseCommand(approval store.ActionApproval) (string, []string, error) {
 	command := strings.TrimSpace(approval.ActionTarget)
+	commandFromPayload := getString(approval.Payload, "command")
+	args := []string{}
+	if rawArgs, ok := getPayloadValue(approval.Payload, "args"); ok && rawArgs != nil {
+		parsed, err := parseArgs(rawArgs)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, parsed...)
+	}
+	payloadCommand, payloadArgs := splitCommandString(commandFromPayload)
 	if command == "" {
-		command = getString(approval.Payload, "command")
+		command = payloadCommand
+	} else if payloadCommand != "" && !strings.EqualFold(command, payloadCommand) {
+		return "", nil, fmt.Errorf("payload.command executable must match target")
+	}
+	if len(args) == 0 && len(payloadArgs) > 0 {
+		args = append(args, payloadArgs...)
 	}
 	if command == "" {
 		return "", nil, fmt.Errorf("command action requires target or payload.command")
 	}
 	if strings.Contains(command, "/") || strings.Contains(command, "\\") || strings.ContainsAny(command, " \t\r\n") {
 		return "", nil, fmt.Errorf("command must be a bare executable name")
-	}
-	args := []string{}
-	if rawArgs, ok := approval.Payload["args"]; ok && rawArgs != nil {
-		parsed, err := parseArgs(rawArgs)
-		if err != nil {
-			return "", nil, err
-		}
-		args = append(args, parsed...)
 	}
 	if len(args) > 32 {
 		return "", nil, fmt.Errorf("too many arguments")
@@ -162,6 +169,17 @@ func parseCommand(approval store.ActionApproval) (string, []string, error) {
 		}
 	}
 	return command, args, nil
+}
+
+func splitCommandString(command string) (string, []string) {
+	parts := strings.Fields(strings.TrimSpace(command))
+	if len(parts) == 0 {
+		return "", nil
+	}
+	if len(parts) == 1 {
+		return parts[0], nil
+	}
+	return parts[0], parts[1:]
 }
 
 func parseArgs(value any) ([]string, error) {
@@ -186,10 +204,7 @@ func parseArgs(value any) ([]string, error) {
 }
 
 func getString(payload map[string]any, key string) string {
-	if payload == nil {
-		return ""
-	}
-	value, ok := payload[key]
+	value, ok := getPayloadValue(payload, key)
 	if !ok || value == nil {
 		return ""
 	}
@@ -199,6 +214,25 @@ func getString(payload map[string]any, key string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", value))
 	}
+}
+
+func getPayloadValue(payload map[string]any, key string) (any, bool) {
+	if payload == nil {
+		return nil, false
+	}
+	if value, ok := payload[key]; ok {
+		return value, true
+	}
+	nestedRaw, ok := payload["payload"]
+	if !ok || nestedRaw == nil {
+		return nil, false
+	}
+	nested, ok := nestedRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	value, ok := nested[key]
+	return value, ok
 }
 
 func isWithin(path, base string) bool {
@@ -220,8 +254,8 @@ func compactOutput(output string, truncated bool) string {
 	if truncated {
 		return trimmed + " ... [truncated]"
 	}
-	if len(trimmed) > 280 {
-		return trimmed[:280] + "..."
+	if len(trimmed) > 1600 {
+		return trimmed[:1600] + "..."
 	}
 	return trimmed
 }

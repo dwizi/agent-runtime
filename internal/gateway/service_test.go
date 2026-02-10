@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions/executor"
+	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/store"
@@ -26,6 +27,8 @@ type fakeStore struct {
 	actionApprovals        []store.ActionApproval
 	lastExecutionUpdate    store.UpdateActionExecutionInput
 	executionUpdateInvoked bool
+	lastObjective          store.CreateObjectiveInput
+	objectiveInvoked       bool
 }
 
 func (f *fakeStore) EnsureContextForExternalChannel(ctx context.Context, connector, externalID, displayName string) (store.ContextRecord, error) {
@@ -211,6 +214,21 @@ func (f *fakeStore) UpdateActionExecution(ctx context.Context, input store.Updat
 	return store.ActionApproval{}, store.ErrActionApprovalNotFound
 }
 
+func (f *fakeStore) CreateObjective(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error) {
+	f.objectiveInvoked = true
+	f.lastObjective = input
+	return store.Objective{
+		ID:              "obj-1",
+		WorkspaceID:     input.WorkspaceID,
+		ContextID:       input.ContextID,
+		Title:           input.Title,
+		Prompt:          input.Prompt,
+		TriggerType:     input.TriggerType,
+		IntervalSeconds: input.IntervalSeconds,
+		Active:          input.Active,
+	}, nil
+}
+
 type fakeEngine struct {
 	lastTask orchestrator.Task
 }
@@ -235,6 +253,13 @@ type fakeActionExecutor struct {
 	err    error
 }
 
+type fakeTriageAcknowledger struct {
+	reply     string
+	err       error
+	callCount int
+	lastInput llm.MessageInput
+}
+
 type fakeRoutingNotifier struct {
 	lastDecision RouteDecision
 	invoked      bool
@@ -250,6 +275,15 @@ func (f *fakeActionExecutor) Execute(ctx context.Context, approval store.ActionA
 		return executor.Result{}, f.err
 	}
 	return f.result, nil
+}
+
+func (f *fakeTriageAcknowledger) Reply(ctx context.Context, input llm.MessageInput) (string, error) {
+	f.callCount++
+	f.lastInput = input
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.reply, nil
 }
 
 func (f *fakeRetriever) Search(ctx context.Context, workspaceID, query string, limit int) ([]qmd.SearchResult, error) {
@@ -443,10 +477,10 @@ func TestHandleRoutesUnknownMessage(t *testing.T) {
 		t.Fatalf("handle message failed: %v", err)
 	}
 	if output.Handled {
-		t.Fatal("expected routed unknown message to stay silent in origin channel")
+		t.Fatal("expected unknown conversational message to pass through")
 	}
-	if fStore.lastTask.ID == "" {
-		t.Fatal("expected unknown message to produce triaged task")
+	if fStore.lastTask.ID != "" {
+		t.Fatal("expected unknown message to skip task routing")
 	}
 }
 
@@ -467,8 +501,11 @@ func TestHandleAutoTriageCreatesTaskAndNotifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle message failed: %v", err)
 	}
-	if output.Handled {
-		t.Fatal("expected auto triage to be silent in origin channel")
+	if !output.Handled {
+		t.Fatal("expected auto triage to acknowledge in origin channel")
+	}
+	if strings.TrimSpace(output.Reply) == "" {
+		t.Fatal("expected acknowledgement reply")
 	}
 	if fStore.lastTask.ID == "" {
 		t.Fatal("expected triaged task to be created")
@@ -484,6 +521,84 @@ func TestHandleAutoTriageCreatesTaskAndNotifies(t *testing.T) {
 	}
 	if notifier.lastDecision.TaskID == "" {
 		t.Fatal("expected notifier decision to include task id")
+	}
+}
+
+func TestHandleAutoTriageUsesLLMAckWhenAvailable(t *testing.T) {
+	fStore := &fakeStore{}
+	fEngine := &fakeEngine{}
+	service := New(fStore, fEngine, nil, nil)
+	ack := &fakeTriageAcknowledger{
+		reply: "Absolutely - I am digging into this now and will report back shortly.",
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "There is a bug in the onboarding flow and it keeps failing",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected triage path to be handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "digging into this") {
+		t.Fatalf("expected llm-generated ack, got %q", output.Reply)
+	}
+	if ack.callCount != 1 {
+		t.Fatalf("expected one triage ack call, got %d", ack.callCount)
+	}
+	if !strings.Contains(strings.ToLower(ack.lastInput.Text), "route class: issue") {
+		t.Fatalf("expected route class in ack prompt, got %q", ack.lastInput.Text)
+	}
+	if !ack.lastInput.SkipGrounding {
+		t.Fatal("expected triage acknowledgement to skip grounding")
+	}
+}
+
+func TestHandleAutoTriageQuestionWithoutFollowUpSkipsTask(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector: "telegram",
+		Text:      "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if output.Handled {
+		t.Fatal("expected normal question to pass through to conversational responder")
+	}
+	if fStore.lastTask.ID != "" {
+		t.Fatalf("expected no triaged task, got %s", fStore.lastTask.ID)
+	}
+}
+
+func TestHandleAutoTriageQuestionWithExternalResearchRoutesTask(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "can you run a search in dwizi.com and tell me pricing?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected external research question to route and acknowledge")
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected triaged task for external research question")
+	}
+	if fStore.lastTask.RouteClass != "question" {
+		t.Fatalf("expected question route class, got %s", fStore.lastTask.RouteClass)
 	}
 }
 
@@ -744,6 +859,33 @@ func TestHandlePromptSetCommand(t *testing.T) {
 	}
 	if !strings.Contains(output.Reply, "updated") {
 		t.Fatalf("expected updated message, got %s", output.Reply)
+	}
+}
+
+func TestHandleMonitorNaturalLanguageIntentCreatesObjective(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "set an alert and monitor dwizi pricing changes",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected monitor intent to be handled")
+	}
+	if !fStore.objectiveInvoked {
+		t.Fatal("expected objective creation to be invoked")
+	}
+	if fStore.lastObjective.TriggerType != store.ObjectiveTriggerSchedule {
+		t.Fatalf("expected schedule trigger, got %s", fStore.lastObjective.TriggerType)
+	}
+	if fStore.lastObjective.IntervalSeconds != int((6 * time.Hour).Seconds()) {
+		t.Fatalf("expected 6h objective interval, got %d", fStore.lastObjective.IntervalSeconds)
 	}
 }
 

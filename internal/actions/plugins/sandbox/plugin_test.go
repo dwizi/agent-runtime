@@ -141,6 +141,68 @@ func TestExecuteWithRunnerCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteParsesArgsFromPayloadCommandString(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"curl"},
+		RunnerCommand:   "echo",
+		RunnerArgs:      []string{"runner"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "curl",
+		Payload: map[string]any{
+			"command": "curl -sS https://example.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "runner curl -sS https://example.com") {
+		t.Fatalf("unexpected parsed command output: %s", result.Message)
+	}
+}
+
+func TestExecuteParsesArgsFromNestedPayload(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"curl"},
+		RunnerCommand:   "echo",
+		RunnerArgs:      []string{"runner"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "curl",
+		Payload: map[string]any{
+			"payload": map[string]any{
+				"args": []any{"-sS", "https://example.com"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "runner curl -sS https://example.com") {
+		t.Fatalf("unexpected nested payload args output: %s", result.Message)
+	}
+}
+
 func TestSummarizeCommandOutcomeCurlRedirectHint(t *testing.T) {
 	message := summarizeCommandOutcome("curl", []string{"-sS", "https://example.com"}, "Redirecting to https://www.example.com", false)
 	if !strings.Contains(message, "curl stopped at an HTTP redirect") {

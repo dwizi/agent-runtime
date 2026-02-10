@@ -93,3 +93,31 @@ func TestReplyFallsBackOnSearchError(t *testing.T) {
 		t.Fatalf("expected original prompt, got %s", base.lastInput.Text)
 	}
 }
+
+func TestReplySkipsGroundingWhenRequested(t *testing.T) {
+	base := &fakeBase{reply: "ok"}
+	retriever := &fakeRetriever{
+		searchResults: []qmd.SearchResult{
+			{Path: "memory.md", Snippet: "summary"},
+		},
+		openByTarget: map[string]string{
+			"memory.md": "important memory block",
+		},
+	}
+	responder := New(base, retriever, Config{TopK: 1}, nil)
+	input := llm.MessageInput{
+		WorkspaceID:   "ws-1",
+		Text:          "plain prompt",
+		SkipGrounding: true,
+	}
+	_, err := responder.Reply(context.Background(), input)
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+	if base.lastInput.Text != "plain prompt" {
+		t.Fatalf("expected original prompt when grounding is skipped, got %s", base.lastInput.Text)
+	}
+	if strings.Contains(base.lastInput.Text, "Relevant workspace context") {
+		t.Fatalf("expected no grounding context, got %s", base.lastInput.Text)
+	}
+}

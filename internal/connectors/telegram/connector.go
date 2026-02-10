@@ -356,6 +356,15 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 			IsMention: isMention,
 		})
 		if !decision.Allowed {
+			c.logger.Info(
+				"telegram llm reply skipped by policy",
+				"reason", strings.TrimSpace(decision.Reason),
+				"context_id", contextRecord.ID,
+				"chat_id", strconv.FormatInt(message.Chat.ID, 10),
+				"user_id", strconv.FormatInt(message.From.ID, 10),
+				"is_dm", message.Chat.Type == "private",
+				"is_mention", isMention,
+			)
 			return "", strings.TrimSpace(decision.Notify), nil
 		}
 	}

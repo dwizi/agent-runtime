@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+var domainReferencePattern = regexp.MustCompile(`\b[a-z0-9][a-z0-9-]*\.[a-z]{2,}\b`)
+
 type TriageClass string
 
 const (
@@ -91,7 +93,18 @@ func classifyMessage(text string) (TriageClass, string) {
 	if looksLikeQuestion(normalized) {
 		return TriageQuestion, "question pattern"
 	}
-	return TriageTask, "default task routing"
+	return TriageNoise, "no routing intent"
+}
+
+func shouldAutoRouteDecision(decision RouteDecision) bool {
+	switch decision.Class {
+	case TriageModeration, TriageIssue, TriageTask:
+		return true
+	case TriageQuestion:
+		return questionNeedsExternalFollowUp(decision.SourceText)
+	default:
+		return false
+	}
 }
 
 func routingDefaults(class TriageClass) (priority TriagePriority, dueWindow time.Duration, lane string) {
@@ -249,6 +262,41 @@ func looksLikeTask(text string) bool {
 		"should", "please", "need to", "follow up", "action item", "assign", "schedule", "investigate", "publish",
 	}
 	return containsAny(text, keywords)
+}
+
+func questionNeedsExternalFollowUp(text string) bool {
+	normalized := normalizeForTriage(text)
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "http://") || strings.Contains(normalized, "https://") {
+		return true
+	}
+	if looksLikeDomainReference(normalized) {
+		return true
+	}
+	keywords := []string{
+		"run a search",
+		"search ",
+		"web search",
+		"look up",
+		"lookup",
+		"find ",
+		"check ",
+		"fetch ",
+		"pricing",
+		"price ",
+		"cost ",
+		"plans",
+		"monitor",
+		"track ",
+		"latest",
+	}
+	return containsAny(normalized, keywords)
+}
+
+func looksLikeDomainReference(text string) bool {
+	return domainReferencePattern.MatchString(text)
 }
 
 func containsAny(text string, keywords []string) bool {

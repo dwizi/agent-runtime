@@ -11,30 +11,54 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions"
+	actionexecutor "github.com/carlos/spinner/internal/actions/executor"
 	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/store"
 )
 
-type taskWorkerExecutor struct {
-	workspaceRoot string
-	store         *store.Store
-	responder     llm.Responder
-	qmd           *qmd.Service
-	logger        *slog.Logger
+const (
+	defaultAutonomousTaskMaxSteps = 4
+	autonomousObservationMaxBytes = 1200
+	autonomousPromptMaxBytes      = 7000
+	autonomousSummaryMaxBytes     = 1800
+	autonomousSummaryPromptBytes  = 7000
+)
+
+type taskActionExecutor interface {
+	Execute(ctx context.Context, approval store.ActionApproval) (actionexecutor.Result, error)
 }
 
-func newTaskWorkerExecutor(workspaceRoot string, storeRef *store.Store, responder llm.Responder, qmdService *qmd.Service, logger *slog.Logger) *taskWorkerExecutor {
+type taskWorkerExecutor struct {
+	workspaceRoot      string
+	store              *store.Store
+	responder          llm.Responder
+	qmd                *qmd.Service
+	actionExecutor     taskActionExecutor
+	maxAutonomousSteps int
+	logger             *slog.Logger
+}
+
+func newTaskWorkerExecutor(
+	workspaceRoot string,
+	storeRef *store.Store,
+	responder llm.Responder,
+	qmdService *qmd.Service,
+	actionExecutor taskActionExecutor,
+	logger *slog.Logger,
+) *taskWorkerExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &taskWorkerExecutor{
-		workspaceRoot: strings.TrimSpace(workspaceRoot),
-		store:         storeRef,
-		responder:     responder,
-		qmd:           qmdService,
-		logger:        logger,
+		workspaceRoot:      strings.TrimSpace(workspaceRoot),
+		store:              storeRef,
+		responder:          responder,
+		qmd:                qmdService,
+		actionExecutor:     actionExecutor,
+		maxAutonomousSteps: defaultAutonomousTaskMaxSteps,
+		logger:             logger,
 	}
 }
 
@@ -90,21 +114,33 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 		return orchestrator.TaskResult{}, fmt.Errorf("task prompt is empty")
 	}
 
-	reply, err := e.responder.Reply(ctx, llm.MessageInput{
-		Connector:   "orchestrator",
-		WorkspaceID: task.WorkspaceID,
-		ContextID:   task.ContextID,
-		ExternalID:  task.ContextID,
-		DisplayName: task.Title,
-		FromUserID:  "system:task-worker",
-		Text:        prompt,
-		IsDM:        false,
-	})
-	if err != nil {
-		return orchestrator.TaskResult{}, err
+	taskRecord, hasTaskRecord := e.lookupTaskRecord(ctx, task.ID)
+	reply := ""
+	if e.shouldRunAutonomousTask(taskRecord, hasTaskRecord) {
+		autonomousReply, err := e.runAutonomousTask(ctx, task, taskRecord, prompt)
+		if err != nil {
+			return orchestrator.TaskResult{}, err
+		}
+		reply = autonomousReply
+	} else {
+		skipGrounding := task.Kind == orchestrator.TaskKindGeneral
+		directReply, err := e.responder.Reply(ctx, llm.MessageInput{
+			Connector:     "orchestrator",
+			WorkspaceID:   task.WorkspaceID,
+			ContextID:     task.ContextID,
+			ExternalID:    task.ContextID,
+			DisplayName:   task.Title,
+			FromUserID:    "system:task-worker",
+			Text:          prompt,
+			IsDM:          false,
+			SkipGrounding: skipGrounding,
+		})
+		if err != nil {
+			return orchestrator.TaskResult{}, err
+		}
+		reply = e.resolveActionProposal(ctx, task, strings.TrimSpace(directReply))
 	}
 	reply = strings.TrimSpace(reply)
-	reply = e.resolveActionProposal(ctx, task, reply)
 	if reply == "" {
 		reply = "No output produced."
 	}
@@ -117,7 +153,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 		e.qmd.QueueWorkspaceIndex(task.WorkspaceID)
 	}
 	return orchestrator.TaskResult{
-		Summary:      summarizeTaskReply(reply),
+		Summary:      summarizeTaskReplyForNotification(reply, taskRecord, hasTaskRecord),
 		ArtifactPath: resultPath,
 	}, nil
 }
@@ -168,6 +204,272 @@ func summarizeTaskReply(reply string) string {
 	return text
 }
 
+func summarizeTaskReplyForNotification(reply string, taskRecord store.TaskRecord, hasTaskRecord bool) string {
+	if hasTaskRecord && strings.TrimSpace(taskRecord.RouteClass) != "" {
+		return truncatePreservingLines(reply, 1400)
+	}
+	return summarizeTaskReply(reply)
+}
+
+func truncatePreservingLines(input string, maxLen int) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "task completed"
+	}
+	if maxLen < 1 || len(trimmed) <= maxLen {
+		return trimmed
+	}
+	return strings.TrimSpace(trimmed[:maxLen]) + "..."
+}
+
+func (e *taskWorkerExecutor) lookupTaskRecord(ctx context.Context, taskID string) (store.TaskRecord, bool) {
+	if e.store == nil || strings.TrimSpace(taskID) == "" {
+		return store.TaskRecord{}, false
+	}
+	record, err := e.store.LookupTask(ctx, taskID)
+	if err != nil {
+		return store.TaskRecord{}, false
+	}
+	return record, true
+}
+
+func (e *taskWorkerExecutor) shouldRunAutonomousTask(taskRecord store.TaskRecord, hasTaskRecord bool) bool {
+	if e.actionExecutor == nil || e.responder == nil {
+		return false
+	}
+	if !hasTaskRecord {
+		return false
+	}
+	return strings.TrimSpace(taskRecord.RouteClass) != ""
+}
+
+func (e *taskWorkerExecutor) runAutonomousTask(ctx context.Context, task orchestrator.Task, taskRecord store.TaskRecord, prompt string) (string, error) {
+	maxSteps := e.maxAutonomousSteps
+	if maxSteps < 1 {
+		maxSteps = defaultAutonomousTaskMaxSteps
+	}
+	observationLog := []string{}
+	latestDraft := ""
+
+	for step := 1; step <= maxSteps; step++ {
+		iterationPrompt := buildAutonomousPrompt(prompt, latestDraft, observationLog)
+		reply, err := e.responder.Reply(ctx, llm.MessageInput{
+			Connector:     "orchestrator",
+			WorkspaceID:   task.WorkspaceID,
+			ContextID:     task.ContextID,
+			ExternalID:    task.ContextID,
+			DisplayName:   task.Title,
+			FromUserID:    "system:task-worker",
+			Text:          iterationPrompt,
+			IsDM:          false,
+			SkipGrounding: true,
+		})
+		if err != nil {
+			return "", err
+		}
+
+		cleanReply, proposal := actions.ExtractProposal(strings.TrimSpace(reply))
+		cleanReply = strings.TrimSpace(cleanReply)
+		if cleanReply != "" {
+			latestDraft = cleanReply
+		}
+		if proposal == nil {
+			return strings.TrimSpace(cleanReply), nil
+		}
+		if !isAutonomousProposalSupported(proposal) {
+			return e.resolveActionProposalWithRecord(ctx, task, taskRecord, strings.TrimSpace(reply)), nil
+		}
+
+		execResult, err := e.actionExecutor.Execute(ctx, store.ActionApproval{
+			WorkspaceID:   strings.TrimSpace(task.WorkspaceID),
+			ContextID:     strings.TrimSpace(task.ContextID),
+			ActionType:    strings.TrimSpace(proposal.Type),
+			ActionTarget:  strings.TrimSpace(proposal.Target),
+			ActionSummary: strings.TrimSpace(proposal.Summary),
+			Payload:       cloneProposalPayload(proposal),
+		})
+		if err != nil {
+			observationLog = append(observationLog, truncatePreservingLines(fmt.Sprintf("Step %d `%s` failed: %s", step, proposalActionLabel(proposal), err.Error()), autonomousObservationMaxBytes))
+			continue
+		}
+		message := strings.TrimSpace(execResult.Message)
+		if message == "" {
+			message = "Command completed successfully with no output."
+		}
+		observationLog = append(observationLog, truncatePreservingLines(fmt.Sprintf("Step %d `%s`: %s", step, proposalActionLabel(proposal), message), autonomousObservationMaxBytes))
+	}
+	return e.finalizeAutonomousTaskReply(ctx, task, prompt, latestDraft, observationLog), nil
+}
+
+func buildAutonomousPrompt(goal, latestDraft string, observations []string) string {
+	lines := []string{
+		"You are executing a routed task asynchronously and must complete it end-to-end for the user.",
+		"Goal:",
+		strings.TrimSpace(goal),
+		"",
+		"Rules:",
+		"- If you need more data, return exactly one `action` fenced JSON block.",
+		"- Use only `run_command` with target `curl` for autonomous execution.",
+		"- Prefer `curl -sSL` for pages so redirects are followed.",
+		"- If homepage lacks the answer, fetch likely subpages or run a web-search URL with curl.",
+		"- When the answer is sufficient, return a direct natural-language reply with concrete findings.",
+		"- If evidence is incomplete after attempts, state uncertainty clearly and provide the best evidence-backed outcome.",
+	}
+	if len(observations) > 0 {
+		lines = append(lines, "", "Executed steps so far:")
+		for index, item := range observations {
+			lines = append(lines, fmt.Sprintf("%d. %s", index+1, strings.TrimSpace(item)))
+		}
+	}
+	if strings.TrimSpace(latestDraft) != "" {
+		lines = append(lines, "", "Latest draft answer (revise if needed):", strings.TrimSpace(latestDraft))
+	}
+	prompt := strings.TrimSpace(strings.Join(lines, "\n"))
+	if len(prompt) > autonomousPromptMaxBytes {
+		return prompt[:autonomousPromptMaxBytes]
+	}
+	return prompt
+}
+
+func (e *taskWorkerExecutor) finalizeAutonomousTaskReply(
+	ctx context.Context,
+	task orchestrator.Task,
+	goal string,
+	latestDraft string,
+	observations []string,
+) string {
+	if e.responder != nil {
+		summaryPrompt := buildAutonomousSummaryPrompt(goal, latestDraft, observations)
+		reply, err := e.responder.Reply(ctx, llm.MessageInput{
+			Connector:     "orchestrator",
+			WorkspaceID:   task.WorkspaceID,
+			ContextID:     task.ContextID,
+			ExternalID:    task.ContextID,
+			DisplayName:   task.Title,
+			FromUserID:    "system:task-worker",
+			Text:          summaryPrompt,
+			IsDM:          false,
+			SkipGrounding: true,
+		})
+		if err == nil {
+			cleanReply, _ := actions.ExtractProposal(strings.TrimSpace(reply))
+			clean := sanitizeAutonomousSummary(cleanReply)
+			if clean != "" {
+				return clean
+			}
+		}
+	}
+	return fallbackAutonomousSummary(goal, latestDraft, observations)
+}
+
+func buildAutonomousSummaryPrompt(goal, latestDraft string, observations []string) string {
+	lines := []string{
+		"Synthesize the final user-facing task result.",
+		"Rules:",
+		"- Return plain natural language only (no code fences, no action blocks).",
+		"- Ground the answer in the execution observations provided.",
+		"- If evidence is incomplete, explicitly state what is known and unknown.",
+		"- Keep the response concise but complete.",
+		"Task goal:",
+		strings.TrimSpace(goal),
+	}
+	if strings.TrimSpace(latestDraft) != "" {
+		lines = append(lines, "Latest draft candidate:", strings.TrimSpace(latestDraft))
+	}
+	if len(observations) > 0 {
+		lines = append(lines, "Execution observations:")
+		for index, item := range observations {
+			lines = append(lines, fmt.Sprintf("%d. %s", index+1, strings.TrimSpace(item)))
+		}
+	} else {
+		lines = append(lines, "Execution observations:", "none")
+	}
+	prompt := strings.TrimSpace(strings.Join(lines, "\n"))
+	if len(prompt) > autonomousSummaryPromptBytes {
+		return prompt[:autonomousSummaryPromptBytes]
+	}
+	return prompt
+}
+
+func sanitizeAutonomousSummary(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, "```", "")
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	trimmed = strings.Trim(trimmed, "`\"'")
+	if trimmed == "" {
+		return ""
+	}
+	if len(trimmed) > autonomousSummaryMaxBytes {
+		trimmed = strings.TrimSpace(trimmed[:autonomousSummaryMaxBytes]) + "..."
+	}
+	return trimmed
+}
+
+func fallbackAutonomousSummary(goal, latestDraft string, observations []string) string {
+	if strings.TrimSpace(latestDraft) != "" {
+		if len(observations) == 0 {
+			return sanitizeAutonomousSummary(latestDraft)
+		}
+		return sanitizeAutonomousSummary(latestDraft + "\n\nThis summary is based on automated retrieval steps completed for the task.")
+	}
+	lines := []string{
+		"I completed automated follow-up for this task but could not produce a definitive final answer yet.",
+	}
+	if strings.TrimSpace(goal) != "" {
+		lines = append(lines, "Goal: "+strings.TrimSpace(goal))
+	}
+	if len(observations) > 0 {
+		lines = append(lines, "Observed results:")
+		for _, item := range observations {
+			lines = append(lines, "- "+strings.TrimSpace(item))
+		}
+	} else {
+		lines = append(lines, "No usable execution observations were produced.")
+	}
+	lines = append(lines, "If you want, I can continue with additional retrieval steps or a narrower target.")
+	return sanitizeAutonomousSummary(strings.Join(lines, "\n"))
+}
+
+func isAutonomousProposalSupported(proposal *actions.Proposal) bool {
+	if proposal == nil {
+		return false
+	}
+	actionType := strings.ToLower(strings.TrimSpace(proposal.Type))
+	if actionType != "run_command" && actionType != "shell_command" && actionType != "cli_command" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(proposal.Target), "curl")
+}
+
+func cloneProposalPayload(proposal *actions.Proposal) map[string]any {
+	payload := map[string]any{}
+	if proposal == nil {
+		return payload
+	}
+	for key, value := range proposal.Raw {
+		payload[key] = value
+	}
+	return payload
+}
+
+func proposalActionLabel(proposal *actions.Proposal) string {
+	if proposal == nil {
+		return "action"
+	}
+	target := strings.TrimSpace(proposal.Target)
+	actionType := strings.TrimSpace(proposal.Type)
+	if target == "" {
+		return actionType
+	}
+	if actionType == "" {
+		return target
+	}
+	return actionType + " " + target
+}
+
 func (e *taskWorkerExecutor) resolveActionProposal(ctx context.Context, task orchestrator.Task, reply string) string {
 	cleanReply, proposal := actions.ExtractProposal(strings.TrimSpace(reply))
 	if proposal == nil {
@@ -184,6 +486,20 @@ func (e *taskWorkerExecutor) resolveActionProposal(ctx context.Context, task orc
 		e.logger.Error("lookup task for action approval failed", "task_id", task.ID, "error", err)
 		if strings.TrimSpace(cleanReply) == "" {
 			return "Action request generated but could not be linked to a channel."
+		}
+		return strings.TrimSpace(cleanReply)
+	}
+	return e.resolveActionProposalWithRecord(ctx, task, taskRecord, strings.TrimSpace(reply))
+}
+
+func (e *taskWorkerExecutor) resolveActionProposalWithRecord(ctx context.Context, task orchestrator.Task, taskRecord store.TaskRecord, reply string) string {
+	cleanReply, proposal := actions.ExtractProposal(strings.TrimSpace(reply))
+	if proposal == nil {
+		return strings.TrimSpace(cleanReply)
+	}
+	if e.store == nil {
+		if strings.TrimSpace(cleanReply) == "" {
+			return "Action request generated but approvals storage is unavailable."
 		}
 		return strings.TrimSpace(cleanReply)
 	}

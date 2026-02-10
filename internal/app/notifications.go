@@ -184,7 +184,7 @@ func buildTaskSuccessMessage(task orchestrator.Task, result orchestrator.TaskRes
 		summary = "Done."
 	}
 	if hasTaskRecord && strings.TrimSpace(taskRecord.RouteClass) != "" {
-		return compactLineBreaks(truncateSingleLine(summary, 1400), 1400)
+		return truncateWithEllipsis(summary, 1400)
 	}
 	kind := strings.TrimSpace(string(task.Kind))
 	if kind == "" {
@@ -259,6 +259,14 @@ func truncateSingleLine(input string, maxLen int) string {
 }
 
 func compactLineBreaks(input string, maxLen int) string {
+	trimmed := strings.TrimSpace(input)
+	if maxLen < 1 || len(trimmed) <= maxLen {
+		return trimmed
+	}
+	return strings.TrimSpace(trimmed[:maxLen]) + "..."
+}
+
+func truncateWithEllipsis(input string, maxLen int) string {
 	trimmed := strings.TrimSpace(input)
 	if maxLen < 1 || len(trimmed) <= maxLen {
 		return trimmed

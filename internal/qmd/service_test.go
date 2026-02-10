@@ -138,6 +138,62 @@ func TestSearchFallsBackWhenQueryExpansionIsKilled(t *testing.T) {
 	}
 }
 
+func TestSearchUsesFastBM25ForLongMultilinePrompts(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-search-fast"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	runner := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			args := strings.Join(cmd.Args, " ")
+			switch {
+			case strings.Contains(args, " search "):
+				return []byte(`[{"path":"context.md","docid":"#ctx","score":0.55,"snippet":"routing context"}]`), nil
+			default:
+				return []byte("ok"), nil
+			}
+		},
+	}
+	service := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runner,
+	)
+
+	longPrompt := "Routed inbound community message for follow-up.\nClassification: question.\nOriginal message: can you run a search in dwizi.com? like what is the pricing"
+	results, err := service.Search(context.Background(), workspaceID, longPrompt, 3)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one result, got %d", len(results))
+	}
+
+	calls := runner.callsSnapshot()
+	seenSearch := false
+	seenQuery := false
+	for _, call := range calls {
+		if strings.Contains(call, " search ") {
+			seenSearch = true
+		}
+		if strings.Contains(call, " query ") {
+			seenQuery = true
+		}
+	}
+	if !seenSearch {
+		t.Fatalf("expected BM25 search call, got %v", calls)
+	}
+	if seenQuery {
+		t.Fatalf("expected query-expansion to be skipped for long prompt, got %v", calls)
+	}
+}
+
 func TestSearchFallsBackWhenQueryExpansionTimesOut(t *testing.T) {
 	root := t.TempDir()
 	workspaceID := "ws-query-timeout-fallback"
@@ -192,6 +248,51 @@ func TestSearchFallsBackWhenQueryExpansionTimesOut(t *testing.T) {
 	}
 	if !seenQuery || !seenSearch {
 		t.Fatalf("expected query then search fallback calls, got %v", calls)
+	}
+}
+
+func TestSearchReturnsEmptyAndQueuesIndexWhenCollectionMissing(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-search-missing-index"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	runner := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			args := strings.Join(cmd.Args, " ")
+			if strings.Contains(args, " query ") {
+				return []byte("Collection 'workspace' not found"), errors.New("exit status 1")
+			}
+			return []byte("ok"), nil
+		},
+	}
+	service := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+			Debounce:      time.Hour,
+		},
+		slog.Default(),
+		runner,
+	)
+	defer service.Close()
+
+	results, err := service.Search(context.Background(), workspaceID, "pricing", 3)
+	if err != nil {
+		t.Fatalf("expected missing index to be handled gracefully, got %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected no results when collection is missing, got %d", len(results))
+	}
+
+	status, statusErr := service.Status(context.Background(), workspaceID)
+	if statusErr != nil {
+		t.Fatalf("status failed: %v", statusErr)
+	}
+	if !status.Pending {
+		t.Fatal("expected async indexing to be queued after missing collection")
 	}
 }
 
@@ -490,6 +591,93 @@ func TestIndexWorkspaceEnsuresCollectionOnlyOncePerWorkspace(t *testing.T) {
 	}
 	if updateCalls != 2 {
 		t.Fatalf("expected two update calls, got %d (all calls=%v)", updateCalls, calls)
+	}
+}
+
+func TestIndexWorkspaceSkipsCollectionAddWhenMarkerExistsAcrossServiceInstances(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-collection-marker"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	runnerA := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	serviceA := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runnerA,
+	)
+	if err := serviceA.IndexWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("first service index workspace failed: %v", err)
+	}
+	serviceA.Close()
+
+	runnerB := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	serviceB := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runnerB,
+	)
+	if err := serviceB.IndexWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("second service index workspace failed: %v", err)
+	}
+
+	calls := runnerB.callsSnapshot()
+	for _, call := range calls {
+		if strings.Contains(call, " collection add ") {
+			t.Fatalf("expected collection add to be skipped when marker exists, got calls=%v", calls)
+		}
+	}
+}
+
+func TestIndexWorkspaceSkipsCollectionAddWhenIndexFileExists(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-collection-index-file"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(filepath.Join(workspacePath, ".qmd", "cache", "qmd"), 0o755); err != nil {
+		t.Fatalf("create qmd dirs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspacePath, ".qmd", "cache", "qmd", "index.sqlite"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("write index sqlite: %v", err)
+	}
+
+	runner := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			return []byte("ok"), nil
+		},
+	}
+	service := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runner,
+	)
+	if err := service.IndexWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("index workspace failed: %v", err)
+	}
+
+	calls := runner.callsSnapshot()
+	for _, call := range calls {
+		if strings.Contains(call, " collection add ") {
+			t.Fatalf("expected collection add to be skipped when index file exists, got calls=%v", calls)
+		}
 	}
 }
 

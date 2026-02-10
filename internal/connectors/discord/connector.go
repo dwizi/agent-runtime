@@ -458,6 +458,15 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 			IsMention: isMention,
 		})
 		if !decision.Allowed {
+			c.logger.Info(
+				"discord llm reply skipped by policy",
+				"reason", strings.TrimSpace(decision.Reason),
+				"context_id", contextRecord.ID,
+				"channel_id", message.ChannelID,
+				"user_id", message.Author.ID,
+				"is_dm", message.GuildID == "",
+				"is_mention", isMention,
+			)
 			return "", strings.TrimSpace(decision.Notify), nil
 		}
 	}

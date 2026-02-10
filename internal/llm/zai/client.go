@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,7 +58,7 @@ func New(cfg Config, logger *slog.Logger) *Client {
 }
 
 func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, error) {
-	if strings.TrimSpace(c.cfg.APIKey) == "" {
+	if requiresAPIKey(c.cfg.BaseURL) && strings.TrimSpace(c.cfg.APIKey) == "" {
 		return "", fmt.Errorf("%w: missing SPINNER_ZAI_API_KEY", llm.ErrUnavailable)
 	}
 	userText := strings.TrimSpace(input.Text)
@@ -94,7 +97,9 @@ func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, err
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(c.cfg.APIKey))
+	if apiKey := strings.TrimSpace(c.cfg.APIKey); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	res, err := c.httpClient.Do(req)
@@ -120,10 +125,28 @@ func (c *Client) Reply(ctx context.Context, input llm.MessageInput) (string, err
 		return "", fmt.Errorf("z.ai response returned no choices")
 	}
 	content := strings.TrimSpace(response.Choices[0].Message.Content)
+	content = sanitizeModelReply(content)
 	if content == "" {
 		return "", nil
 	}
 	return content, nil
+}
+
+var (
+	thinkBlockPattern = regexp.MustCompile(`(?is)<think\b[^>]*>.*?</think>`)
+	thinkFencePattern = regexp.MustCompile("(?is)```think\\s*.*?```")
+)
+
+func sanitizeModelReply(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = thinkBlockPattern.ReplaceAllString(trimmed, "")
+	trimmed = thinkFencePattern.ReplaceAllString(trimmed, "")
+	trimmed = strings.ReplaceAll(trimmed, "<think>", "")
+	trimmed = strings.ReplaceAll(trimmed, "</think>", "")
+	return strings.TrimSpace(trimmed)
 }
 
 func buildUserPrompt(input llm.MessageInput) string {
@@ -150,4 +173,29 @@ type chatCompletionResponse struct {
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+}
+
+func requiresAPIKey(baseURL string) bool {
+	trimmed := strings.TrimSpace(baseURL)
+	if trimmed == "" {
+		return true
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return true
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return true
+	}
+	if host == "api.z.ai" {
+		return true
+	}
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return false
+	}
+	if parsedIP := net.ParseIP(host); parsedIP != nil {
+		return parsedIP.IsLoopback()
+	}
+	return false
 }

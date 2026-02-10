@@ -24,6 +24,23 @@ func TestWorkspaceIDFromPath(t *testing.T) {
 	}
 }
 
+func TestShouldQueueQMDForPath(t *testing.T) {
+	root := "/data/workspaces"
+
+	if !shouldQueueQMDForPath(root, "/data/workspaces/ws-1/docs/notes.md") {
+		t.Fatal("expected docs markdown path to queue qmd indexing")
+	}
+	if shouldQueueQMDForPath(root, "/data/workspaces/ws-1/logs/chats/discord/123.md") {
+		t.Fatal("expected chat log markdown path to skip qmd indexing")
+	}
+	if shouldQueueQMDForPath(root, "/data/workspaces/ws-1/.qmd/spinner/index.md") {
+		t.Fatal("expected qmd internal path to skip qmd indexing")
+	}
+	if shouldQueueQMDForPath(root, "/tmp/outside.md") {
+		t.Fatal("expected out-of-root path to skip qmd indexing")
+	}
+}
+
 func TestParseCSVSet(t *testing.T) {
 	set := parseCSVSet(" admin,overlord , ,Member ")
 	if len(set) != 3 {

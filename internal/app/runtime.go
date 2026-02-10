@@ -151,6 +151,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		MaxDocExcerpt:  1200,
 		MaxPromptBytes: 8000,
 	}, logger.With("component", "llm-grounding"))
+	commandGateway.SetTriageAcknowledger(groundedResponder)
 	llmPolicy := safety.New(safety.Config{
 		Enabled:                cfg.LLMEnabled,
 		AllowedRoles:           parseCSVSet(cfg.LLMAllowedRolesCSV),
@@ -161,7 +162,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		RateLimitWindow:        time.Duration(cfg.LLMRateLimitWindowSec) * time.Second,
 	})
 	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
-	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, sqlStore, groundedResponder, qmdService, logger.With("component", "task-executor")))
+	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, sqlStore, groundedResponder, qmdService, actionExecutor, logger.With("component", "task-executor")))
 	if heartbeatRegistry != nil {
 		schedulerService.SetHeartbeatReporter(heartbeatRegistry)
 	}
@@ -175,10 +176,17 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		func(ctx context.Context, path string) {
 			workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path)
 			if workspaceID != "" {
-				qmdService.QueueWorkspaceIndexForPath(workspaceID, path)
 				schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
+				if shouldQueueQMDForPath(cfg.WorkspaceRoot, path) {
+					qmdService.QueueWorkspaceIndexForPath(workspaceID, path)
+				} else {
+					logger.Debug("skipping qmd index queue for ignored markdown path", "workspace_id", workspaceID, "path", path)
+				}
 			}
 			if workspaceID == "" {
+				return
+			}
+			if !shouldQueueQMDForPath(cfg.WorkspaceRoot, path) {
 				return
 			}
 			reindexMu.Lock()
@@ -427,6 +435,37 @@ func workspaceIDFromPath(workspaceRoot, changedPath string) string {
 		return ""
 	}
 	return workspaceID
+}
+
+func shouldQueueQMDForPath(workspaceRoot, changedPath string) bool {
+	root := filepath.Clean(strings.TrimSpace(workspaceRoot))
+	path := filepath.Clean(strings.TrimSpace(changedPath))
+	if root == "" || path == "" {
+		return false
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	if strings.HasPrefix(relative, "..") || relative == "." {
+		return false
+	}
+	relative = filepath.ToSlash(relative)
+	separator := strings.Index(relative, "/")
+	if separator < 0 || separator+1 >= len(relative) {
+		return false
+	}
+	workspaceRelative := strings.ToLower(strings.TrimSpace(relative[separator+1:]))
+	if workspaceRelative == "" {
+		return false
+	}
+	if strings.HasPrefix(workspaceRelative, ".qmd/") {
+		return false
+	}
+	if workspaceRelative == "logs/chats" || strings.HasPrefix(workspaceRelative, "logs/chats/") {
+		return false
+	}
+	return true
 }
 
 func hasPendingReindexTask(ctx context.Context, sqlStore *store.Store, workspaceID string) (bool, error) {

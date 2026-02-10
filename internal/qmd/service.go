@@ -349,20 +349,25 @@ func (s *Service) Search(ctx context.Context, workspaceID, query string, limit i
 	if limit < 1 {
 		limit = s.cfg.SearchLimit
 	}
-	if err := s.ensureIndexed(ctx, workspaceID); err != nil {
-		return nil, err
-	}
-
 	searchCtx, cancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
 	defer cancel()
 
-	output, err := s.runQMD(searchCtx, workspaceDir, "query", query, "--json", "-n", strconv.Itoa(limit))
+	command := "query"
+	if shouldUseFastSearch(query) {
+		command = "search"
+	}
+	output, err := s.runQMD(searchCtx, workspaceDir, command, query, "--json", "-n", strconv.Itoa(limit))
 	if err != nil {
-		if looksLikeQueryExpansionKilled(err) {
+		if command == "query" && looksLikeQueryExpansionKilled(err) {
 			s.logger.Warn("qmd query expansion failed; falling back to bm25 search", "workspace", workspaceID, "error", err)
 			fallbackCtx, fallbackCancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
 			defer fallbackCancel()
 			output, err = s.runQMD(fallbackCtx, workspaceDir, "search", query, "--json", "-n", strconv.Itoa(limit))
+		}
+		if err != nil && looksLikeIndexNotReady(err) {
+			s.logger.Debug("qmd index not ready during search; queueing async index", "workspace_id", workspaceID, "error", err)
+			s.QueueWorkspaceIndex(workspaceID)
+			return nil, nil
 		}
 		if err != nil {
 			return nil, err
@@ -449,21 +454,71 @@ func (s *Service) ensureCollection(ctx context.Context, workspaceDir string) err
 		return nil
 	}
 	s.mu.Unlock()
+	indexPath := filepath.Join(workspaceDir, ".qmd", "cache", "qmd", "index.sqlite")
+	if _, err := os.Stat(indexPath); err == nil {
+		s.mu.Lock()
+		s.collections[workspaceDir] = true
+		s.mu.Unlock()
+		return nil
+	}
+	markerPath := collectionMarkerPath(workspaceDir, s.cfg.IndexName, s.cfg.Collection)
+	if _, err := os.Stat(markerPath); err == nil {
+		s.mu.Lock()
+		s.collections[workspaceDir] = true
+		s.mu.Unlock()
+		return nil
+	}
 
 	_, err := s.runQMD(ctx, workspaceDir, "collection", "add", ".", "--name", s.cfg.Collection, "--mask", "**/*.md")
 	if err == nil {
+		s.writeCollectionMarker(markerPath)
 		s.mu.Lock()
 		s.collections[workspaceDir] = true
 		s.mu.Unlock()
 		return nil
 	}
 	if looksLikeAlreadyExists(err) {
+		s.writeCollectionMarker(markerPath)
 		s.mu.Lock()
 		s.collections[workspaceDir] = true
 		s.mu.Unlock()
 		return nil
 	}
 	return err
+}
+
+func (s *Service) writeCollectionMarker(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		s.logger.Debug("qmd collection marker mkdir failed", "path", path, "error", err)
+		return
+	}
+	if err := os.WriteFile(path, []byte("ok\n"), 0o644); err != nil {
+		s.logger.Debug("qmd collection marker write failed", "path", path, "error", err)
+	}
+}
+
+func collectionMarkerPath(workspaceDir, indexName, collectionName string) string {
+	sanitize := func(value string) string {
+		value = strings.TrimSpace(strings.ToLower(value))
+		if value == "" {
+			return "default"
+		}
+		var builder strings.Builder
+		builder.Grow(len(value))
+		for _, ch := range value {
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+				builder.WriteRune(ch)
+			} else {
+				builder.WriteRune('_')
+			}
+		}
+		return builder.String()
+	}
+	fileName := sanitize(indexName) + "__" + sanitize(collectionName) + ".ready"
+	return filepath.Join(workspaceDir, ".qmd", "spinner", fileName)
 }
 
 func looksLikeAlreadyExists(err error) bool {
@@ -686,6 +741,28 @@ func looksLikeQueryExpansionKilled(err error) bool {
 		return false
 	}
 	return strings.Contains(text, "signal: killed") || strings.Contains(text, "timed out after")
+}
+
+func looksLikeIndexNotReady(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "collection") && strings.Contains(text, "not found") ||
+		strings.Contains(text, "no collections found") ||
+		strings.Contains(text, "no such table") ||
+		strings.Contains(text, "index not found")
+}
+
+func shouldUseFastSearch(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return true
+	}
+	if strings.Contains(trimmed, "\n") {
+		return true
+	}
+	return len(trimmed) > 180
 }
 
 func looksLikeKnownBunEmbedCrash(err error) bool {

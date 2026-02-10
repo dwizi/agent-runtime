@@ -8,15 +8,16 @@ import (
 var ErrUnavailable = errors.New("llm unavailable")
 
 type MessageInput struct {
-	Connector    string
-	WorkspaceID  string
-	ContextID    string
-	ExternalID   string
-	DisplayName  string
-	FromUserID   string
-	Text         string
-	SystemPrompt string
-	IsDM         bool
+	Connector     string
+	WorkspaceID   string
+	ContextID     string
+	ExternalID    string
+	DisplayName   string
+	FromUserID    string
+	Text          string
+	SystemPrompt  string
+	IsDM          bool
+	SkipGrounding bool
 }
 
 type Responder interface {

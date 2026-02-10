@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/carlos/spinner/internal/actions/executor"
+	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/store"
@@ -29,6 +30,7 @@ type Store interface {
 	ApproveActionApproval(ctx context.Context, input store.ApproveActionApprovalInput) (store.ActionApproval, error)
 	DenyActionApproval(ctx context.Context, input store.DenyActionApprovalInput) (store.ActionApproval, error)
 	UpdateActionExecution(ctx context.Context, input store.UpdateActionExecutionInput) (store.ActionApproval, error)
+	CreateObjective(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error)
 }
 
 type Engine interface {
@@ -50,12 +52,13 @@ type RoutingNotifier interface {
 }
 
 type Service struct {
-	store          Store
-	engine         Engine
-	retriever      Retriever
-	actionExecutor ActionExecutor
-	triageEnabled  bool
-	routingNotify  RoutingNotifier
+	store              Store
+	engine             Engine
+	retriever          Retriever
+	actionExecutor     ActionExecutor
+	triageAcknowledger llm.Responder
+	triageEnabled      bool
+	routingNotify      RoutingNotifier
 }
 
 type MessageInput struct {
@@ -87,6 +90,10 @@ func (s *Service) SetTriageEnabled(enabled bool) {
 	s.triageEnabled = enabled
 }
 
+func (s *Service) SetTriageAcknowledger(responder llm.Responder) {
+	s.triageAcknowledger = responder
+}
+
 func (s *Service) SetRoutingNotifier(notifier RoutingNotifier) {
 	s.routingNotify = notifier
 }
@@ -109,6 +116,8 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 		return s.handleOpen(ctx, input, arg)
 	case "status":
 		return s.handleStatus(ctx, input)
+	case "monitor":
+		return s.handleMonitorObjective(ctx, input, arg)
 	case "admin-channel":
 		return s.handleAdminChannel(ctx, input, arg)
 	case "prompt":
@@ -140,6 +149,8 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 				return s.handleOpen(ctx, input, nlArg)
 			case "status":
 				return s.handleStatus(ctx, input)
+			case "monitor":
+				return s.handleMonitorObjective(ctx, input, nlArg)
 			case "admin-channel":
 				return s.handleAdminChannel(ctx, input, nlArg)
 			case "prompt":
@@ -156,10 +167,11 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 				return s.handleDenyAction(ctx, input, nlArg)
 			}
 		}
-		if err := s.handleAutoTriage(ctx, input, text); err != nil {
+		triageOutput, err := s.handleAutoTriage(ctx, input, text)
+		if err != nil {
 			return MessageOutput{}, err
 		}
-		return MessageOutput{}, nil
+		return triageOutput, nil
 	}
 }
 
@@ -585,24 +597,62 @@ func (s *Service) handleTask(ctx context.Context, input MessageInput, prompt str
 	}, nil
 }
 
-func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text string) error {
-	if !s.triageEnabled {
-		return nil
+func (s *Service) handleMonitorObjective(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
+	goal := strings.TrimSpace(arg)
+	if goal == "" {
+		return MessageOutput{Handled: true, Reply: "Usage: /monitor <what to track>"}, nil
 	}
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
-		return nil
-	}
-	if s.store == nil || s.engine == nil {
-		return nil
+	if s.store == nil {
+		return MessageOutput{Handled: true, Reply: "Monitoring objectives are unavailable in this runtime."}, nil
 	}
 	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
 	if err != nil {
-		return err
+		return MessageOutput{}, err
+	}
+	title := "Monitor: " + compactSnippet(goal)
+	if len(title) > 72 {
+		title = title[:72]
+	}
+	objectivePrompt := strings.TrimSpace("Monitor this target for updates and report only concrete changes:\n" + goal)
+	_, err = s.store.CreateObjective(ctx, store.CreateObjectiveInput{
+		WorkspaceID:     contextRecord.WorkspaceID,
+		ContextID:       contextRecord.ID,
+		Title:           title,
+		Prompt:          objectivePrompt,
+		TriggerType:     store.ObjectiveTriggerSchedule,
+		IntervalSeconds: int((6 * time.Hour).Seconds()),
+		Active:          true,
+	})
+	if err != nil {
+		return MessageOutput{}, err
+	}
+	return MessageOutput{
+		Handled: true,
+		Reply:   "Monitoring objective created. I’ll keep checking and report updates until you pause or delete it.",
+	}, nil
+}
+
+func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text string) (MessageOutput, error) {
+	if !s.triageEnabled {
+		return MessageOutput{}, nil
+	}
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return MessageOutput{}, nil
+	}
+	if s.store == nil || s.engine == nil {
+		return MessageOutput{}, nil
+	}
+	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+	if err != nil {
+		return MessageOutput{}, err
 	}
 	decision := deriveRouteDecision(input, contextRecord.WorkspaceID, contextRecord.ID, trimmed)
 	if decision.Class == TriageNoise {
-		return nil
+		return MessageOutput{}, nil
+	}
+	if !shouldAutoRouteDecision(decision) {
+		return MessageOutput{}, nil
 	}
 	taskTitle := buildRoutedTaskTitle(decision.Class, decision.SourceText)
 	taskPrompt := buildRoutedTaskPrompt(decision)
@@ -623,13 +673,87 @@ func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text
 		SourceText:       decision.SourceText,
 	})
 	if err != nil {
-		return err
+		return MessageOutput{}, err
 	}
 	decision.TaskID = task.ID
 	if s.routingNotify != nil {
 		s.routingNotify.NotifyRoutingDecision(ctx, decision)
 	}
-	return nil
+	return MessageOutput{
+		Handled: true,
+		Reply:   s.buildAutoTriageAck(ctx, input, contextRecord, decision),
+	}, nil
+}
+
+func (s *Service) buildAutoTriageAck(ctx context.Context, input MessageInput, contextRecord store.ContextRecord, decision RouteDecision) string {
+	fallback := fallbackAutoTriageAck(decision.Class)
+	if s.triageAcknowledger == nil {
+		return fallback
+	}
+	sourceText := strings.TrimSpace(decision.SourceText)
+	if len(sourceText) > 300 {
+		sourceText = sourceText[:300]
+	}
+	ackPrompt := strings.Join([]string{
+		"Write one short natural acknowledgement for a chat message.",
+		"Constraints:",
+		"- one sentence",
+		"- 8 to 20 words",
+		"- confirm you are taking action now",
+		"- do not include markdown, task IDs, or internal metadata",
+		fmt.Sprintf("Route class: %s", strings.TrimSpace(string(decision.Class))),
+		"User message:",
+		sourceText,
+	}, "\n")
+	reply, err := s.triageAcknowledger.Reply(ctx, llm.MessageInput{
+		Connector:     strings.TrimSpace(input.Connector),
+		WorkspaceID:   strings.TrimSpace(contextRecord.WorkspaceID),
+		ContextID:     strings.TrimSpace(contextRecord.ID),
+		ExternalID:    strings.TrimSpace(input.ExternalID),
+		DisplayName:   strings.TrimSpace(input.DisplayName),
+		FromUserID:    strings.TrimSpace(input.FromUserID),
+		Text:          ackPrompt,
+		IsDM:          false,
+		SkipGrounding: true,
+	})
+	if err != nil {
+		return fallback
+	}
+	clean := sanitizeAutoTriageAck(reply)
+	if clean == "" {
+		return fallback
+	}
+	return clean
+}
+
+func fallbackAutoTriageAck(class TriageClass) string {
+	switch class {
+	case TriageIssue:
+		return "Thanks for flagging this. I’m investigating now and I’ll report back with findings."
+	case TriageModeration:
+		return "Received. I’m reviewing this now and I’ll follow up with what I find."
+	case TriageQuestion:
+		return "Yes, I’m on it. I’ll investigate and come back with an answer."
+	default:
+		return "Understood. I’m handling this now and I’ll share results shortly."
+	}
+}
+
+func sanitizeAutoTriageAck(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	trimmed = strings.ReplaceAll(trimmed, "```", "")
+	trimmed = strings.Join(strings.Fields(trimmed), " ")
+	trimmed = strings.Trim(trimmed, "`\"'")
+	if trimmed == "" {
+		return ""
+	}
+	if len(trimmed) > 220 {
+		trimmed = strings.TrimSpace(trimmed[:220]) + "..."
+	}
+	return trimmed
 }
 
 func (s *Service) handleRouteOverride(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
@@ -1004,6 +1128,9 @@ func parseNaturalLanguageCommand(text string) (command, arg string, ok bool) {
 	if isStatusIntent(lower) {
 		return "status", "", true
 	}
+	if goal, found := parseMonitorIntent(trimmed, lower); found {
+		return "monitor", goal, true
+	}
 	if prompt, found := parseIntentTask(trimmed); found {
 		return "task", prompt, true
 	}
@@ -1140,6 +1267,41 @@ func isStatusIntent(lower string) bool {
 	return strings.Contains(lower, "qmd status") ||
 		strings.Contains(lower, "index status") ||
 		strings.Contains(lower, "search index status")
+}
+
+func parseMonitorIntent(trimmed, lower string) (string, bool) {
+	prefixes := []string{
+		"monitor ",
+		"track ",
+		"keep monitoring ",
+		"set an alert for ",
+		"set an alert to monitor ",
+	}
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[len(prefix):])
+		if value == "" {
+			return "", false
+		}
+		return value, true
+	}
+	for _, phrase := range []string{
+		"set an alert and monitor ",
+		"create an alert and monitor ",
+	} {
+		index := strings.Index(lower, phrase)
+		if index < 0 {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[index+len(phrase):])
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func parseIntentApproveAction(text string) (string, bool) {
