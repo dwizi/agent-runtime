@@ -161,6 +161,36 @@ func (s *Store) ListPendingActionApprovals(ctx context.Context, connector, exter
 	return results, nil
 }
 
+func (s *Store) ListPendingActionApprovalsGlobal(ctx context.Context, limit int) ([]ActionApproval, error) {
+	if limit < 1 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, workspace_id, context_id, connector, external_id, requester_user_id, action_type, action_target, action_summary, payload_json, status, approver_user_id, denied_reason
+		 , execution_status, execution_message, executor_plugin, executed_at_unix, created_at_unix, updated_at_unix
+		 FROM action_approvals
+		 WHERE status = 'pending'
+		 ORDER BY created_at_unix ASC
+		 LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query global pending action approvals: %w", err)
+	}
+	defer rows.Close()
+
+	results := []ActionApproval{}
+	for rows.Next() {
+		record, scanErr := scanActionApproval(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		results = append(results, record)
+	}
+	return results, nil
+}
+
 func (s *Store) LookupActionApproval(ctx context.Context, id string) (ActionApproval, error) {
 	row := s.db.QueryRowContext(
 		ctx,

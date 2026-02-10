@@ -18,6 +18,7 @@ BotFather returns an HTTP API token after creation.
 ```env
 SPINNER_TELEGRAM_TOKEN=your_telegram_bot_token
 SPINNER_TELEGRAM_POLL_SECONDS=25
+SPINNER_COMMAND_SYNC_ENABLED=true
 ```
 
 ## 3. Optional environment overrides
@@ -28,6 +29,11 @@ Defaults are usually correct:
 SPINNER_TELEGRAM_API_BASE=https://api.telegram.org
 SPINNER_TELEGRAM_POLL_SECONDS=25
 ```
+
+Startup behavior:
+- Spinner calls Telegram `setMyCommands` when the connector starts.
+- Telegram menu commands are generated from Spinner's shared command catalog.
+- command naming follows Telegram constraints (for example `admin-channel` appears as `admin_channel`).
 
 ## 4. Start Spinner and bootstrap admin pairing
 
@@ -58,6 +64,11 @@ If commands fail:
 - Check token is valid in `.env`
 - Ensure bot is in the chat
 - Ensure your Telegram identity is linked (via `pair` + TUI approval)
+
+If Telegram command menu does not refresh:
+
+- Restart Spinner to run command sync at connector bootstrap.
+- Ensure `SPINNER_COMMAND_SYNC_ENABLED=true`.
 
 ## Production hardening
 

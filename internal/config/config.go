@@ -37,10 +37,13 @@ type Config struct {
 	TaskNotifyPolicy        string
 	TaskNotifySuccessPolicy string
 	TaskNotifyFailurePolicy string
+	CommandSyncEnabled      bool
 
 	DiscordToken              string
 	DiscordAPI                string
 	DiscordWSURL              string
+	DiscordApplicationID      string
+	DiscordCommandGuildIDsCSV string
 	TelegramToken             string
 	TelegramAPI               string
 	TelegramPoll              int
@@ -80,6 +83,7 @@ type Config struct {
 	SystemPromptGlobalFile    string
 	SystemPromptWorkspacePath string
 	SystemPromptContextPath   string
+	ReasoningPromptFile       string
 	SkillsGlobalRoot          string
 
 	PublicHost string
@@ -130,9 +134,12 @@ func FromEnv() Config {
 		TaskNotifyPolicy:          notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_POLICY", "both"),
 		TaskNotifySuccessPolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", ""),
 		TaskNotifyFailurePolicy:   notificationPolicyOrDefault("SPINNER_TASK_NOTIFY_FAILURE_POLICY", ""),
+		CommandSyncEnabled:        boolOrDefault("SPINNER_COMMAND_SYNC_ENABLED", true),
 		DiscordToken:              os.Getenv("SPINNER_DISCORD_TOKEN"),
 		DiscordAPI:                stringOrDefault("SPINNER_DISCORD_API_BASE", "https://discord.com/api/v10"),
 		DiscordWSURL:              stringOrDefault("SPINNER_DISCORD_GATEWAY_URL", "wss://gateway.discord.gg/?v=10&encoding=json"),
+		DiscordApplicationID:      strings.TrimSpace(os.Getenv("SPINNER_DISCORD_APPLICATION_ID")),
+		DiscordCommandGuildIDsCSV: strings.TrimSpace(os.Getenv("SPINNER_DISCORD_COMMAND_GUILD_IDS")),
 		TelegramToken:             os.Getenv("SPINNER_TELEGRAM_TOKEN"),
 		TelegramAPI:               stringOrDefault("SPINNER_TELEGRAM_API_BASE", "https://api.telegram.org"),
 		TelegramPoll:              intOrDefault("SPINNER_TELEGRAM_POLL_SECONDS", 25),
@@ -172,6 +179,7 @@ func FromEnv() Config {
 		SystemPromptGlobalFile:    stringOrDefault("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "/context/SYSTEM_PROMPT.md"),
 		SystemPromptWorkspacePath: stringOrDefault("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
 		SystemPromptContextPath:   stringOrDefault("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
+		ReasoningPromptFile:       stringOrDefault("SPINNER_REASONING_PROMPT_FILE", "/context/REASONING.md"),
 		SkillsGlobalRoot:          stringOrDefault("SPINNER_SKILLS_GLOBAL_ROOT", "/context/skills"),
 		PublicHost:                stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                 stringOrDefault("ADMIN_HOST", "admin.localhost"),

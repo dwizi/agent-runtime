@@ -35,6 +35,11 @@ Minimum for production bootstrap:
 - `ADMIN_HOST`
 - `ACME_EMAIL`
 
+Optional but recommended for connector command UX:
+- `SPINNER_COMMAND_SYNC_ENABLED=true`
+- `SPINNER_DISCORD_COMMAND_GUILD_IDS=<guild-id-csv>` (faster slash-command visibility)
+- `SPINNER_DISCORD_APPLICATION_ID=<app-id>` (when automatic app id lookup is restricted)
+
 Then set admin API target for local TUI:
 
 - `SPINNER_ADMIN_API_URL=https://<ADMIN_HOST>`
@@ -52,6 +57,7 @@ What this does:
 - bind-mounts host paths for live editing:
   - `./data` -> `/data` (workspaces, sqlite, task outputs)
   - `./context` -> `/context` (global SOUL, system prompt, and skills files)
+- bootstraps connector command sync (Telegram menu commands + Discord slash command upsert) if enabled
 
 Optional qmd tooling sidecar:
 

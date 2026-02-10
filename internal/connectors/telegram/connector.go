@@ -52,6 +52,7 @@ type Connector struct {
 	apiBase     string
 	workspace   string
 	pollSeconds int
+	commandSync bool
 	pairings    PairingStore
 	gateway     CommandGateway
 	responder   Responder
@@ -63,18 +64,27 @@ type Connector struct {
 	reporter    heartbeat.Reporter
 }
 
-func New(token, apiBase, workspaceRoot string, pollSeconds int, pairings PairingStore, commandGateway CommandGateway, responder Responder, policy SafetyPolicy, logger *slog.Logger) *Connector {
+type Option func(*Connector)
+
+func WithCommandSync(enabled bool) Option {
+	return func(connector *Connector) {
+		connector.commandSync = enabled
+	}
+}
+
+func New(token, apiBase, workspaceRoot string, pollSeconds int, pairings PairingStore, commandGateway CommandGateway, responder Responder, policy SafetyPolicy, logger *slog.Logger, opts ...Option) *Connector {
 	if strings.TrimSpace(apiBase) == "" {
 		apiBase = "https://api.telegram.org"
 	}
 	if pollSeconds < 1 {
 		pollSeconds = 25
 	}
-	return &Connector{
+	connector := &Connector{
 		token:       strings.TrimSpace(token),
 		apiBase:     strings.TrimRight(strings.TrimSpace(apiBase), "/"),
 		workspace:   strings.TrimSpace(workspaceRoot),
 		pollSeconds: pollSeconds,
+		commandSync: true,
 		pairings:    pairings,
 		gateway:     commandGateway,
 		responder:   responder,
@@ -85,6 +95,12 @@ func New(token, apiBase, workspaceRoot string, pollSeconds int, pairings Pairing
 		logger: logger,
 		offset: 0,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(connector)
+		}
+	}
+	return connector
 }
 
 func (c *Connector) Name() string {
@@ -147,6 +163,13 @@ func (c *Connector) Start(ctx context.Context) error {
 		}
 	} else {
 		c.logger.Warn("telegram bot username lookup failed", "error", err)
+	}
+	if c.commandSync {
+		if err := c.syncCommands(ctx); err != nil {
+			c.logger.Warn("telegram command sync failed", "error", err)
+		} else {
+			c.logger.Info("telegram commands synced")
+		}
 	}
 
 	for {
@@ -427,7 +450,7 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 		c.logger.Error("create action approval failed", "error", err)
 		return strings.TrimSpace(cleanReply), "", nil
 	}
-	notice := fmt.Sprintf("Action request pending approval: `%s`. Admin can run `/pending-actions`, `/approve-action %s`, or `/deny-action %s`.", approval.ID, approval.ID, approval.ID)
+	notice := actions.FormatApprovalRequestNotice(approval.ID)
 	if strings.TrimSpace(cleanReply) == "" {
 		return "", notice, nil
 	}
@@ -549,6 +572,59 @@ func (c *Connector) fetchBotUsername(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("telegram getMe failed")
 	}
 	return strings.TrimSpace(payload.Result.Username), nil
+}
+
+func (c *Connector) syncCommands(ctx context.Context) error {
+	endpoint := fmt.Sprintf("%s/bot%s/setMyCommands", c.apiBase, c.token)
+	commands := make([]map[string]string, 0, len(gateway.SlashCommands())+1)
+	for _, command := range gateway.SlashCommands() {
+		name := telegramCommandName(command.Name)
+		if name == "" {
+			continue
+		}
+		commands = append(commands, map[string]string{
+			"command":     name,
+			"description": telegramCommandDescription(command.Description),
+		})
+	}
+	commands = append(commands, map[string]string{
+		"command":     pairingMessage,
+		"description": "Link this Telegram account",
+	})
+	body := map[string]any{
+		"commands": commands,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+		return fmt.Errorf("setMyCommands failed: status=%d body=%s", res.StatusCode, strings.TrimSpace(string(message)))
+	}
+
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return fmt.Errorf("decode setMyCommands: %w", err)
+	}
+	if !response.OK {
+		return fmt.Errorf("telegram setMyCommands failed")
+	}
+	return nil
 }
 
 func (c *Connector) logInbound(contextRecord store.ContextRecord, message telegramMessage, text string) {
@@ -692,6 +768,7 @@ type telegramDocument struct {
 }
 
 var filenameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+var telegramCommandSanitizer = regexp.MustCompile(`[^a-z0-9_]+`)
 
 func sanitizeFilename(input string) string {
 	base := strings.TrimSpace(filepath.Base(input))
@@ -701,6 +778,31 @@ func sanitizeFilename(input string) string {
 		return "attachment.md"
 	}
 	return base
+}
+
+func telegramCommandName(name string) string {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		return ""
+	}
+	normalized = strings.ReplaceAll(normalized, "-", "_")
+	normalized = telegramCommandSanitizer.ReplaceAllString(normalized, "")
+	normalized = strings.Trim(normalized, "_")
+	if len(normalized) > 32 {
+		normalized = normalized[:32]
+	}
+	return strings.Trim(normalized, "_")
+}
+
+func telegramCommandDescription(description string) string {
+	trimmed := strings.TrimSpace(description)
+	if trimmed == "" {
+		return "Spinner command"
+	}
+	if len(trimmed) > 256 {
+		return strings.TrimSpace(trimmed[:256])
+	}
+	return trimmed
 }
 
 func isMarkdown(filename, mimeType string) bool {

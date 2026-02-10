@@ -55,12 +55,14 @@ Guideline:
 
 ## Message Routing Overrides
 
-When auto triage creates routed tasks from channel traffic:
+When the Agent (Reasoning Engine) creates routed tasks from channel traffic:
 - inspect task metadata (`route_class`, `priority`, `due_at_unix`, `assigned_lane`)
 - override from admin channels with:
   - `/route <task-id> <question|issue|task|moderation|noise> [p1|p2|p3] [due-window]`
 - example:
   - `/route task-123 moderation p1 2h`
+
+Use this when the Agent misclassifies intent (e.g., treating a question as a task).
 
 ## Objective Lifecycle
 

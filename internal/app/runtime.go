@@ -125,6 +125,22 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	actionExecutor := executor.NewRegistry(plugins...)
 	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor)
 	commandGateway.SetTriageEnabled(cfg.TriageEnabled)
+
+	// Load Reasoning Prompt
+	if cfg.ReasoningPromptFile != "" {
+		promptBytes, err := os.ReadFile(cfg.ReasoningPromptFile)
+		if err == nil {
+			commandGateway.SetReasoningPromptTemplate(string(promptBytes))
+		} else if !os.IsNotExist(err) {
+			logger.Warn("failed to read reasoning prompt file", "path", cfg.ReasoningPromptFile, "error", err)
+		} else {
+			// If relative path fails, try relative to workspace root? 
+			// For now, assume absolute or CWD relative. 
+			// In docker, /context/REASONING.md is absolute.
+			// Locally, it might be relative.
+		}
+	}
+
 	responder := zai.New(zai.Config{
 		APIKey:  cfg.ZAIAPIKey,
 		BaseURL: cfg.ZAIBaseURL,
@@ -253,12 +269,36 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 
 	connectorList := []connectors.Connector{}
 	if strings.TrimSpace(cfg.DiscordToken) != "" {
-		connectorList = append(connectorList, discord.New(cfg.DiscordToken, cfg.DiscordAPI, cfg.DiscordWSURL, cfg.WorkspaceRoot, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "discord")))
+		connectorList = append(connectorList, discord.New(
+			cfg.DiscordToken,
+			cfg.DiscordAPI,
+			cfg.DiscordWSURL,
+			cfg.WorkspaceRoot,
+			sqlStore,
+			commandGateway,
+			groundedResponder,
+			llmPolicy,
+			logger.With("connector", "discord"),
+			discord.WithCommandSync(cfg.CommandSyncEnabled),
+			discord.WithCommandGuildIDs(parseCSVTrimList(cfg.DiscordCommandGuildIDsCSV)),
+			discord.WithApplicationID(cfg.DiscordApplicationID),
+		))
 	} else if heartbeatRegistry != nil {
 		heartbeatRegistry.Disabled("connector:discord", "token missing")
 	}
 	if strings.TrimSpace(cfg.TelegramToken) != "" {
-		connectorList = append(connectorList, telegram.New(cfg.TelegramToken, cfg.TelegramAPI, cfg.WorkspaceRoot, cfg.TelegramPoll, sqlStore, commandGateway, groundedResponder, llmPolicy, logger.With("connector", "telegram")))
+		connectorList = append(connectorList, telegram.New(
+			cfg.TelegramToken,
+			cfg.TelegramAPI,
+			cfg.WorkspaceRoot,
+			cfg.TelegramPoll,
+			sqlStore,
+			commandGateway,
+			groundedResponder,
+			llmPolicy,
+			logger.With("connector", "telegram"),
+			telegram.WithCommandSync(cfg.CommandSyncEnabled),
+		))
 	} else if heartbeatRegistry != nil {
 		heartbeatRegistry.Disabled("connector:telegram", "token missing")
 	}
@@ -462,7 +502,10 @@ func shouldQueueQMDForPath(workspaceRoot, changedPath string) bool {
 	if strings.HasPrefix(workspaceRelative, ".qmd/") {
 		return false
 	}
-	if workspaceRelative == "logs/chats" || strings.HasPrefix(workspaceRelative, "logs/chats/") {
+	if workspaceRelative == "logs" || strings.HasPrefix(workspaceRelative, "logs/") {
+		return false
+	}
+	if workspaceRelative == "ops/heartbeat.md" {
 		return false
 	}
 	return true

@@ -141,8 +141,8 @@ func TestTaskWorkerExecutorQueuesActionApprovalFromTaskOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute task: %v", err)
 	}
-	if !strings.Contains(result.Summary, "pending approval") {
-		t.Fatalf("expected summary to include pending approval notice, got %s", result.Summary)
+	if !strings.Contains(result.Summary, "Admin approval required.") {
+		t.Fatalf("expected summary to include compact approval notice, got %s", result.Summary)
 	}
 
 	approvals, err := sqlStore.ListPendingActionApprovals(context.Background(), "discord", "chan-1", 5)

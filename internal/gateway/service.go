@@ -27,6 +27,7 @@ type Store interface {
 	DenyPairing(ctx context.Context, input store.DenyPairingInput) (store.PairingRequest, error)
 	CreateActionApproval(ctx context.Context, input store.CreateActionApprovalInput) (store.ActionApproval, error)
 	ListPendingActionApprovals(ctx context.Context, connector, externalID string, limit int) ([]store.ActionApproval, error)
+	ListPendingActionApprovalsGlobal(ctx context.Context, limit int) ([]store.ActionApproval, error)
 	ApproveActionApproval(ctx context.Context, input store.ApproveActionApprovalInput) (store.ActionApproval, error)
 	DenyActionApproval(ctx context.Context, input store.DenyActionApprovalInput) (store.ActionApproval, error)
 	UpdateActionExecution(ctx context.Context, input store.UpdateActionExecutionInput) (store.ActionApproval, error)
@@ -54,10 +55,12 @@ type RoutingNotifier interface {
 type Service struct {
 	store              Store
 	engine             Engine
-	retriever          Retriever
-	actionExecutor     ActionExecutor
-	triageAcknowledger llm.Responder
-	triageEnabled      bool
+	retriever               Retriever
+	actionExecutor          ActionExecutor
+	reasoner                *ReasoningEngine
+	reasoningPromptTemplate string
+	triageAcknowledger      llm.Responder
+	triageEnabled           bool
 	routingNotify      RoutingNotifier
 }
 
@@ -90,8 +93,19 @@ func (s *Service) SetTriageEnabled(enabled bool) {
 	s.triageEnabled = enabled
 }
 
+func (s *Service) SetReasoningPromptTemplate(template string) {
+	s.reasoningPromptTemplate = template
+	// Re-initialize reasoner if responder already exists
+	if s.triageAcknowledger != nil {
+		s.reasoner = NewReasoningEngine(s.triageAcknowledger, s.reasoningPromptTemplate)
+	}
+}
+
 func (s *Service) SetTriageAcknowledger(responder llm.Responder) {
 	s.triageAcknowledger = responder
+	if responder != nil {
+		s.reasoner = NewReasoningEngine(responder, s.reasoningPromptTemplate)
+	}
 }
 
 func (s *Service) SetRoutingNotifier(notifier RoutingNotifier) {
@@ -190,22 +204,46 @@ func (s *Service) handlePendingActions(ctx context.Context, input MessageInput) 
 	if err != nil {
 		return MessageOutput{}, err
 	}
+	showAllContexts := false
 	if len(items) == 0 {
-		return MessageOutput{Handled: true, Reply: "No pending actions in this context."}, nil
+		items, err = s.store.ListPendingActionApprovalsGlobal(ctx, 10)
+		if err != nil {
+			return MessageOutput{}, err
+		}
+		showAllContexts = true
 	}
-	lines := []string{"Pending actions:"}
+	if len(items) == 0 {
+		return MessageOutput{Handled: true, Reply: "No pending actions."}, nil
+	}
+	header := "Pending actions:"
+	if showAllContexts {
+		header = "Pending actions (all contexts):"
+	}
+	lines := []string{header}
 	for _, item := range items {
 		summary := strings.TrimSpace(item.ActionSummary)
 		if summary == "" {
 			summary = item.ActionType
 		}
-		lines = append(lines, fmt.Sprintf("- `%s` %s (%s)", item.ID, summary, item.ActionType))
+		line := fmt.Sprintf("- `%s` %s (%s)", item.ID, summary, item.ActionType)
+		if showAllContexts {
+			connector := strings.TrimSpace(item.Connector)
+			externalID := strings.TrimSpace(item.ExternalID)
+			if connector == "" {
+				connector = "unknown"
+			}
+			if externalID == "" {
+				externalID = "unknown"
+			}
+			line = fmt.Sprintf("%s [%s/%s]", line, connector, externalID)
+		}
+		lines = append(lines, line)
 	}
 	return MessageOutput{Handled: true, Reply: strings.Join(lines, "\n")}, nil
 }
 
 func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
-	actionID := strings.TrimSpace(arg)
+	actionID := normalizeActionCommandID(arg)
 	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
 	if actionID == "" {
 		return MessageOutput{Handled: true, Reply: "Usage: /approve-action <action-id>"}, nil
@@ -309,7 +347,10 @@ func (s *Service) handleDenyAction(ctx context.Context, input MessageInput, arg 
 		return MessageOutput{Handled: true, Reply: "Usage: /deny-action <action-id> [reason]"}, nil
 	}
 	parts := strings.Fields(trimmed)
-	actionID := parts[0]
+	actionID := normalizeActionCommandID(parts[0])
+	if actionID == "" {
+		return MessageOutput{Handled: true, Reply: "Usage: /deny-action <action-id> [reason]"}, nil
+	}
 	reason := "denied by admin"
 	if len(parts) > 1 {
 		reason = strings.Join(parts[1:], " ")
@@ -636,6 +677,110 @@ func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text
 	if !s.triageEnabled {
 		return MessageOutput{}, nil
 	}
+	// Fallback to regex if no reasoner (LLM) is configured
+	if s.reasoner == nil {
+		return s.handleLegacyAutoTriage(ctx, input, text)
+	}
+
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return MessageOutput{}, nil
+	}
+
+	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+	if err != nil {
+		return MessageOutput{}, err
+	}
+
+	// 1. OBSERVE & THINK: Call the LLM to decide what to do
+	decision, err := s.reasoner.Decide(ctx, input, "Current Channel: "+input.DisplayName)
+	if err != nil {
+		// Log error? For now, fall back to legacy
+		return s.handleLegacyAutoTriage(ctx, input, text)
+	}
+
+	// 2. ACT: Execute based on intention
+	switch decision.Intention {
+	case IntentionTask:
+		return s.executeAgentTask(ctx, input, contextRecord, decision, trimmed)
+	case IntentionSearch:
+		return s.executeAgentSearch(ctx, input, contextRecord, decision)
+	case IntentionAnswer:
+		// For "Answer", we technically just want to chat. 
+		// If the decision.Reasoning is good, we might output that, or we might let the system 
+		// handle it as a standard chat flow (if we had one). 
+		// For now, let's treat it as a "Answer" type task or just acknowledge if it's simple.
+		// Use the legacy ack for now, but grounded in the decision.
+		return MessageOutput{
+			Handled: true, 
+			Reply: fmt.Sprintf("I'll help with that. %s", decision.Reasoning),
+		}, nil
+	case IntentionNone:
+		return MessageOutput{}, nil
+	default:
+		return MessageOutput{}, nil
+	}
+}
+
+func (s *Service) executeAgentTask(ctx context.Context, input MessageInput, contextRecord store.ContextRecord, decision AgentDecision, sourceText string) (MessageOutput, error) {
+	// Map LLM priority to system priority
+	priority := TriagePriorityP3
+	if p, ok := normalizeTriagePriority(decision.Priority); ok {
+		priority = p
+	}
+
+	task, err := s.enqueueAndPersistTask(ctx, store.CreateTaskInput{
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             string(orchestrator.TaskKindGeneral),
+		Title:            decision.Title,
+		Prompt:           buildAgentTaskPrompt(decision, sourceText),
+		Status:           "queued",
+		RouteClass:       string(TriageTask), // Generic "Task" class for now
+		Priority:         string(priority),
+		DueAt:            time.Now().UTC().Add(24 * time.Hour), // Default SLA
+		AssignedLane:     "operations",
+		SourceConnector:  strings.ToLower(strings.TrimSpace(input.Connector)),
+		SourceExternalID: strings.TrimSpace(input.ExternalID),
+		SourceUserID:     strings.TrimSpace(input.FromUserID),
+		SourceText:       sourceText,
+	})
+	if err != nil {
+		return MessageOutput{}, err
+	}
+
+	return MessageOutput{
+		Handled: true,
+		Reply:   fmt.Sprintf("Task Queued: `%s` (%s)\n> %s", task.ID, decision.Title, decision.Reasoning),
+	}, nil
+}
+
+func (s *Service) executeAgentSearch(ctx context.Context, input MessageInput, contextRecord store.ContextRecord, decision AgentDecision) (MessageOutput, error) {
+	if s.retriever == nil {
+		return MessageOutput{Handled: true, Reply: "I wanted to search, but search is not configured."}, nil
+	}
+	
+	results, err := s.retriever.Search(ctx, contextRecord.WorkspaceID, decision.Query, 3)
+	if err != nil {
+		return MessageOutput{}, err
+	}
+	
+	if len(results) == 0 {
+		return MessageOutput{Handled: true, Reply: fmt.Sprintf("I searched for '%s' but found no results.", decision.Query)}, nil
+	}
+
+	lines := []string{fmt.Sprintf("I searched for '%s' and found:", decision.Query)}
+	for i, r := range results {
+		lines = append(lines, fmt.Sprintf("%d. `%s` (%s)", i+1, r.Path, compactSnippet(r.Snippet)))
+	}
+	return MessageOutput{Handled: true, Reply: strings.Join(lines, "\n")}, nil
+}
+
+func buildAgentTaskPrompt(decision AgentDecision, sourceText string) string {
+	return fmt.Sprintf("Agent Instructions: %s\n\nOriginal Request:\n%s", decision.Reasoning, sourceText)
+}
+
+func (s *Service) handleLegacyAutoTriage(ctx context.Context, input MessageInput, text string) (MessageOutput, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
 		return MessageOutput{}, nil
@@ -987,6 +1132,7 @@ func splitCommand(text string) (string, string) {
 	if idx := strings.Index(command, "@"); idx >= 0 {
 		command = command[:idx]
 	}
+	command = NormalizeCommandName(command)
 
 	if len(fields) == 1 {
 		return command, ""
@@ -1405,13 +1551,36 @@ func (s *Service) resolveSinglePendingActionID(ctx context.Context, input Messag
 	if err != nil {
 		return "", "Unable to load pending actions right now."
 	}
-	if len(items) == 0 {
-		return "", "No pending actions in this context."
+	if len(items) == 1 {
+		return strings.TrimSpace(items[0].ID), ""
 	}
 	if len(items) > 1 {
 		return "", "Multiple pending actions found. Use `/pending-actions` and approve by id."
 	}
+	items, err = s.store.ListPendingActionApprovalsGlobal(ctx, 2)
+	if err != nil {
+		return "", "Unable to load pending actions right now."
+	}
+	if len(items) == 0 {
+		return "", "No pending actions."
+	}
+	if len(items) > 1 {
+		return "", "Multiple pending actions found across contexts. Use `/pending-actions` and approve by id."
+	}
 	return strings.TrimSpace(items[0].ID), ""
+}
+
+func normalizeActionCommandID(value string) string {
+	trimmed := strings.TrimSpace(value)
+	trimmed = strings.Trim(trimmed, "`\"'")
+	trimmed = strings.Trim(trimmed, "[](){}<>,.;:!?")
+	if trimmed == "" {
+		return ""
+	}
+	if actionID, ok := findActionID(trimmed); ok {
+		return actionID
+	}
+	return trimmed
 }
 
 func findActionID(text string) (string, bool) {

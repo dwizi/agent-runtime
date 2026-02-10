@@ -109,6 +109,115 @@ func (f *fakePolicy) Check(input llmsafety.Request) llmsafety.Decision {
 	return llmsafety.Decision{Allowed: true}
 }
 
+func TestSyncCommandsRegistersGuildCommands(t *testing.T) {
+	var upsertCount int
+	var commandPayload []map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch req.URL.Path {
+		case "/oauth2/applications/@me":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "app-1"})
+			return
+		case "/applications/app-1/guilds/guild-1/commands":
+			upsertCount++
+			if err := json.NewDecoder(req.Body).Decode(&commandPayload); err != nil {
+				t.Fatalf("decode command payload: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode([]any{})
+			return
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+
+	connector := New(
+		"bot-token",
+		server.URL,
+		"wss://discord.test/ws",
+		t.TempDir(),
+		&fakePairingStore{},
+		&fakeCommandGateway{},
+		nil,
+		nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithCommandGuildIDs([]string{"guild-1"}),
+	)
+
+	if err := connector.syncCommands(context.Background()); err != nil {
+		t.Fatalf("syncCommands failed: %v", err)
+	}
+	if upsertCount != 1 {
+		t.Fatalf("expected one guild upsert, got %d", upsertCount)
+	}
+	if len(commandPayload) == 0 {
+		t.Fatal("expected command payload")
+	}
+	seenTask := false
+	for _, command := range commandPayload {
+		if command["name"] == "task" {
+			seenTask = true
+			break
+		}
+	}
+	if !seenTask {
+		t.Fatal("expected task command in payload")
+	}
+}
+
+func TestHandleInteractionCreateRunsGateway(t *testing.T) {
+	commands := &fakeCommandGateway{reply: "Task queued: `abc`"}
+	var responseBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		bytes, _ := io.ReadAll(req.Body)
+		responseBody = string(bytes)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer server.Close()
+
+	connector := New(
+		"bot-token",
+		server.URL,
+		"wss://discord.test/ws",
+		t.TempDir(),
+		&fakePairingStore{},
+		commands,
+		nil,
+		nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	err := connector.handleInteractionCreate(context.Background(), discordInteractionCreate{
+		ID:        "it-1",
+		Type:      2,
+		Token:     "tok-1",
+		ChannelID: "chan-123",
+		GuildID:   "guild-9",
+		Data: discordInteractionData{
+			Name: "task",
+			Options: []discordInteractionOption{
+				{Name: "prompt", Type: 3, Value: "write summary"},
+			},
+		},
+		Member: discordInteractionMember{
+			User: discordAuthor{ID: "user-11"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleInteractionCreate failed: %v", err)
+	}
+	if len(commands.calls) != 1 {
+		t.Fatalf("expected one gateway call, got %d", len(commands.calls))
+	}
+	if commands.calls[0].Text != "/task write summary" {
+		t.Fatalf("expected slash command text, got %s", commands.calls[0].Text)
+	}
+	if !strings.Contains(responseBody, "Task queued") {
+		t.Fatalf("expected interaction callback payload with reply, got %s", responseBody)
+	}
+}
+
 func TestHandleMessageCreatePairDM(t *testing.T) {
 	pairings := &fakePairingStore{}
 	commands := &fakeCommandGateway{}
@@ -424,7 +533,10 @@ func TestHandleMessageCreateLLMActionProposalQueuesApproval(t *testing.T) {
 	if pairings.actions[0].ActionType != "send_email" {
 		t.Fatalf("unexpected action type: %s", pairings.actions[0].ActionType)
 	}
-	if !strings.Contains(sentBody, "pending approval") {
-		t.Fatalf("expected pending approval notice, got %s", sentBody)
+	if !strings.Contains(sentBody, "Admin approval required.") {
+		t.Fatalf("expected compact approval notice, got %s", sentBody)
+	}
+	if !strings.Contains(sentBody, "'act-1'") {
+		t.Fatalf("expected action id in compact notice, got %s", sentBody)
 	}
 }

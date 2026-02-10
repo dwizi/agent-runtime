@@ -19,6 +19,10 @@ This guide covers creating a Discord bot token and validating admin/task command
 SPINNER_DISCORD_TOKEN=your_discord_bot_token
 SPINNER_DISCORD_API_BASE=https://discord.com/api/v10
 SPINNER_DISCORD_GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json
+SPINNER_COMMAND_SYNC_ENABLED=true
+# Optional (recommended for immediate slash-command updates):
+SPINNER_DISCORD_APPLICATION_ID=
+SPINNER_DISCORD_COMMAND_GUILD_IDS=123456789012345678
 ```
 
 ## 3. Enable required intents
@@ -28,7 +32,11 @@ In the **Bot** page, enable:
 - **Server Members Intent** (optional now, useful later)
 - **Message Content Intent** (required for message-based commands)
 
-Spinner uses message commands like `/task`, so `Message Content Intent` must be enabled.
+Spinner supports both:
+- message commands parsed from `MESSAGE_CREATE`
+- Discord slash commands from `INTERACTION_CREATE`
+
+`Message Content Intent` is still required for message-based command parsing and natural language messages.
 
 ## 4. Set OAuth2 scopes and invite the bot
 
@@ -50,6 +58,7 @@ Spinner uses message commands like `/task`, so `Message Content Intent` must be 
 2. In Discord:
    - DM the bot: `pair`
    - In a server channel: `/task write a short test summary`
+   - Verify slash menu shows Spinner commands after startup sync
    - In your admin channel: `/admin-channel enable`
 
 If the bot does not respond:
@@ -58,6 +67,14 @@ If the bot does not respond:
 - Verify `Message Content Intent` is enabled
 - Confirm bot has permission to read/send messages in that channel
 - Confirm identity was paired and approved in TUI
+
+If slash commands do not show up:
+
+- Confirm `applications.commands` scope was included during bot invite.
+- Restart Spinner to trigger command sync at connector bootstrap.
+- Prefer guild-scoped sync for faster propagation:
+  - set `SPINNER_DISCORD_COMMAND_GUILD_IDS=<your-guild-id-csv>`
+- If app lookup fails in your environment, set `SPINNER_DISCORD_APPLICATION_ID` explicitly.
 
 ## Production hardening
 

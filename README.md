@@ -12,7 +12,7 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
   - `spinner serve` for API + runtime services
   - `spinner tui` for a Charm Bubble Tea admin interface
 - SQLite bootstrap and initial schema (`users`, `identities`, `workspaces`, `contexts`, `tasks`, `pairing_requests`)
-- Discord gateway connector (`MESSAGE_CREATE`) with command routing and DM pairing
+- Discord gateway connector (`MESSAGE_CREATE` + `INTERACTION_CREATE`) with command routing and DM pairing
 - Telegram command gateway with pairing and task/admin commands
 - IMAP inbox connector for inbound email ingestion to workspace Markdown
 - In-memory task engine with configurable per-workspace concurrency defaults
@@ -94,9 +94,15 @@ Telegram command gateway:
 - LLM replies (GLM Flash 4.7 via z.ai):
   - replies in DM chats
   - replies in group chats only when bot is mentioned (e.g. `@your_bot_username`)
+- startup command sync:
+  - Spinner calls Telegram `setMyCommands` on connector startup
+  - Telegram menu commands are generated from Spinner's shared command catalog
+  - command names are normalized to Telegram format (for example `admin-channel` becomes `admin_channel`)
+  - advanced text commands remain available even if not present in the Telegram menu
 
 Discord command gateway:
 - Listens to Discord Gateway `MESSAGE_CREATE` events (bot token + intents required)
+- Listens to Discord Gateway `INTERACTION_CREATE` events for slash-command execution
 - Uses the same command set as Telegram from plain message content (`/task`, `/search`, `/open`, `/status`, `/prompt`, `/admin-channel enable`, `/route`, `/approve`, `/deny`, `/pending-actions`, `/approve-action`, `/deny-action`)
 - Uses the same natural-language command intents as Telegram (tasking, approvals, qmd search/open/status, prompt/admin controls)
 - Supports DM `pair` for one-time token generation
@@ -105,12 +111,47 @@ Discord command gateway:
 - LLM replies (GLM Flash 4.7 via z.ai):
   - replies in DMs
   - replies in guild channels only when the bot is tagged/mentioned
+- startup command sync:
+  - Spinner upserts Discord application commands on connector startup
+  - by default, commands are registered globally
+  - for immediate availability, set `SPINNER_DISCORD_COMMAND_GUILD_IDS` to target guild IDs
+  - `SPINNER_DISCORD_APPLICATION_ID` can be set explicitly; otherwise Spinner resolves it through Discord API
+  - advanced text commands remain available even if not present in slash registration
+
+Command surface matrix:
+
+| Command | Telegram menu | Discord slash | Text command parsing |
+| --- | --- | --- | --- |
+| `task` | yes (`/task`) | yes (`/task`) | yes |
+| `search` | yes (`/search`) | yes (`/search`) | yes |
+| `open` | yes (`/open`) | yes (`/open`) | yes |
+| `status` | yes (`/status`) | yes (`/status`) | yes |
+| `monitor` | yes (`/monitor`) | yes (`/monitor`) | yes |
+| `admin-channel` | yes (`/admin_channel`) | yes (`/admin-channel`) | yes |
+| `prompt` | yes (`/prompt`) | yes (`/prompt`) | yes |
+| `approve` | yes (`/approve`) | yes (`/approve`) | yes |
+| `deny` | yes (`/deny`) | yes (`/deny`) | yes |
+| `pending-actions` | yes (`/pending_actions`) | yes (`/pending-actions`) | yes |
+| `approve-action` | yes (`/approve_action`) | yes (`/approve-action`) | yes |
+| `deny-action` | yes (`/deny_action`) | yes (`/deny-action`) | yes |
+| `pair` | yes (`/pair`, DM flow) | no | yes (DM flow) |
+| `route` | no | no | yes (admin text command) |
+
+Notes:
+- Telegram command names use underscores due to Telegram command naming rules.
+- Discord slash registration currently covers the shared command catalog above; `route` remains text-only.
+- Natural-language intents (for example, `please create a task ...`) are text parsing features, not slash/menu commands.
 
 z.ai runtime env:
 - `SPINNER_ZAI_API_KEY` (required for channel LLM replies)
 - `SPINNER_ZAI_BASE_URL` (default: `https://api.z.ai/api/paas/v4`)
 - `SPINNER_ZAI_MODEL` (default: `glm-4.7-flash`)
 - `SPINNER_ZAI_TIMEOUT_SECONDS` (default: `45`)
+
+Command sync runtime env:
+- `SPINNER_COMMAND_SYNC_ENABLED` (default: `true`)
+- `SPINNER_DISCORD_APPLICATION_ID` (optional explicit app id for command registration)
+- `SPINNER_DISCORD_COMMAND_GUILD_IDS` (optional CSV guild list for fast guild-scoped command propagation)
 
 IMAP runtime env:
 - `SPINNER_IMAP_HOST` (required to enable IMAP connector)

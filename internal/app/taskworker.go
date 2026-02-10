@@ -530,7 +530,7 @@ func (e *taskWorkerExecutor) resolveActionProposalWithRecord(ctx context.Context
 		}
 		return strings.TrimSpace(cleanReply)
 	}
-	notice := fmt.Sprintf("Action request pending approval: `%s`. Admin can run `/pending-actions`, `/approve-action %s`, or `/deny-action %s`.", approval.ID, approval.ID, approval.ID)
+	notice := actions.FormatApprovalRequestNotice(approval.ID)
 	if strings.TrimSpace(cleanReply) == "" {
 		return notice
 	}

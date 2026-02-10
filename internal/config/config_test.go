@@ -33,9 +33,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "")
+	t.Setenv("SPINNER_COMMAND_SYNC_ENABLED", "")
 	t.Setenv("SPINNER_ADMIN_TLS_SKIP_VERIFY", "")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "")
+	t.Setenv("SPINNER_DISCORD_APPLICATION_ID", "")
+	t.Setenv("SPINNER_DISCORD_COMMAND_GUILD_IDS", "")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "")
 	t.Setenv("SPINNER_TELEGRAM_POLL_SECONDS", "")
 	t.Setenv("SPINNER_IMAP_HOST", "")
@@ -156,11 +159,20 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.TaskNotifyFailurePolicy != "" {
 		t.Fatalf("expected default task notify failure policy empty, got %s", cfg.TaskNotifyFailurePolicy)
 	}
+	if !cfg.CommandSyncEnabled {
+		t.Fatal("expected command sync enabled by default")
+	}
 	if cfg.DiscordAPI != "https://discord.com/api/v10" {
 		t.Fatalf("expected default discord api base, got %s", cfg.DiscordAPI)
 	}
 	if cfg.DiscordWSURL != "wss://gateway.discord.gg/?v=10&encoding=json" {
 		t.Fatalf("expected default discord gateway url, got %s", cfg.DiscordWSURL)
+	}
+	if cfg.DiscordApplicationID != "" {
+		t.Fatalf("expected default discord application id empty, got %s", cfg.DiscordApplicationID)
+	}
+	if cfg.DiscordCommandGuildIDsCSV != "" {
+		t.Fatalf("expected default discord command guild ids empty, got %s", cfg.DiscordCommandGuildIDsCSV)
 	}
 	if cfg.TelegramAPI != "https://api.telegram.org" {
 		t.Fatalf("expected default telegram api base, got %s", cfg.TelegramAPI)
@@ -303,8 +315,11 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_TASK_NOTIFY_POLICY", "admin")
 	t.Setenv("SPINNER_TASK_NOTIFY_SUCCESS_POLICY", "origin")
 	t.Setenv("SPINNER_TASK_NOTIFY_FAILURE_POLICY", "admin")
+	t.Setenv("SPINNER_COMMAND_SYNC_ENABLED", "false")
 	t.Setenv("SPINNER_DISCORD_API_BASE", "https://discord.test/api/v10")
 	t.Setenv("SPINNER_DISCORD_GATEWAY_URL", "wss://discord.test/gateway")
+	t.Setenv("SPINNER_DISCORD_APPLICATION_ID", "1234567890")
+	t.Setenv("SPINNER_DISCORD_COMMAND_GUILD_IDS", "111,222")
 	t.Setenv("SPINNER_TELEGRAM_API_BASE", "https://telegram.test")
 	t.Setenv("SPINNER_TELEGRAM_POLL_SECONDS", "12")
 	t.Setenv("SPINNER_IMAP_HOST", "imap.example.com")
@@ -431,11 +446,20 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.TaskNotifyFailurePolicy != "admin" {
 		t.Fatalf("expected overridden task notify failure policy admin, got %s", cfg.TaskNotifyFailurePolicy)
 	}
+	if cfg.CommandSyncEnabled {
+		t.Fatal("expected command sync enabled false")
+	}
 	if cfg.DiscordAPI != "https://discord.test/api/v10" {
 		t.Fatalf("expected overridden discord api base, got %s", cfg.DiscordAPI)
 	}
 	if cfg.DiscordWSURL != "wss://discord.test/gateway" {
 		t.Fatalf("expected overridden discord gateway url, got %s", cfg.DiscordWSURL)
+	}
+	if cfg.DiscordApplicationID != "1234567890" {
+		t.Fatalf("expected overridden discord application id, got %s", cfg.DiscordApplicationID)
+	}
+	if cfg.DiscordCommandGuildIDsCSV != "111,222" {
+		t.Fatalf("expected overridden discord command guild ids, got %s", cfg.DiscordCommandGuildIDsCSV)
 	}
 	if cfg.TelegramAPI != "https://telegram.test" {
 		t.Fatalf("expected overridden telegram api base, got %s", cfg.TelegramAPI)

@@ -114,6 +114,51 @@ func (f *fakePolicy) Check(input llmsafety.Request) llmsafety.Decision {
 	return llmsafety.Decision{Allowed: true}
 }
 
+func TestSyncCommandsRegistersTelegramCommands(t *testing.T) {
+	var payload struct {
+		Commands []struct {
+			Command     string `json:"command"`
+			Description string `json:"description"`
+		} `json:"commands"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !strings.Contains(req.URL.Path, "/setMyCommands") {
+			http.NotFound(w, req)
+			return
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer server.Close()
+
+	connector := New("test-token", server.URL, t.TempDir(), 1, &fakePairingStore{}, &fakeCommandGateway{}, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := connector.syncCommands(context.Background()); err != nil {
+		t.Fatalf("syncCommands failed: %v", err)
+	}
+	if len(payload.Commands) == 0 {
+		t.Fatal("expected command payload")
+	}
+	seenTask := false
+	seenPair := false
+	for _, command := range payload.Commands {
+		if command.Command == "task" {
+			seenTask = true
+		}
+		if command.Command == "pair" {
+			seenPair = true
+		}
+	}
+	if !seenTask {
+		t.Fatal("expected task command in payload")
+	}
+	if !seenPair {
+		t.Fatal("expected pair command in payload")
+	}
+}
+
 func TestPollOncePairDM(t *testing.T) {
 	pairings := &fakePairingStore{}
 	commands := &fakeCommandGateway{}
@@ -571,7 +616,10 @@ func TestPollOnceLLMActionProposalQueuesApproval(t *testing.T) {
 	if pairings.actions[0].ActionType != "send_email" {
 		t.Fatalf("unexpected action type: %s", pairings.actions[0].ActionType)
 	}
-	if !strings.Contains(sentBody, "pending approval") {
-		t.Fatalf("expected pending approval notice in response, got %s", sentBody)
+	if !strings.Contains(sentBody, "Admin approval required.") {
+		t.Fatalf("expected compact approval notice in response, got %s", sentBody)
+	}
+	if !strings.Contains(sentBody, "'act-1'") {
+		t.Fatalf("expected action id in compact notice, got %s", sentBody)
 	}
 }

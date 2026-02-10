@@ -161,6 +161,21 @@ func (f *fakeStore) ListPendingActionApprovals(ctx context.Context, connector, e
 	}
 	results := make([]store.ActionApproval, 0, len(f.actionApprovals))
 	for _, item := range f.actionApprovals {
+		matchesConnector := strings.TrimSpace(item.Connector) == "" || strings.EqualFold(strings.TrimSpace(item.Connector), strings.TrimSpace(connector))
+		matchesExternalID := strings.TrimSpace(item.ExternalID) == "" || strings.TrimSpace(item.ExternalID) == strings.TrimSpace(externalID)
+		if item.Status == "pending" && matchesConnector && matchesExternalID {
+			results = append(results, item)
+		}
+	}
+	return results, nil
+}
+
+func (f *fakeStore) ListPendingActionApprovalsGlobal(ctx context.Context, limit int) ([]store.ActionApproval, error) {
+	if len(f.actionApprovals) == 0 {
+		return []store.ActionApproval{}, nil
+	}
+	results := make([]store.ActionApproval, 0, len(f.actionApprovals))
+	for _, item := range f.actionApprovals {
 		if item.Status == "pending" {
 			results = append(results, item)
 		}
@@ -941,6 +956,35 @@ func TestHandlePendingActionsNaturalLanguage(t *testing.T) {
 	}
 }
 
+func TestHandlePendingActionsFallsBackToGlobalList(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+			actionApprovals: []store.ActionApproval{
+				{ID: "act_1234abcd", Connector: "discord", ExternalID: "chan-1", ActionType: "send_email", ActionSummary: "Send digest", Status: "pending"},
+			},
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "/pending-actions",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "all contexts") {
+		t.Fatalf("expected global pending actions list, got %s", output.Reply)
+	}
+	if !strings.Contains(output.Reply, "discord/chan-1") {
+		t.Fatalf("expected source details in global list, got %s", output.Reply)
+	}
+}
+
 func TestHandleApproveActionCommand(t *testing.T) {
 	fStore := &fakeStore{
 		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
@@ -974,6 +1018,60 @@ func TestHandleApproveActionCommand(t *testing.T) {
 	}
 	if fStore.lastExecutionUpdate.ExecutionStatus != "skipped" {
 		t.Fatalf("expected skipped execution status, got %s", fStore.lastExecutionUpdate.ExecutionStatus)
+	}
+}
+
+func TestHandleApproveActionCommandAcceptsQuotedID(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act_9999ffff", ActionType: "send_email", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "/approve-action 'act_9999ffff'",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "approved") {
+		t.Fatalf("expected quoted action id to be approved, got %s", output.Reply)
+	}
+}
+
+func TestHandleApproveActionNaturalLanguageFallsBackToGlobalPending(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act_1234abcd", Connector: "discord", ExternalID: "chan-1", ActionType: "send_email", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "yes, i approve it",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "act_1234abcd") {
+		t.Fatalf("expected global pending action approval to run, got %s", output.Reply)
 	}
 }
 

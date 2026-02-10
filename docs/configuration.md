@@ -30,15 +30,30 @@ Notes:
 
 ## Channel Connectors
 
+### Shared command sync
+- `SPINNER_COMMAND_SYNC_ENABLED` (default: `true`)
+
 ### Telegram
 - `SPINNER_TELEGRAM_TOKEN`
 - `SPINNER_TELEGRAM_API_BASE`
 - `SPINNER_TELEGRAM_POLL_SECONDS`
 
+Telegram startup behavior:
+- connector startup calls Telegram `setMyCommands`
+- command names are normalized to Telegram format (for example `admin-channel` becomes `admin_channel`)
+
 ### Discord
 - `SPINNER_DISCORD_TOKEN`
 - `SPINNER_DISCORD_API_BASE`
 - `SPINNER_DISCORD_GATEWAY_URL`
+- `SPINNER_DISCORD_APPLICATION_ID` (optional)
+- `SPINNER_DISCORD_COMMAND_GUILD_IDS` (optional CSV)
+
+Discord startup behavior:
+- connector startup upserts Discord application commands
+- if `SPINNER_DISCORD_COMMAND_GUILD_IDS` is empty, commands are registered globally
+- if `SPINNER_DISCORD_COMMAND_GUILD_IDS` is set, commands are registered per guild for faster visibility
+- if `SPINNER_DISCORD_APPLICATION_ID` is empty, Spinner resolves app id using Discord API
 
 ## LLM Provider and Policy
 
