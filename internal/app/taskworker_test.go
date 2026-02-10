@@ -12,6 +12,7 @@ import (
 
 	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
+	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/store"
 )
 
@@ -29,7 +30,7 @@ func (f *fakeResponder) Reply(ctx context.Context, input llm.MessageInput) (stri
 
 func TestTaskWorkerExecutorWritesArtifact(t *testing.T) {
 	tempRoot := t.TempDir()
-	executor := newTaskWorkerExecutor(tempRoot, &fakeResponder{reply: "summary output"}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	executor := newTaskWorkerExecutor(tempRoot, nil, &fakeResponder{reply: "summary output"}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-1",
 		WorkspaceID: "ws-1",
@@ -57,6 +58,71 @@ func TestTaskWorkerExecutorWritesArtifact(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "summary output") {
 		t.Fatalf("expected artifact to include responder output, got: %s", string(content))
+	}
+}
+
+func TestTaskWorkerExecutorQueuesActionApprovalFromTaskOutput(t *testing.T) {
+	tempRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	sqlStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("open test store: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlStore.Close() })
+	if err := sqlStore.AutoMigrate(context.Background()); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+
+	task := orchestrator.Task{
+		ID:          "task-action-1",
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Pricing fetch",
+		Prompt:      "Fetch pricing",
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := sqlStore.CreateTask(context.Background(), store.CreateTaskInput{
+		ID:               task.ID,
+		WorkspaceID:      task.WorkspaceID,
+		ContextID:        task.ContextID,
+		Kind:             string(task.Kind),
+		Title:            task.Title,
+		Prompt:           task.Prompt,
+		Status:           "queued",
+		SourceConnector:  "discord",
+		SourceExternalID: "chan-1",
+		SourceUserID:     "user-1",
+		SourceText:       "can you run a search in dwizi.com?",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	responder := &fakeResponder{
+		reply: "I'll fetch it.\n```action\n{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch dwizi pricing details\",\"args\":[\"-sS\",\"https://dwizi.com/pricing\"]}\n```",
+	}
+	executor := newTaskWorkerExecutor(tempRoot, sqlStore, responder, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	result, err := executor.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatalf("execute task: %v", err)
+	}
+	if !strings.Contains(result.Summary, "pending approval") {
+		t.Fatalf("expected summary to include pending approval notice, got %s", result.Summary)
+	}
+
+	approvals, err := sqlStore.ListPendingActionApprovals(context.Background(), "discord", "chan-1", 5)
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	if len(approvals) != 1 {
+		t.Fatalf("expected one pending action approval, got %d", len(approvals))
+	}
+	if approvals[0].ActionType != "run_command" {
+		t.Fatalf("expected run_command action type, got %s", approvals[0].ActionType)
+	}
+	if approvals[0].ActionTarget != "curl" {
+		t.Fatalf("expected action target curl, got %s", approvals[0].ActionTarget)
 	}
 }
 
@@ -111,5 +177,70 @@ func TestTaskObserverPersistsLifecycle(t *testing.T) {
 	}
 	if record.ResultPath != "tasks/task-2.md" {
 		t.Fatalf("unexpected result path: %s", record.ResultPath)
+	}
+}
+
+func TestTaskWorkerExecutorReindexQueuesDebouncedIndex(t *testing.T) {
+	tempRoot := t.TempDir()
+	qmdService := qmd.New(qmd.Config{
+		WorkspaceRoot: tempRoot,
+		Binary:        "definitely-missing-qmd-binary",
+		Debounce:      time.Hour,
+		IndexTimeout:  time.Second,
+		QueryTimeout:  time.Second,
+		AutoEmbed:     true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer qmdService.Close()
+
+	executor := newTaskWorkerExecutor(tempRoot, nil, nil, qmdService, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-reindex-1",
+		WorkspaceID: "ws-1",
+		ContextID:   "system:filewatcher",
+		Kind:        orchestrator.TaskKindReindex,
+		Title:       "Reindex markdown",
+		Prompt:      "markdown file changed",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	result, err := executor.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatalf("execute reindex task: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(result.Summary), "scheduled") {
+		t.Fatalf("expected scheduled summary, got %q", result.Summary)
+	}
+}
+
+func TestTaskWorkerExecutorReindexUsesChangedPathFromPrompt(t *testing.T) {
+	tempRoot := t.TempDir()
+	qmdService := qmd.New(qmd.Config{
+		WorkspaceRoot: tempRoot,
+		Binary:        "definitely-missing-qmd-binary",
+		Debounce:      time.Hour,
+		IndexTimeout:  time.Second,
+		QueryTimeout:  time.Second,
+		AutoEmbed:     true,
+		EmbedExclude:  []string{"logs/chats/**"},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer qmdService.Close()
+
+	executor := newTaskWorkerExecutor(tempRoot, nil, nil, qmdService, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-reindex-2",
+		WorkspaceID: "ws-2",
+		ContextID:   "system:filewatcher",
+		Kind:        orchestrator.TaskKindReindex,
+		Title:       "Reindex markdown",
+		Prompt:      "markdown file changed: /tmp/workspaces/ws-2/logs/chats/discord.md",
+		CreatedAt:   time.Now().UTC(),
+	}
+
+	result, err := executor.Execute(context.Background(), task)
+	if err != nil {
+		t.Fatalf("execute reindex task: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(result.Summary), "scheduled") {
+		t.Fatalf("expected scheduled summary, got %q", result.Summary)
 	}
 }

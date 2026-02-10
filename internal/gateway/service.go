@@ -71,6 +71,8 @@ type MessageOutput struct {
 	Reply   string
 }
 
+const latestPendingActionAlias = "__latest_pending__"
+
 func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor) *Service {
 	return &Service{
 		store:          store,
@@ -112,8 +114,14 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 	case "prompt":
 		return s.handlePrompt(ctx, input, arg)
 	case "approve":
+		if actionArg, ok := parseApproveCommandAsActionArg(arg); ok {
+			return s.handleApproveAction(ctx, input, actionArg)
+		}
 		return s.handleApprove(ctx, input, arg)
 	case "deny":
+		if actionArg, ok := parseDenyCommandAsActionArg(arg); ok {
+			return s.handleDenyAction(ctx, input, actionArg)
+		}
 		return s.handleDeny(ctx, input, arg)
 	case "pending-actions":
 		return s.handlePendingActions(ctx, input)
@@ -122,8 +130,31 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 	case "deny-action":
 		return s.handleDenyAction(ctx, input, arg)
 	default:
-		if prompt, ok := parseIntentTask(text); ok {
-			return s.handleTask(ctx, input, prompt)
+		if nlCommand, nlArg, ok := parseNaturalLanguageCommand(text); ok {
+			switch nlCommand {
+			case "task":
+				return s.handleTask(ctx, input, nlArg)
+			case "search":
+				return s.handleSearch(ctx, input, nlArg)
+			case "open":
+				return s.handleOpen(ctx, input, nlArg)
+			case "status":
+				return s.handleStatus(ctx, input)
+			case "admin-channel":
+				return s.handleAdminChannel(ctx, input, nlArg)
+			case "prompt":
+				return s.handlePrompt(ctx, input, nlArg)
+			case "approve":
+				return s.handleApprove(ctx, input, nlArg)
+			case "deny":
+				return s.handleDeny(ctx, input, nlArg)
+			case "pending-actions":
+				return s.handlePendingActions(ctx, input)
+			case "approve-action":
+				return s.handleApproveAction(ctx, input, nlArg)
+			case "deny-action":
+				return s.handleDenyAction(ctx, input, nlArg)
+			}
 		}
 		if err := s.handleAutoTriage(ctx, input, text); err != nil {
 			return MessageOutput{}, err
@@ -163,6 +194,7 @@ func (s *Service) handlePendingActions(ctx context.Context, input MessageInput) 
 
 func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
 	actionID := strings.TrimSpace(arg)
+	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
 	if actionID == "" {
 		return MessageOutput{Handled: true, Reply: "Usage: /approve-action <action-id>"}, nil
 	}
@@ -175,6 +207,13 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 	}
 	if !isAdminRole(identity.Role) {
 		return MessageOutput{Handled: true, Reply: "Access denied: admin role required."}, nil
+	}
+	if resolveLatest {
+		resolved, reply := s.resolveSinglePendingActionID(ctx, input)
+		if strings.TrimSpace(reply) != "" {
+			return MessageOutput{Handled: true, Reply: reply}, nil
+		}
+		actionID = resolved
 	}
 	record, err := s.store.ApproveActionApproval(ctx, store.ApproveActionApprovalInput{
 		ID:             actionID,
@@ -263,6 +302,7 @@ func (s *Service) handleDenyAction(ctx context.Context, input MessageInput, arg 
 	if len(parts) > 1 {
 		reason = strings.Join(parts[1:], " ")
 	}
+	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
 	identity, err := s.store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
 	if err != nil {
 		if errors.Is(err, store.ErrIdentityNotFound) {
@@ -272,6 +312,13 @@ func (s *Service) handleDenyAction(ctx context.Context, input MessageInput, arg 
 	}
 	if !isAdminRole(identity.Role) {
 		return MessageOutput{Handled: true, Reply: "Access denied: admin role required."}, nil
+	}
+	if resolveLatest {
+		resolved, reply := s.resolveSinglePendingActionID(ctx, input)
+		if strings.TrimSpace(reply) != "" {
+			return MessageOutput{Handled: true, Reply: reply}, nil
+		}
+		actionID = resolved
 	}
 	record, err := s.store.DenyActionApproval(ctx, store.DenyActionApprovalInput{
 		ID:             actionID,
@@ -829,15 +876,475 @@ func splitCommand(text string) (string, string) {
 
 func parseIntentTask(text string) (string, bool) {
 	trimmed := strings.TrimSpace(text)
-	lower := strings.ToLower(trimmed)
-	switch {
-	case strings.HasPrefix(lower, "task "):
-		return strings.TrimSpace(trimmed[len("task "):]), true
-	case strings.HasPrefix(lower, "create task "):
-		return strings.TrimSpace(trimmed[len("create task "):]), true
-	default:
+	if trimmed == "" {
 		return "", false
 	}
+	lower := strings.ToLower(trimmed)
+	phrases := []string{
+		"task ",
+		"create task ",
+		"create a task ",
+		"create a task to ",
+		"please create a task ",
+		"please create a task to ",
+		"add task ",
+		"add a task ",
+		"queue task ",
+		"queue a task ",
+	}
+	for _, phrase := range phrases {
+		if !strings.HasPrefix(lower, phrase) {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[len(phrase):])
+		if value == "" {
+			return "", false
+		}
+		return value, true
+	}
+	return "", false
+}
+
+func parseApproveCommandAsActionArg(arg string) (string, bool) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if actionID, ok := findActionID(trimmed); ok {
+		return actionID, true
+	}
+	if lower == "it" || lower == "this" || lower == "that" || lower == "action" {
+		return latestPendingActionAlias, true
+	}
+	if strings.Contains(lower, "approve action") || strings.Contains(lower, "the action") || strings.Contains(lower, "approved action") {
+		return latestPendingActionAlias, true
+	}
+	return "", false
+}
+
+func parseDenyCommandAsActionArg(arg string) (string, bool) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if actionID, _, end, ok := findActionIDWithBounds(trimmed); ok {
+		reason := strings.TrimSpace(trimmed[end:])
+		reason = normalizeDenyReason(reason)
+		if reason == "" {
+			return actionID, true
+		}
+		return actionID + " " + reason, true
+	}
+	if lower == "it" || lower == "this" || lower == "that" || strings.HasPrefix(lower, "it ") ||
+		strings.HasPrefix(lower, "this ") || strings.HasPrefix(lower, "that ") || strings.Contains(lower, "action") {
+		reason := trimmed
+		reasonLower := lower
+		for _, marker := range []string{"it ", "this ", "that ", "because ", "reason ", "for "} {
+			index := strings.Index(reasonLower, marker)
+			if index < 0 {
+				continue
+			}
+			value := strings.TrimSpace(reason[index+len(marker):])
+			value = normalizeDenyReason(value)
+			if value == "" {
+				continue
+			}
+			return latestPendingActionAlias + " " + value, true
+		}
+		return latestPendingActionAlias, true
+	}
+	return "", false
+}
+
+func parseNaturalLanguageCommand(text string) (command, arg string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", "", false
+	}
+	lower := strings.ToLower(trimmed)
+
+	if actionID, found := parseIntentApproveAction(trimmed); found {
+		return "approve-action", actionID, true
+	}
+	if actionArg, found := parseIntentDenyAction(trimmed); found {
+		return "deny-action", actionArg, true
+	}
+	if isImplicitApproveActionIntent(lower) {
+		return "approve-action", latestPendingActionAlias, true
+	}
+	if denyReason, found := parseImplicitDenyActionReason(trimmed, lower); found {
+		if denyReason == "" {
+			return "deny-action", latestPendingActionAlias, true
+		}
+		return "deny-action", latestPendingActionAlias + " " + denyReason, true
+	}
+	if token, found := parseIntentApprovePairing(trimmed); found {
+		return "approve", token, true
+	}
+	if denyArg, found := parseIntentDenyPairing(trimmed); found {
+		return "deny", denyArg, true
+	}
+	if isPendingActionsIntent(lower) {
+		return "pending-actions", "", true
+	}
+	if strings.Contains(lower, "admin channel") && strings.Contains(lower, "enable") {
+		return "admin-channel", "enable", true
+	}
+	if promptArg, found := parsePromptIntent(trimmed, lower); found {
+		return "prompt", promptArg, true
+	}
+	if query, found := parseSearchIntent(trimmed, lower); found {
+		return "search", query, true
+	}
+	if target, found := parseOpenIntent(trimmed, lower); found {
+		return "open", target, true
+	}
+	if isStatusIntent(lower) {
+		return "status", "", true
+	}
+	if prompt, found := parseIntentTask(trimmed); found {
+		return "task", prompt, true
+	}
+	return "", "", false
+}
+
+func isImplicitApproveActionIntent(lower string) bool {
+	if !(strings.Contains(lower, "approve") || strings.Contains(lower, "approved")) {
+		return false
+	}
+	if strings.Contains(lower, "pair") || strings.Contains(lower, "token") {
+		return false
+	}
+	if strings.Contains(lower, "approve action") || strings.Contains(lower, "approve the action") {
+		return true
+	}
+	return strings.Contains(lower, "approve it") ||
+		strings.Contains(lower, "approve this") ||
+		strings.Contains(lower, "approve that") ||
+		strings.Contains(lower, "yes i approve")
+}
+
+func parseImplicitDenyActionReason(trimmed, lower string) (string, bool) {
+	hasDeny := strings.Contains(lower, "deny") || strings.Contains(lower, "reject") || strings.Contains(lower, "decline")
+	if !hasDeny {
+		return "", false
+	}
+	if strings.Contains(lower, "pair") || strings.Contains(lower, "token") {
+		return "", false
+	}
+	if !(strings.Contains(lower, "deny action") ||
+		strings.Contains(lower, "reject action") ||
+		strings.Contains(lower, "deny it") ||
+		strings.Contains(lower, "reject it") ||
+		strings.Contains(lower, "decline it") ||
+		strings.Contains(lower, "deny this") ||
+		strings.Contains(lower, "reject this") ||
+		strings.Contains(lower, "decline this")) {
+		return "", false
+	}
+	reason := trimmed
+	reasonLower := lower
+	for _, marker := range []string{"because ", "reason ", "for "} {
+		index := strings.Index(reasonLower, marker)
+		if index < 0 {
+			continue
+		}
+		value := strings.TrimSpace(reason[index+len(marker):])
+		value = normalizeDenyReason(value)
+		return value, true
+	}
+	return "", true
+}
+
+func isPendingActionsIntent(lower string) bool {
+	return strings.Contains(lower, "pending action") || strings.Contains(lower, "pending approval")
+}
+
+func parsePromptIntent(trimmed, lower string) (string, bool) {
+	if strings.Contains(lower, "show prompt") || strings.Contains(lower, "prompt show") {
+		return "show", true
+	}
+	if strings.Contains(lower, "clear prompt") || strings.Contains(lower, "prompt clear") {
+		return "clear", true
+	}
+	for _, phrase := range []string{"set prompt", "update prompt"} {
+		index := strings.Index(lower, phrase)
+		if index < 0 {
+			continue
+		}
+		value := strings.TrimSpace(trimmed[index+len(phrase):])
+		if strings.HasPrefix(strings.ToLower(value), "to ") {
+			value = strings.TrimSpace(value[len("to "):])
+		}
+		if value == "" {
+			return "", false
+		}
+		return "set " + value, true
+	}
+	return "", false
+}
+
+func parseSearchIntent(trimmed, lower string) (string, bool) {
+	for _, phrase := range []string{"search for ", "search docs for ", "find in docs ", "find docs for "} {
+		if strings.HasPrefix(lower, phrase) {
+			value := strings.TrimSpace(trimmed[len(phrase):])
+			if value == "" {
+				return "", false
+			}
+			return value, true
+		}
+	}
+	if strings.HasPrefix(lower, "search ") {
+		value := strings.TrimSpace(trimmed[len("search "):])
+		if value == "" || value == "status" {
+			return "", false
+		}
+		return value, true
+	}
+	return "", false
+}
+
+func parseOpenIntent(trimmed, lower string) (string, bool) {
+	for _, phrase := range []string{"open file ", "open doc ", "open markdown ", "show file "} {
+		if strings.HasPrefix(lower, phrase) {
+			target := sanitizeOpenTarget(trimmed[len(phrase):])
+			if target == "" {
+				return "", false
+			}
+			return target, true
+		}
+	}
+	if strings.HasPrefix(lower, "open ") {
+		target := sanitizeOpenTarget(trimmed[len("open "):])
+		if target == "" {
+			return "", false
+		}
+		return target, true
+	}
+	return "", false
+}
+
+func sanitizeOpenTarget(value string) string {
+	trimmed := strings.TrimSpace(value)
+	trimmed = strings.Trim(trimmed, "`\"'")
+	trimmed = strings.Trim(trimmed, " .,:;!?")
+	return trimmed
+}
+
+func isStatusIntent(lower string) bool {
+	if lower == "status" {
+		return true
+	}
+	return strings.Contains(lower, "qmd status") ||
+		strings.Contains(lower, "index status") ||
+		strings.Contains(lower, "search index status")
+}
+
+func parseIntentApproveAction(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, "approve") {
+		return "", false
+	}
+	if strings.Contains(lower, "deny") || strings.Contains(lower, "reject") || strings.Contains(lower, "decline") {
+		return "", false
+	}
+	actionID, ok := findActionID(trimmed)
+	if !ok {
+		return "", false
+	}
+	return actionID, true
+}
+
+func parseIntentDenyAction(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	hasDenyVerb := strings.Contains(lower, "deny") || strings.Contains(lower, "reject") || strings.Contains(lower, "decline")
+	if !hasDenyVerb {
+		return "", false
+	}
+	actionID, _, end, ok := findActionIDWithBounds(trimmed)
+	if !ok {
+		return "", false
+	}
+	reason := strings.TrimSpace(trimmed[end:])
+	reason = normalizeDenyReason(reason)
+	if reason == "" {
+		return actionID, true
+	}
+	return actionID + " " + reason, true
+}
+
+func parseIntentApprovePairing(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !strings.Contains(lower, "approve") {
+		return "", false
+	}
+	if strings.Contains(lower, "deny") || strings.Contains(lower, "reject") || strings.Contains(lower, "decline") {
+		return "", false
+	}
+	token, _, _, ok := findPairingTokenWithBounds(trimmed)
+	if !ok {
+		return "", false
+	}
+	return token, true
+}
+
+func parseIntentDenyPairing(text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	if !(strings.Contains(lower, "deny") || strings.Contains(lower, "reject") || strings.Contains(lower, "decline")) {
+		return "", false
+	}
+	token, _, end, ok := findPairingTokenWithBounds(trimmed)
+	if !ok {
+		return "", false
+	}
+	reason := strings.TrimSpace(trimmed[end:])
+	reason = normalizeDenyReason(reason)
+	if reason == "" {
+		return token, true
+	}
+	return token + " " + reason, true
+}
+
+func normalizeDenyReason(value string) string {
+	reason := strings.TrimSpace(value)
+	reason = strings.Trim(reason, " .,:;!?-")
+	reasonLower := strings.ToLower(reason)
+	switch {
+	case strings.HasPrefix(reasonLower, "because "):
+		reason = strings.TrimSpace(reason[len("because "):])
+	case strings.HasPrefix(reasonLower, "reason "):
+		reason = strings.TrimSpace(reason[len("reason "):])
+	case strings.HasPrefix(reasonLower, "for "):
+		reason = strings.TrimSpace(reason[len("for "):])
+	}
+	return strings.TrimSpace(strings.Trim(reason, " .,:;!?-"))
+}
+
+func (s *Service) resolveSinglePendingActionID(ctx context.Context, input MessageInput) (string, string) {
+	items, err := s.store.ListPendingActionApprovals(ctx, input.Connector, input.ExternalID, 2)
+	if err != nil {
+		return "", "Unable to load pending actions right now."
+	}
+	if len(items) == 0 {
+		return "", "No pending actions in this context."
+	}
+	if len(items) > 1 {
+		return "", "Multiple pending actions found. Use `/pending-actions` and approve by id."
+	}
+	return strings.TrimSpace(items[0].ID), ""
+}
+
+func findActionID(text string) (string, bool) {
+	actionID, _, _, ok := findActionIDWithBounds(text)
+	return actionID, ok
+}
+
+func findActionIDWithBounds(text string) (actionID string, start int, end int, ok bool) {
+	lower := strings.ToLower(text)
+	const prefix = "act_"
+	search := 0
+	for {
+		offset := strings.Index(lower[search:], prefix)
+		if offset < 0 {
+			return "", 0, 0, false
+		}
+		start = search + offset
+		end = start + len(prefix)
+		for end < len(lower) {
+			ch := lower[end]
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+				end++
+				continue
+			}
+			break
+		}
+		if end-start < len(prefix)+4 {
+			search = start + len(prefix)
+			continue
+		}
+		return strings.Trim(lower[start:end], "`"), start, end, true
+	}
+}
+
+func findPairingTokenWithBounds(text string) (token string, start int, end int, ok bool) {
+	lower := strings.ToLower(text)
+	contextHint := strings.Contains(lower, "pair") || strings.Contains(lower, "token")
+	search := 0
+	for {
+		start = nextAlphaNumericStart(text, search)
+		if start < 0 {
+			return "", 0, 0, false
+		}
+		end = start
+		for end < len(text) && isASCIIAlphaNumeric(text[end]) {
+			end++
+		}
+		candidate := text[start:end]
+		lowerCandidate := strings.ToLower(candidate)
+		if isLikelyPairingToken(candidate, lowerCandidate, contextHint) {
+			return strings.ToUpper(candidate), start, end, true
+		}
+		search = end + 1
+	}
+}
+
+func nextAlphaNumericStart(text string, from int) int {
+	for index := from; index < len(text); index++ {
+		if isASCIIAlphaNumeric(text[index]) {
+			return index
+		}
+	}
+	return -1
+}
+
+func isLikelyPairingToken(candidate, lowerCandidate string, contextHint bool) bool {
+	if len(candidate) < 8 || len(candidate) > 64 {
+		return false
+	}
+	if strings.HasPrefix(lowerCandidate, "act_") {
+		return false
+	}
+	switch lowerCandidate {
+	case "approve", "approved", "approval", "action", "pair", "pairing", "token", "please", "deny", "denied", "reject", "rejected", "decline", "because", "reason":
+		return false
+	}
+	if contextHint {
+		return true
+	}
+	return hasASCIIDigit(candidate) || candidate == strings.ToUpper(candidate)
+}
+
+func hasASCIIDigit(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] >= '0' && value[index] <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIAlphaNumeric(value byte) bool {
+	return (value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9')
 }
 
 func compactSnippet(input string) string {

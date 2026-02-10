@@ -11,8 +11,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_DB_PATH", "")
 	t.Setenv("SPINNER_DEFAULT_CONCURRENCY", "")
 	t.Setenv("SPINNER_QMD_BINARY", "")
+	t.Setenv("SPINNER_QMD_SIDECAR_URL", "")
+	t.Setenv("SPINNER_QMD_SIDECAR_ADDR", "")
 	t.Setenv("SPINNER_QMD_INDEX", "")
 	t.Setenv("SPINNER_QMD_COLLECTION", "")
+	t.Setenv("SPINNER_QMD_SHARED_MODELS_DIR", "")
+	t.Setenv("SPINNER_QMD_EMBED_EXCLUDE_GLOBS", "")
 	t.Setenv("SPINNER_QMD_SEARCH_LIMIT", "")
 	t.Setenv("SPINNER_QMD_OPEN_MAX_BYTES", "")
 	t.Setenv("SPINNER_QMD_DEBOUNCE_SECONDS", "")
@@ -68,6 +72,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "")
 	t.Setenv("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "")
 	t.Setenv("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "")
+	t.Setenv("SPINNER_SKILLS_GLOBAL_ROOT", "")
 
 	cfg := FromEnv()
 	if cfg.DataDir != "/data" {
@@ -85,11 +90,23 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.QMDBinary != "qmd" {
 		t.Fatalf("expected default qmd binary, got %s", cfg.QMDBinary)
 	}
+	if cfg.QMDSidecarURL != "" {
+		t.Fatalf("expected default qmd sidecar url empty, got %s", cfg.QMDSidecarURL)
+	}
+	if cfg.QMDSidecarAddr != ":8091" {
+		t.Fatalf("expected default qmd sidecar addr :8091, got %s", cfg.QMDSidecarAddr)
+	}
 	if cfg.QMDIndexName != "spinner" {
 		t.Fatalf("expected default qmd index name, got %s", cfg.QMDIndexName)
 	}
 	if cfg.QMDCollectionName != "workspace" {
 		t.Fatalf("expected default qmd collection name, got %s", cfg.QMDCollectionName)
+	}
+	if cfg.QMDSharedModelsDir != filepath.Join("/data", "qmd-models") {
+		t.Fatalf("expected default qmd shared models dir /data/qmd-models, got %s", cfg.QMDSharedModelsDir)
+	}
+	if cfg.QMDEmbedExcludeGlobsCSV != "" {
+		t.Fatalf("expected default qmd embed exclude globs to be empty, got %s", cfg.QMDEmbedExcludeGlobsCSV)
 	}
 	if cfg.QMDSearchLimit != 5 {
 		t.Fatalf("expected default qmd search limit 5, got %d", cfg.QMDSearchLimit)
@@ -247,6 +264,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SystemPromptContextPath != "context/agents/{context_id}/SYSTEM_PROMPT.md" {
 		t.Fatalf("expected default context system prompt path, got %s", cfg.SystemPromptContextPath)
 	}
+	if cfg.SkillsGlobalRoot != "/context/skills" {
+		t.Fatalf("expected default skills global root /context/skills, got %s", cfg.SkillsGlobalRoot)
+	}
 	if !cfg.AdminTLSSkipVerify {
 		t.Fatal("expected admin tls skip verify to default to true")
 	}
@@ -261,8 +281,12 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_DB_PATH", "/var/spinner/db.sqlite")
 	t.Setenv("SPINNER_DEFAULT_CONCURRENCY", "9")
 	t.Setenv("SPINNER_QMD_BINARY", "/usr/local/bin/qmd")
+	t.Setenv("SPINNER_QMD_SIDECAR_URL", "http://spinner-qmd:8091")
+	t.Setenv("SPINNER_QMD_SIDECAR_ADDR", ":19091")
 	t.Setenv("SPINNER_QMD_INDEX", "community")
 	t.Setenv("SPINNER_QMD_COLLECTION", "docs")
+	t.Setenv("SPINNER_QMD_SHARED_MODELS_DIR", "/var/spinner/qmd-models")
+	t.Setenv("SPINNER_QMD_EMBED_EXCLUDE_GLOBS", "logs/chats/**,tasks/**")
 	t.Setenv("SPINNER_QMD_SEARCH_LIMIT", "9")
 	t.Setenv("SPINNER_QMD_OPEN_MAX_BYTES", "2400")
 	t.Setenv("SPINNER_QMD_DEBOUNCE_SECONDS", "7")
@@ -317,6 +341,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "/context/GLOBAL_SYSTEM_PROMPT.md")
 	t.Setenv("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "persona/SYSTEM_PROMPT.md")
 	t.Setenv("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "persona/agents/{context_id}/SYSTEM_PROMPT.md")
+	t.Setenv("SPINNER_SKILLS_GLOBAL_ROOT", "/context/skill-packs")
 	t.Setenv("PUBLIC_HOST", "chat.example.com")
 	t.Setenv("ADMIN_HOST", "admin.example.com")
 	t.Setenv("SPINNER_ADMIN_API_URL", "https://admin.example.com")
@@ -340,11 +365,23 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.QMDBinary != "/usr/local/bin/qmd" {
 		t.Fatalf("expected overridden qmd binary, got %s", cfg.QMDBinary)
 	}
+	if cfg.QMDSidecarURL != "http://spinner-qmd:8091" {
+		t.Fatalf("expected overridden qmd sidecar url, got %s", cfg.QMDSidecarURL)
+	}
+	if cfg.QMDSidecarAddr != ":19091" {
+		t.Fatalf("expected overridden qmd sidecar addr, got %s", cfg.QMDSidecarAddr)
+	}
 	if cfg.QMDIndexName != "community" {
 		t.Fatalf("expected overridden qmd index name, got %s", cfg.QMDIndexName)
 	}
 	if cfg.QMDCollectionName != "docs" {
 		t.Fatalf("expected overridden qmd collection name, got %s", cfg.QMDCollectionName)
+	}
+	if cfg.QMDSharedModelsDir != "/var/spinner/qmd-models" {
+		t.Fatalf("expected overridden qmd shared models dir, got %s", cfg.QMDSharedModelsDir)
+	}
+	if cfg.QMDEmbedExcludeGlobsCSV != "logs/chats/**,tasks/**" {
+		t.Fatalf("expected overridden qmd embed exclude globs, got %s", cfg.QMDEmbedExcludeGlobsCSV)
 	}
 	if cfg.QMDSearchLimit != 9 {
 		t.Fatalf("expected overridden qmd search limit, got %d", cfg.QMDSearchLimit)
@@ -507,6 +544,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SystemPromptContextPath != "persona/agents/{context_id}/SYSTEM_PROMPT.md" {
 		t.Fatalf("expected overridden context system prompt path, got %s", cfg.SystemPromptContextPath)
+	}
+	if cfg.SkillsGlobalRoot != "/context/skill-packs" {
+		t.Fatalf("expected overridden skills global root, got %s", cfg.SkillsGlobalRoot)
 	}
 	if cfg.PublicHost != "chat.example.com" {
 		t.Fatalf("expected overridden public host, got %s", cfg.PublicHost)

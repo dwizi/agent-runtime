@@ -101,3 +101,34 @@ func TestTasksLoadedMessageUpdatesSelection(t *testing.T) {
 		t.Fatalf("expected task index normalized to 0, got %d", typed.taskIndex)
 	}
 }
+
+func TestPairingsRoleCycleForward(t *testing.T) {
+	m := model{
+		mode:        modePairings,
+		pairingRole: "admin",
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	typed := updated.(model)
+	if typed.pairingRole != "operator" {
+		t.Fatalf("expected operator role, got %s", typed.pairingRole)
+	}
+}
+
+func TestPairingsRoleCycleBackward(t *testing.T) {
+	m := model{
+		mode:        modePairings,
+		pairingRole: "admin",
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	typed := updated.(model)
+	if typed.pairingRole != "overlord" {
+		t.Fatalf("expected overlord role, got %s", typed.pairingRole)
+	}
+}
+
+func TestNormalizePairingRoleFallback(t *testing.T) {
+	role := normalizePairingRole("unknown")
+	if role != "admin" {
+		t.Fatalf("expected fallback admin role, got %s", role)
+	}
+}

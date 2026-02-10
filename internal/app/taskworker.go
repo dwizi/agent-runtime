@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/carlos/spinner/internal/actions"
 	"github.com/carlos/spinner/internal/llm"
 	"github.com/carlos/spinner/internal/orchestrator"
 	"github.com/carlos/spinner/internal/qmd"
@@ -18,17 +19,19 @@ import (
 
 type taskWorkerExecutor struct {
 	workspaceRoot string
+	store         *store.Store
 	responder     llm.Responder
 	qmd           *qmd.Service
 	logger        *slog.Logger
 }
 
-func newTaskWorkerExecutor(workspaceRoot string, responder llm.Responder, qmdService *qmd.Service, logger *slog.Logger) *taskWorkerExecutor {
+func newTaskWorkerExecutor(workspaceRoot string, storeRef *store.Store, responder llm.Responder, qmdService *qmd.Service, logger *slog.Logger) *taskWorkerExecutor {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &taskWorkerExecutor{
 		workspaceRoot: strings.TrimSpace(workspaceRoot),
+		store:         storeRef,
 		responder:     responder,
 		qmd:           qmdService,
 		logger:        logger,
@@ -54,11 +57,17 @@ func (e *taskWorkerExecutor) executeReindex(ctx context.Context, task orchestrat
 	if workspaceID == "" {
 		return orchestrator.TaskResult{}, fmt.Errorf("workspace id is required for reindex")
 	}
-	if err := e.qmd.IndexWorkspace(ctx, workspaceID); err != nil {
-		return orchestrator.TaskResult{}, err
+	const prefix = "markdown file changed:"
+	trimmedPrompt := strings.TrimSpace(task.Prompt)
+	if strings.HasPrefix(strings.ToLower(trimmedPrompt), prefix) {
+		changedPath := strings.TrimSpace(trimmedPrompt[len(prefix):])
+		e.qmd.QueueWorkspaceIndexForPath(workspaceID, changedPath)
+	} else {
+		// Fallback when path metadata is unavailable.
+		e.qmd.QueueWorkspaceIndex(workspaceID)
 	}
 	return orchestrator.TaskResult{
-		Summary: fmt.Sprintf("workspace `%s` indexed", workspaceID),
+		Summary: fmt.Sprintf("workspace `%s` reindex scheduled", workspaceID),
 	}, nil
 }
 
@@ -90,6 +99,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 		return orchestrator.TaskResult{}, err
 	}
 	reply = strings.TrimSpace(reply)
+	reply = e.resolveActionProposal(ctx, task, reply)
 	if reply == "" {
 		reply = "No output produced."
 	}
@@ -151,6 +161,59 @@ func summarizeTaskReply(reply string) string {
 		return text[:180] + "..."
 	}
 	return text
+}
+
+func (e *taskWorkerExecutor) resolveActionProposal(ctx context.Context, task orchestrator.Task, reply string) string {
+	cleanReply, proposal := actions.ExtractProposal(strings.TrimSpace(reply))
+	if proposal == nil {
+		return strings.TrimSpace(cleanReply)
+	}
+	if e.store == nil {
+		if strings.TrimSpace(cleanReply) == "" {
+			return "Action request generated but approvals storage is unavailable."
+		}
+		return strings.TrimSpace(cleanReply)
+	}
+	taskRecord, err := e.store.LookupTask(ctx, task.ID)
+	if err != nil {
+		e.logger.Error("lookup task for action approval failed", "task_id", task.ID, "error", err)
+		if strings.TrimSpace(cleanReply) == "" {
+			return "Action request generated but could not be linked to a channel."
+		}
+		return strings.TrimSpace(cleanReply)
+	}
+	connector := strings.TrimSpace(taskRecord.SourceConnector)
+	externalID := strings.TrimSpace(taskRecord.SourceExternalID)
+	requesterUserID := strings.TrimSpace(taskRecord.SourceUserID)
+	if connector == "" || externalID == "" || requesterUserID == "" {
+		if strings.TrimSpace(cleanReply) == "" {
+			return "Action request generated but this task has no linked source channel for approval."
+		}
+		return strings.TrimSpace(cleanReply)
+	}
+	approval, err := e.store.CreateActionApproval(ctx, store.CreateActionApprovalInput{
+		WorkspaceID:     task.WorkspaceID,
+		ContextID:       task.ContextID,
+		Connector:       connector,
+		ExternalID:      externalID,
+		RequesterUserID: requesterUserID,
+		ActionType:      proposal.Type,
+		ActionTarget:    proposal.Target,
+		ActionSummary:   proposal.Summary,
+		Payload:         proposal.Raw,
+	})
+	if err != nil {
+		e.logger.Error("create action approval from task output failed", "task_id", task.ID, "error", err)
+		if strings.TrimSpace(cleanReply) == "" {
+			return "Action request could not be queued for approval."
+		}
+		return strings.TrimSpace(cleanReply)
+	}
+	notice := fmt.Sprintf("Action request pending approval: `%s`. Admin can run `/pending-actions`, `/approve-action %s`, or `/deny-action %s`.", approval.ID, approval.ID, approval.ID)
+	if strings.TrimSpace(cleanReply) == "" {
+		return notice
+	}
+	return notice + "\n\n" + strings.TrimSpace(cleanReply)
 }
 
 type taskObserver struct {

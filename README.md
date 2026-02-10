@@ -58,7 +58,8 @@ Pairing flow (Telegram DM -> TUI approve):
 1. Linked Telegram bot receives `pair` (or `/pair`) in private DM.
 2. Connector creates a one-time token and sends it back in DM.
 3. Admin runs `spinner tui`, pastes token, and presses:
-   - `a` to approve and link identity
+   - `[` / `]` to choose role (`overlord`, `admin`, `operator`, `member`, `viewer`)
+   - `a` to approve and link identity with selected role
    - `d` to deny
 
 Telegram command gateway:
@@ -76,7 +77,18 @@ Telegram command gateway:
 - `/pending-actions` lists pending LLM-proposed actions (admin/overlord)
 - `/approve-action <action-id>` approves a pending action (admin/overlord)
 - `/deny-action <action-id> [reason]` denies a pending action (admin/overlord)
-- Intent fallback: messages like `task write release notes` also create tasks
+- Natural language command intents are supported, for example:
+  - `please create a task to write release notes`
+  - `show pending actions`
+  - `approve action act_xxx`
+  - `yes, i approve it` (admin/overlord; works when exactly one pending action exists in channel)
+  - `deny it because unsafe command` (admin/overlord; same single-pending-action rule)
+  - `deny pairing token ABCDEF1234 because duplicate`
+  - `search for release notes`
+  - `open file docs/operations.md`
+  - `what is the qmd status?`
+  - `set prompt to ...`
+  - `enable admin channel`
 - `.md` attachments are ingested into workspace storage under `inbox/telegram/<chat-id>/...`
 - every inbound/outbound channel message is persisted to Markdown at `logs/chats/telegram/<chat-id>.md`
 - LLM replies (GLM Flash 4.7 via z.ai):
@@ -86,6 +98,7 @@ Telegram command gateway:
 Discord command gateway:
 - Listens to Discord Gateway `MESSAGE_CREATE` events (bot token + intents required)
 - Uses the same command set as Telegram from plain message content (`/task`, `/search`, `/open`, `/status`, `/prompt`, `/admin-channel enable`, `/route`, `/approve`, `/deny`, `/pending-actions`, `/approve-action`, `/deny-action`)
+- Uses the same natural-language command intents as Telegram (tasking, approvals, qmd search/open/status, prompt/admin controls)
 - Supports DM `pair` for one-time token generation
 - `.md` attachments are ingested into workspace storage under `inbox/discord/<channel-id>/...`
 - every inbound/outbound channel message is persisted to Markdown at `logs/chats/discord/<channel-id>.md`
@@ -180,14 +193,16 @@ Prompt policies and skill templates:
   - `SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`
   - `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
   - `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
+  - `SPINNER_SKILLS_GLOBAL_ROOT`
 - system prompt file precedence:
   - global (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
   - workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`)
   - context override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`, `{context_id}` replaced)
-- optional skill templates are loaded from workspace files:
-  - `skills/common/*.md`
-  - `skills/admin/*.md` or `skills/public/*.md`
-  - `skills/contexts/<context-id>/*.md`
+- skill templates are loaded from workspace and global paths:
+  - workspace: `skills/contexts/<context-id>/*.md`, `skills/admin/*.md` or `skills/public/*.md`, `skills/common/*.md`
+  - global: `<SPINNER_SKILLS_GLOBAL_ROOT>/contexts/<context-id>/*.md`, `<SPINNER_SKILLS_GLOBAL_ROOT>/admin|public/*.md`, `<SPINNER_SKILLS_GLOBAL_ROOT>/common/*.md`
+  - workspace templates win over global templates when filenames match
+  - starter global templates are included in `context/skills/common` and `context/skills/admin`
 
 LLM safety controls:
 - `SPINNER_LLM_ENABLED` toggles all LLM replies

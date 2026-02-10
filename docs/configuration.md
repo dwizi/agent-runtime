@@ -5,6 +5,8 @@ This is the operator-focused environment reference.
 ## Core Runtime
 
 - `SPINNER_ENV` (`production` recommended)
+- `SPINNER_IMAGE_PLATFORM` (compose image platform override, default `linux/amd64`)
+- `SPINNER_QMD_IMAGE_PLATFORM` (sidecar image platform override, default `linux/amd64`)
 - `SPINNER_HTTP_ADDR` (default `:8080`)
 - `SPINNER_DATA_DIR`
 - `SPINNER_WORKSPACE_ROOT`
@@ -59,6 +61,7 @@ Notes:
 - `SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`
 - `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
 - `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
+- `SPINNER_SKILLS_GLOBAL_ROOT`
 
 System prompt file precedence:
 1. global file (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
@@ -70,11 +73,27 @@ SOUL precedence:
 2. workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SOUL_WORKSPACE_REL_PATH`)
 3. context/agent override (`/data/workspaces/<workspace>/` + `SPINNER_SOUL_CONTEXT_REL_PATH`, where `{context_id}` is replaced)
 
+Skill template loading order:
+1. workspace context (`/data/workspaces/<workspace>/skills/contexts/<context_id>`)
+2. workspace role (`/data/workspaces/<workspace>/skills/admin` or `/data/workspaces/<workspace>/skills/public`)
+3. workspace common (`/data/workspaces/<workspace>/skills/common`)
+4. global context (`SPINNER_SKILLS_GLOBAL_ROOT/contexts/<context_id>`)
+5. global role (`SPINNER_SKILLS_GLOBAL_ROOT/admin` or `SPINNER_SKILLS_GLOBAL_ROOT/public`)
+6. global common (`SPINNER_SKILLS_GLOBAL_ROOT/common`)
+
+Notes:
+- workspace templates override global templates when filenames match.
+- templates are summarized into system prompt context; keep each file concise.
+
 ## qmd / Markdown Retrieval
 
 - `SPINNER_QMD_BINARY`
+- `SPINNER_QMD_SIDECAR_URL`
+- `SPINNER_QMD_SIDECAR_ADDR`
 - `SPINNER_QMD_INDEX`
 - `SPINNER_QMD_COLLECTION`
+- `SPINNER_QMD_SHARED_MODELS_DIR`
+- `SPINNER_QMD_EMBED_EXCLUDE_GLOBS`
 - `SPINNER_QMD_SEARCH_LIMIT`
 - `SPINNER_QMD_OPEN_MAX_BYTES`
 - `SPINNER_QMD_DEBOUNCE_SECONDS`
@@ -83,8 +102,13 @@ SOUL precedence:
 - `SPINNER_QMD_AUTO_EMBED`
 
 Notes:
-- Docker build ships `qmd` in the Spinner runtime image (`SPINNER_QMD_BINARY=qmd` by default).
-- For host-native runs, install `qmd` manually and keep it on `PATH`.
+- `spinner` calls qmd through HTTP sidecar when `SPINNER_QMD_SIDECAR_URL` is set (compose default: `http://spinner-qmd:8091`).
+- In compose, `qmd-sidecar` is a standalone container that runs qmd directly.
+- `SPINNER_QMD_SIDECAR_ADDR` controls the sidecar bind address.
+- For host-native runs without sidecar, install `qmd` manually and keep it on `PATH`.
+- `SPINNER_QMD_SHARED_MODELS_DIR` defaults to `/data/qmd-models` so model downloads are reused across all workspaces.
+- `SPINNER_QMD_AUTO_EMBED` remains supported; known Bun/NAPI embed crashes are handled as non-fatal so indexing can continue.
+- `SPINNER_QMD_EMBED_EXCLUDE_GLOBS` accepts comma-separated path globs (relative to workspace) to prevent those file changes from triggering embed runs (for example: `logs/chats/**`).
 
 ## Heartbeat and Supervision
 

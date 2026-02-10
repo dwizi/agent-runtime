@@ -6,11 +6,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/carlos/spinner/internal/app"
 	"github.com/carlos/spinner/internal/config"
+	"github.com/carlos/spinner/internal/qmd"
 	"github.com/carlos/spinner/internal/tui"
 )
 
@@ -23,10 +25,38 @@ func NewRoot(logger *slog.Logger) *cobra.Command {
 	}
 
 	root.AddCommand(newServeCommand(logger))
+	root.AddCommand(newQMDSidecarCommand(logger))
 	root.AddCommand(newTUICommand(logger))
 	root.AddCommand(newVersionCommand())
 
 	return root
+}
+
+func newQMDSidecarCommand(logger *slog.Logger) *cobra.Command {
+	return &cobra.Command{
+		Use:   "qmd-sidecar",
+		Short: "Run qmd sidecar HTTP server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := config.FromEnv()
+			sidecarCfg := qmd.Config{
+				WorkspaceRoot:   cfg.WorkspaceRoot,
+				Binary:          cfg.QMDBinary,
+				IndexName:       cfg.QMDIndexName,
+				Collection:      cfg.QMDCollectionName,
+				SharedModelsDir: cfg.QMDSharedModelsDir,
+				SearchLimit:     cfg.QMDSearchLimit,
+				OpenMaxBytes:    cfg.QMDOpenMaxBytes,
+				Debounce:        time.Duration(cfg.QMDDebounceSeconds) * time.Second,
+				IndexTimeout:    time.Duration(cfg.QMDIndexTimeoutSec) * time.Second,
+				QueryTimeout:    time.Duration(cfg.QMDQueryTimeoutSec) * time.Second,
+				AutoEmbed:       cfg.QMDAutoEmbed,
+			}
+
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return qmd.RunSidecar(ctx, sidecarCfg, cfg.QMDSidecarAddr, logger)
+		},
+	}
 }
 
 func newServeCommand(logger *slog.Logger) *cobra.Command {

@@ -14,6 +14,9 @@ run:
 tui:
 	$(GO) run ./cmd/spinner tui
 
+up: 
+	make compose-up compose-up-qmd
+
 compose-up:
 	docker compose up -d --build
 	sh ./scripts/local-sync-pki-env.sh

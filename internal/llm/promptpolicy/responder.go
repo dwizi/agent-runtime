@@ -28,6 +28,7 @@ type Config struct {
 	GlobalSystemPrompt   string
 	WorkspacePromptPath  string
 	ContextPromptPath    string
+	GlobalSkillsRoot     string
 	MaxSkills            int
 	MaxSkillBytes        int
 	MaxSoulBytes         int
@@ -127,19 +128,12 @@ func (r *Responder) buildSystemPrompt(ctx context.Context, input llm.MessageInpu
 
 func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []string {
 	root := strings.TrimSpace(r.cfg.WorkspaceRoot)
+	globalRoot := strings.TrimSpace(r.cfg.GlobalSkillsRoot)
 	workspaceID = strings.TrimSpace(workspaceID)
 	contextID = strings.TrimSpace(contextID)
-	if root == "" || workspaceID == "" {
+	dirs := r.skillDirectories(root, globalRoot, workspaceID, contextID, isAdmin)
+	if len(dirs) == 0 {
 		return nil
-	}
-	dirs := []string{
-		filepath.Join(root, workspaceID, "skills", "common"),
-		filepath.Join(root, workspaceID, "skills", "contexts", contextID),
-	}
-	if isAdmin {
-		dirs = append(dirs, filepath.Join(root, workspaceID, "skills", "admin"))
-	} else {
-		dirs = append(dirs, filepath.Join(root, workspaceID, "skills", "public"))
 	}
 
 	files := make([]string, 0, 16)
@@ -148,6 +142,7 @@ func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []st
 		if err != nil {
 			continue
 		}
+		dirFiles := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			if entry.IsDir() {
 				continue
@@ -155,17 +150,26 @@ func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []st
 			if strings.ToLower(filepath.Ext(entry.Name())) != ".md" {
 				continue
 			}
-			files = append(files, filepath.Join(dir, entry.Name()))
+			dirFiles = append(dirFiles, filepath.Join(dir, entry.Name()))
 		}
+		sort.Strings(dirFiles)
+		files = append(files, dirFiles...)
 	}
 	if len(files) == 0 {
 		return nil
 	}
-	sort.Strings(files)
 	skills := make([]string, 0, r.cfg.MaxSkills)
+	seenNames := map[string]struct{}{}
 	for _, path := range files {
 		if len(skills) >= r.cfg.MaxSkills {
 			break
+		}
+		name := strings.ToLower(strings.TrimSpace(filepath.Base(path)))
+		if name == "" {
+			continue
+		}
+		if _, ok := seenNames[name]; ok {
+			continue
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -178,9 +182,34 @@ func (r *Responder) loadSkills(workspaceID, contextID string, isAdmin bool) []st
 		if len(text) > r.cfg.MaxSkillBytes {
 			text = text[:r.cfg.MaxSkillBytes] + "..."
 		}
+		seenNames[name] = struct{}{}
 		skills = append(skills, fmt.Sprintf("- `%s`: %s", filepath.Base(path), strings.Join(strings.Fields(text), " ")))
 	}
 	return skills
+}
+
+func (r *Responder) skillDirectories(workspaceRoot, globalRoot, workspaceID, contextID string, isAdmin bool) []string {
+	roleDir := "public"
+	if isAdmin {
+		roleDir = "admin"
+	}
+	dirs := make([]string, 0, 6)
+	if workspaceRoot != "" && workspaceID != "" {
+		workspaceSkillsRoot := filepath.Join(workspaceRoot, workspaceID, "skills")
+		if contextID != "" {
+			dirs = append(dirs, filepath.Join(workspaceSkillsRoot, "contexts", contextID))
+		}
+		dirs = append(dirs, filepath.Join(workspaceSkillsRoot, roleDir))
+		dirs = append(dirs, filepath.Join(workspaceSkillsRoot, "common"))
+	}
+	if globalRoot != "" {
+		if contextID != "" {
+			dirs = append(dirs, filepath.Join(globalRoot, "contexts", contextID))
+		}
+		dirs = append(dirs, filepath.Join(globalRoot, roleDir))
+		dirs = append(dirs, filepath.Join(globalRoot, "common"))
+	}
+	return dirs
 }
 
 func (r *Responder) loadSoulSections(workspaceID, contextID string) []string {

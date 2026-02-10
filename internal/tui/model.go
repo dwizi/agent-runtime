@@ -40,6 +40,7 @@ type model struct {
 	taskIndex          int
 	taskRetryMsg       *adminclient.RetryTaskResponse
 	startupInfo        string
+	pairingRole        string
 }
 
 const (
@@ -63,6 +64,7 @@ func Run(cfg config.Config, logger *slog.Logger) error {
 		objectiveWorkspace: "ws-1",
 		taskWorkspace:      "ws-1",
 		startupInfo:        startupInfo,
+		pairingRole:        normalizePairingRole(updatedCfg.TUIApprovalRole),
 	})
 	_, err = program.Run()
 	return err
@@ -272,7 +274,7 @@ func (m model) View() string {
 		"Security-first orchestration control plane",
 		fmt.Sprintf("Environment: %s", m.cfg.Environment),
 		fmt.Sprintf("Admin API: %s", m.cfg.AdminAPIURL),
-		fmt.Sprintf("Approver: %s (%s)", m.cfg.TUIApproverUserID, m.cfg.TUIApprovalRole),
+		fmt.Sprintf("Approver: %s (default: %s)", m.cfg.TUIApproverUserID, m.cfg.TUIApprovalRole),
 		fmt.Sprintf("Tabs: %s | %s | %s (Tab to switch)", pairTab, objectiveTab, taskTab),
 		"",
 	}
@@ -343,8 +345,9 @@ func (m model) View() string {
 			bodyLines = append(bodyLines,
 				"Paste one-time token from Telegram/Discord DM and press Enter:",
 				highlight.Render(m.tokenInput),
+				fmt.Sprintf("Role on approve: %s ([ / ] to change)", highlight.Render(m.currentPairingRole())),
 				"",
-				"Controls: Enter=lookup, Backspace=edit, q=quit",
+				"Controls: Enter=lookup, [ ]=role, Backspace=edit, q=quit",
 			)
 		} else {
 			bodyLines = append(bodyLines,
@@ -354,8 +357,9 @@ func (m model) View() string {
 				fmt.Sprintf("- Display Name: %s", m.activePair.DisplayName),
 				fmt.Sprintf("- Status: %s", m.activePair.Status),
 				fmt.Sprintf("- Expires At: %s", time.Unix(m.activePair.ExpiresAtUnix, 0).UTC().Format(time.RFC3339)),
+				fmt.Sprintf("- Approve As Role: %s", m.currentPairingRole()),
 				"",
-				"Controls: a=approve, d=deny, n=new token, q=quit",
+				"Controls: a=approve, d=deny, [ ]=role, n=new token, q=quit",
 			)
 		}
 
@@ -419,6 +423,19 @@ type taskRetryDoneMsg struct {
 }
 
 func (m model) handlePairingsKey(typed tea.KeyMsg) (model, tea.Cmd) {
+	switch typed.String() {
+	case "[":
+		m.pairingRole = previousPairingRole(m.currentPairingRole())
+		m.statusText = "approval role: " + m.pairingRole
+		m.errorText = ""
+		return m, nil
+	case "]":
+		m.pairingRole = nextPairingRole(m.currentPairingRole())
+		m.statusText = "approval role: " + m.pairingRole
+		m.errorText = ""
+		return m, nil
+	}
+
 	if m.activePair == nil {
 		switch typed.String() {
 		case "enter":
@@ -605,10 +622,11 @@ func (m model) lookupPairingCmd(token string) tea.Cmd {
 }
 
 func (m model) approvePairingCmd(token string) tea.Cmd {
+	role := m.currentPairingRole()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		response, err := m.client.ApprovePairing(ctx, token, m.cfg.TUIApproverUserID, m.cfg.TUIApprovalRole, "")
+		response, err := m.client.ApprovePairing(ctx, token, m.cfg.TUIApproverUserID, role, "")
 		return approvePairingDoneMsg{response: response, err: err}
 	}
 }
@@ -705,6 +723,53 @@ func taskFilterLabel(value string) string {
 	default:
 		return "all"
 	}
+}
+
+var pairingRoleCycle = []string{"overlord", "admin", "operator", "member", "viewer"}
+
+func normalizePairingRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "overlord":
+		return "overlord"
+	case "admin":
+		return "admin"
+	case "operator":
+		return "operator"
+	case "member":
+		return "member"
+	case "viewer":
+		return "viewer"
+	default:
+		return "admin"
+	}
+}
+
+func (m model) currentPairingRole() string {
+	return normalizePairingRole(m.pairingRole)
+}
+
+func nextPairingRole(current string) string {
+	role := normalizePairingRole(current)
+	for index, item := range pairingRoleCycle {
+		if item == role {
+			return pairingRoleCycle[(index+1)%len(pairingRoleCycle)]
+		}
+	}
+	return pairingRoleCycle[0]
+}
+
+func previousPairingRole(current string) string {
+	role := normalizePairingRole(current)
+	for index, item := range pairingRoleCycle {
+		if item != role {
+			continue
+		}
+		if index == 0 {
+			return pairingRoleCycle[len(pairingRoleCycle)-1]
+		}
+		return pairingRoleCycle[index-1]
+	}
+	return pairingRoleCycle[0]
 }
 
 func syncEnvAtStartup(cfg config.Config, logger *slog.Logger) (config.Config, string) {

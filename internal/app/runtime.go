@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -83,16 +84,19 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		heartbeatRegistry.Starting("qmd", "initializing")
 	}
 	qmdService := qmd.New(qmd.Config{
-		WorkspaceRoot: cfg.WorkspaceRoot,
-		Binary:        cfg.QMDBinary,
-		IndexName:     cfg.QMDIndexName,
-		Collection:    cfg.QMDCollectionName,
-		SearchLimit:   cfg.QMDSearchLimit,
-		OpenMaxBytes:  cfg.QMDOpenMaxBytes,
-		Debounce:      time.Duration(cfg.QMDDebounceSeconds) * time.Second,
-		IndexTimeout:  time.Duration(cfg.QMDIndexTimeoutSec) * time.Second,
-		QueryTimeout:  time.Duration(cfg.QMDQueryTimeoutSec) * time.Second,
-		AutoEmbed:     cfg.QMDAutoEmbed,
+		WorkspaceRoot:   cfg.WorkspaceRoot,
+		Binary:          cfg.QMDBinary,
+		SidecarURL:      cfg.QMDSidecarURL,
+		IndexName:       cfg.QMDIndexName,
+		Collection:      cfg.QMDCollectionName,
+		SharedModelsDir: cfg.QMDSharedModelsDir,
+		EmbedExclude:    parseCSVTrimList(cfg.QMDEmbedExcludeGlobsCSV),
+		SearchLimit:     cfg.QMDSearchLimit,
+		OpenMaxBytes:    cfg.QMDOpenMaxBytes,
+		Debounce:        time.Duration(cfg.QMDDebounceSeconds) * time.Second,
+		IndexTimeout:    time.Duration(cfg.QMDIndexTimeoutSec) * time.Second,
+		QueryTimeout:    time.Duration(cfg.QMDQueryTimeoutSec) * time.Second,
+		AutoEmbed:       cfg.QMDAutoEmbed,
 	}, logger.With("component", "qmd"))
 	if heartbeatRegistry != nil {
 		heartbeatRegistry.Beat("qmd", "qmd service initialized")
@@ -137,6 +141,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		GlobalSystemPrompt:   cfg.SystemPromptGlobalFile,
 		WorkspacePromptPath:  cfg.SystemPromptWorkspacePath,
 		ContextPromptPath:    cfg.SystemPromptContextPath,
+		GlobalSkillsRoot:     cfg.SkillsGlobalRoot,
 		MaxSkills:            5,
 		MaxSkillBytes:        1400,
 		MaxSystemPromptBytes: 12000,
@@ -156,10 +161,11 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		RateLimitWindow:        time.Duration(cfg.LLMRateLimitWindowSec) * time.Second,
 	})
 	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
-	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, groundedResponder, qmdService, logger.With("component", "task-executor")))
+	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, sqlStore, groundedResponder, qmdService, logger.With("component", "task-executor")))
 	if heartbeatRegistry != nil {
 		schedulerService.SetHeartbeatReporter(heartbeatRegistry)
 	}
+	var reindexMu sync.Mutex
 
 	watchService, err := watcher.New(
 		[]string{cfg.WorkspaceRoot},
@@ -167,10 +173,20 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		func(ctx context.Context, path string) {
 			workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path)
 			if workspaceID != "" {
-				qmdService.QueueWorkspaceIndex(workspaceID)
+				qmdService.QueueWorkspaceIndexForPath(workspaceID, path)
 				schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
 			}
 			if workspaceID == "" {
+				return
+			}
+			reindexMu.Lock()
+			defer reindexMu.Unlock()
+
+			pending, pendingErr := hasPendingReindexTask(ctx, sqlStore, workspaceID)
+			if pendingErr != nil {
+				logger.Error("failed to check pending reindex task", "workspace_id", workspaceID, "path", path, "error", pendingErr)
+			} else if pending {
+				logger.Debug("reindex task already pending; skipping enqueue", "workspace_id", workspaceID, "path", path)
 				return
 			}
 			task, enqueueErr := engine.Enqueue(orchestrator.Task{
@@ -405,6 +421,39 @@ func workspaceIDFromPath(workspaceRoot, changedPath string) string {
 	return workspaceID
 }
 
+func hasPendingReindexTask(ctx context.Context, sqlStore *store.Store, workspaceID string) (bool, error) {
+	if sqlStore == nil {
+		return false, nil
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return false, nil
+	}
+	kind := string(orchestrator.TaskKindReindex)
+	queued, err := sqlStore.ListTasks(ctx, store.ListTasksInput{
+		WorkspaceID: workspaceID,
+		Kind:        kind,
+		Status:      "queued",
+		Limit:       1,
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(queued) > 0 {
+		return true, nil
+	}
+	running, err := sqlStore.ListTasks(ctx, store.ListTasksInput{
+		WorkspaceID: workspaceID,
+		Kind:        kind,
+		Status:      "running",
+		Limit:       1,
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(running) > 0, nil
+}
+
 func runMonitored(
 	ctx context.Context,
 	reporter heartbeat.Reporter,
@@ -490,6 +539,29 @@ func parseCSVList(input string) []string {
 			continue
 		}
 		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func parseCSVTrimList(input string) []string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return nil
+	}
+	parts := strings.Split(trimmed, ",")
+	result := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
 		result = append(result, value)
 	}
 	return result

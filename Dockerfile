@@ -1,20 +1,20 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.25-alpine AS builder
 WORKDIR /src
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN apk add --no-cache ca-certificates git
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/spinner ./cmd/spinner
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/spinner ./cmd/spinner
 
-FROM oven/bun:1.2.21-alpine AS qmd-runtime
-RUN apk add --no-cache bash git ca-certificates && \
-    bun install -g github:tobi/qmd && \
-    qmd --help >/dev/null
-
-FROM qmd-runtime AS spinner-runtime
+FROM alpine:3.20 AS spinner-runtime
+RUN apk add --no-cache ca-certificates curl
 WORKDIR /
 COPY --from=builder /out/spinner /spinner
 ENTRYPOINT ["/spinner"]

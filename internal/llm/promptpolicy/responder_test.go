@@ -79,6 +79,77 @@ func TestResponderBuildsContextPromptWithSkills(t *testing.T) {
 	}
 }
 
+func TestResponderLoadsGlobalSkillsWithWorkspacePrecedence(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-1"
+	contextID := "ctx-1"
+	globalSkillsRoot := filepath.Join(root, "global-skills")
+
+	workspaceAdmin := filepath.Join(root, workspaceID, "skills", "admin")
+	workspaceContext := filepath.Join(root, workspaceID, "skills", "contexts", contextID)
+	globalCommon := filepath.Join(globalSkillsRoot, "common")
+	globalAdmin := filepath.Join(globalSkillsRoot, "admin")
+
+	for _, dir := range []string{workspaceAdmin, workspaceContext, globalCommon, globalAdmin} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspaceAdmin, "tooling.md"), []byte("Workspace tool policy."), 0o644); err != nil {
+		t.Fatalf("write workspace tooling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceContext, "context.md"), []byte("Workspace context policy."), 0o644); err != nil {
+		t.Fatalf("write workspace context: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalCommon, "tooling.md"), []byte("Global tool policy."), 0o644); err != nil {
+		t.Fatalf("write global tooling: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalCommon, "qmd.md"), []byte("Use qmd before action proposals."), 0o644); err != nil {
+		t.Fatalf("write global qmd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(globalAdmin, "admin.md"), []byte("Admin approval rules."), 0o644); err != nil {
+		t.Fatalf("write global admin: %v", err)
+	}
+
+	base := &fakeBase{reply: "ok"}
+	provider := &fakeProvider{
+		policy: store.ContextPolicy{
+			ContextID:   contextID,
+			WorkspaceID: workspaceID,
+			IsAdmin:     true,
+		},
+	}
+	responder := New(base, provider, Config{
+		WorkspaceRoot:    root,
+		GlobalSkillsRoot: globalSkillsRoot,
+	})
+	_, err := responder.Reply(context.Background(), llm.MessageInput{
+		ContextID:   contextID,
+		WorkspaceID: workspaceID,
+		Text:        "hello",
+	})
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+
+	prompt := base.lastInput.SystemPrompt
+	if !strings.Contains(prompt, "Workspace context policy.") {
+		t.Fatalf("expected workspace context skill, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Workspace tool policy.") {
+		t.Fatalf("expected workspace tooling skill, got %s", prompt)
+	}
+	if strings.Contains(prompt, "Global tool policy.") {
+		t.Fatalf("expected workspace tooling to override global tooling, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Use qmd before action proposals.") {
+		t.Fatalf("expected global qmd skill, got %s", prompt)
+	}
+	if !strings.Contains(prompt, "Admin approval rules.") {
+		t.Fatalf("expected global admin skill, got %s", prompt)
+	}
+}
+
 func TestResponderFallsBackWhenContextMissing(t *testing.T) {
 	base := &fakeBase{reply: "ok"}
 	provider := &fakeProvider{err: errors.New("db down")}

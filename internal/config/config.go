@@ -15,8 +15,12 @@ type Config struct {
 	WorkspaceRoot           string
 	DefaultConcurrency      int
 	QMDBinary               string
+	QMDSidecarURL           string
+	QMDSidecarAddr          string
 	QMDIndexName            string
 	QMDCollectionName       string
+	QMDSharedModelsDir      string
+	QMDEmbedExcludeGlobsCSV string
 	QMDSearchLimit          int
 	QMDOpenMaxBytes         int
 	QMDDebounceSeconds      int
@@ -76,6 +80,7 @@ type Config struct {
 	SystemPromptGlobalFile    string
 	SystemPromptWorkspacePath string
 	SystemPromptContextPath   string
+	SkillsGlobalRoot          string
 
 	PublicHost string
 	AdminHost  string
@@ -103,8 +108,12 @@ func FromEnv() Config {
 		WorkspaceRoot:             workspaceRoot,
 		DefaultConcurrency:        intOrDefault("SPINNER_DEFAULT_CONCURRENCY", 5),
 		QMDBinary:                 stringOrDefault("SPINNER_QMD_BINARY", "qmd"),
+		QMDSidecarURL:             strings.TrimSpace(os.Getenv("SPINNER_QMD_SIDECAR_URL")),
+		QMDSidecarAddr:            stringOrDefault("SPINNER_QMD_SIDECAR_ADDR", ":8091"),
 		QMDIndexName:              stringOrDefault("SPINNER_QMD_INDEX", "spinner"),
 		QMDCollectionName:         stringOrDefault("SPINNER_QMD_COLLECTION", "workspace"),
+		QMDSharedModelsDir:        stringOrDefault("SPINNER_QMD_SHARED_MODELS_DIR", filepath.Join(dataDir, "qmd-models")),
+		QMDEmbedExcludeGlobsCSV:   strings.TrimSpace(os.Getenv("SPINNER_QMD_EMBED_EXCLUDE_GLOBS")),
 		QMDSearchLimit:            intOrDefault("SPINNER_QMD_SEARCH_LIMIT", 5),
 		QMDOpenMaxBytes:           intOrDefault("SPINNER_QMD_OPEN_MAX_BYTES", 1600),
 		QMDDebounceSeconds:        intOrDefault("SPINNER_QMD_DEBOUNCE_SECONDS", 3),
@@ -163,6 +172,7 @@ func FromEnv() Config {
 		SystemPromptGlobalFile:    stringOrDefault("SPINNER_SYSTEM_PROMPT_GLOBAL_FILE", "/context/SYSTEM_PROMPT.md"),
 		SystemPromptWorkspacePath: stringOrDefault("SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
 		SystemPromptContextPath:   stringOrDefault("SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
+		SkillsGlobalRoot:          stringOrDefault("SPINNER_SKILLS_GLOBAL_ROOT", "/context/skills"),
 		PublicHost:                stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                 stringOrDefault("ADMIN_HOST", "admin.localhost"),
 		AdminAPIURL:               stringOrDefault("SPINNER_ADMIN_API_URL", "https://admin.localhost"),

@@ -20,6 +20,10 @@ cd spinner
 cp .env.example .env
 ```
 
+If you need to force architecture (for example, run x86_64 images on arm64 hosts), set:
+- `SPINNER_IMAGE_PLATFORM=linux/amd64`
+- `SPINNER_QMD_IMAGE_PLATFORM=linux/amd64`
+
 ## 3. Set Required Secrets in `.env`
 
 Minimum for production bootstrap:
@@ -47,7 +51,7 @@ What this does:
 - syncs missing mTLS env paths into `.env`
 - bind-mounts host paths for live editing:
   - `./data` -> `/data` (workspaces, sqlite, task outputs)
-  - `./context` -> `/context` (global SOUL and system prompt files)
+  - `./context` -> `/context` (global SOUL, system prompt, and skills files)
 
 Optional qmd tooling sidecar:
 

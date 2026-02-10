@@ -296,6 +296,29 @@ func TestHandleTaskCommand(t *testing.T) {
 	}
 }
 
+func TestHandleTaskNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{}
+	fEngine := &fakeEngine{}
+	service := New(fStore, fEngine, nil, nil)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "user",
+		Text:        "please create a task to prepare weekly report",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected nl task to be handled")
+	}
+	if fStore.lastTask.ID != "task-123" {
+		t.Fatalf("expected persisted task id task-123, got %s", fStore.lastTask.ID)
+	}
+}
+
 func TestHandleAdminChannelEnableRequiresAdmin(t *testing.T) {
 	fStore := &fakeStore{
 		identityErr: store.ErrIdentityNotFound,
@@ -362,6 +385,50 @@ func TestHandleApproveCommand(t *testing.T) {
 	}
 	if !output.Handled || !fStore.approved {
 		t.Fatal("expected approval to run")
+	}
+}
+
+func TestHandleApprovePairingNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{
+			UserID: "user-1",
+			Role:   "admin",
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "123",
+		Text:       "please approve pairing token ABCDEF123456",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !fStore.approved {
+		t.Fatal("expected natural-language pairing approval to run")
+	}
+}
+
+func TestHandleDenyPairingNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{
+			UserID: "user-1",
+			Role:   "admin",
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "discord",
+		ExternalID: "42",
+		FromUserID: "123",
+		Text:       "deny pairing token ZXCVBNM12345 because duplicate identity",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !fStore.denied {
+		t.Fatal("expected natural-language pairing denial to run")
 	}
 }
 
@@ -706,6 +773,32 @@ func TestHandlePendingActionsCommand(t *testing.T) {
 	}
 }
 
+func TestHandlePendingActionsNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+			actionApprovals: []store.ActionApproval{
+				{ID: "act-1", ActionType: "send_email", ActionSummary: "Send digest", Status: "pending"},
+			},
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "Can you show pending actions?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "act-1") {
+		t.Fatalf("expected pending actions list, got %s", output.Reply)
+	}
+}
+
 func TestHandleApproveActionCommand(t *testing.T) {
 	fStore := &fakeStore{
 		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
@@ -829,5 +922,287 @@ func TestHandleDenyActionCommand(t *testing.T) {
 	}
 	if !output.Handled || !strings.Contains(output.Reply, "denied") {
 		t.Fatalf("expected denied output, got %s", output.Reply)
+	}
+}
+
+func TestHandleSearchNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{},
+		&fakeEngine{},
+		&fakeRetriever{
+			searchResults: []qmd.SearchResult{
+				{
+					Path:    "memory.md",
+					Score:   0.84,
+					Snippet: "Recent decisions and notes",
+				},
+			},
+		},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		Text:       "search for recent decisions",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "memory.md") {
+		t.Fatalf("expected natural-language search response, got %s", output.Reply)
+	}
+}
+
+func TestHandleOpenNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{},
+		&fakeEngine{},
+		&fakeRetriever{
+			openResult: qmd.OpenResult{
+				Path:      "notes/today.md",
+				Content:   "hello",
+				Truncated: false,
+			},
+		},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		Text:       "open file notes/today.md",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "notes/today.md") {
+		t.Fatalf("expected natural-language open response, got %s", output.Reply)
+	}
+}
+
+func TestHandleStatusNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{},
+		&fakeEngine{},
+		&fakeRetriever{
+			statusResult: qmd.Status{
+				WorkspaceID:    "ws-1",
+				WorkspaceExist: true,
+				Indexed:        true,
+				IndexExists:    true,
+				Summary:        "collection: workspace",
+			},
+		},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		Text:       "what is the qmd status?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "qmd status") {
+		t.Fatalf("expected natural-language status response, got %s", output.Reply)
+	}
+}
+
+func TestHandlePromptNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identity: store.UserIdentity{
+				UserID: "user-1",
+				Role:   "admin",
+			},
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "set prompt to You are strict",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "updated") {
+		t.Fatalf("expected natural-language prompt update, got %s", output.Reply)
+	}
+}
+
+func TestHandleAdminChannelEnableNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{
+			UserID: "user-1",
+			Role:   "admin",
+		},
+	}
+	service := New(fStore, &fakeEngine{}, nil, nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "123",
+		Text:       "please enable admin channel for this chat",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !fStore.adminUpdated {
+		t.Fatal("expected natural-language admin channel enable")
+	}
+}
+
+func TestHandleApproveActionNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act_1234abcd", ActionType: "run_command", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		&fakeActionExecutor{
+			result: executor.Result{
+				Plugin:  "sandbox",
+				Message: "command completed",
+			},
+		},
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "Please approve action act_1234abcd now",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "approved and executed") {
+		t.Fatalf("expected natural-language approve action to execute, got %s", output.Reply)
+	}
+}
+
+func TestHandleApproveActionNaturalLanguageImplicitLatest(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act-implicit", ActionType: "run_command", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		&fakeActionExecutor{
+			result: executor.Result{
+				Plugin:  "sandbox",
+				Message: "command completed",
+			},
+		},
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "discord",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "yes, i approve it",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "approved and executed") {
+		t.Fatalf("expected implicit nl approve action to execute, got %s", output.Reply)
+	}
+}
+
+func TestHandleDenyActionNaturalLanguage(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act_9999ffff", ActionType: "send_email", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "discord",
+		ExternalID: "chan-1",
+		FromUserID: "u1",
+		Text:       "Reject action act_9999ffff because unsafe target",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "denied") {
+		t.Fatalf("expected natural-language deny action to be handled, got %s", output.Reply)
+	}
+	if fStore.actionApprovals[0].DeniedReason != "unsafe target" {
+		t.Fatalf("expected deny reason from natural language, got %q", fStore.actionApprovals[0].DeniedReason)
+	}
+}
+
+func TestHandleDenyActionNaturalLanguageImplicitLatest(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act-implicit-deny", ActionType: "send_email", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "deny it because unsafe command",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(output.Reply, "denied") {
+		t.Fatalf("expected implicit nl deny action to be handled, got %s", output.Reply)
+	}
+	if fStore.actionApprovals[0].DeniedReason != "unsafe command" {
+		t.Fatalf("expected implicit deny reason, got %q", fStore.actionApprovals[0].DeniedReason)
+	}
+}
+
+func TestHandleApproveActionImplicitMultiplePending(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act-a", ActionType: "run_command", Status: "pending"},
+			{ID: "act-b", ActionType: "run_command", Status: "pending"},
+		},
+	}
+	service := New(
+		fStore,
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "discord",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "approve it",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled || !strings.Contains(strings.ToLower(output.Reply), "multiple pending actions") {
+		t.Fatalf("expected multiple pending hint, got %s", output.Reply)
 	}
 }

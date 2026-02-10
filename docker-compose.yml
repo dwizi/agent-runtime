@@ -1,5 +1,6 @@
 services:
   spinner:
+    platform: ${SPINNER_IMAGE_PLATFORM:-linux/amd64}
     build:
       context: .
       dockerfile: Dockerfile
@@ -11,6 +12,10 @@ services:
       SPINNER_DATA_DIR: /data
       SPINNER_WORKSPACE_ROOT: /data/workspaces
       SPINNER_DB_PATH: /data/spinner/meta.sqlite
+      SPINNER_QMD_SIDECAR_URL: ${SPINNER_QMD_SIDECAR_URL:-http://spinner-qmd:8091}
+      SPINNER_QMD_SHARED_MODELS_DIR: /data/qmd-models
+      SPINNER_QMD_EMBED_EXCLUDE_GLOBS: ${SPINNER_QMD_EMBED_EXCLUDE_GLOBS:-logs/chats/**}
+      SPINNER_QMD_AUTO_EMBED: ${SPINNER_QMD_AUTO_EMBED:-true}
       SPINNER_DEFAULT_CONCURRENCY: ${SPINNER_DEFAULT_CONCURRENCY:-5}
       SPINNER_HEARTBEAT_ENABLED: ${SPINNER_HEARTBEAT_ENABLED:-true}
       SPINNER_HEARTBEAT_INTERVAL_SECONDS: ${SPINNER_HEARTBEAT_INTERVAL_SECONDS:-30}
@@ -37,24 +42,27 @@ services:
       - "8080"
     networks:
       - spinner_net
+    depends_on:
+      - qmd-sidecar
 
   qmd-sidecar:
+    platform: ${SPINNER_QMD_IMAGE_PLATFORM:-linux/amd64}
     build:
       context: .
-      dockerfile: Dockerfile
-      target: qmd-runtime
+      dockerfile: Dockerfile.qmd-sidecar
     container_name: spinner-qmd
     restart: unless-stopped
-    profiles:
-      - qmd-sidecar
-    working_dir: /data/workspaces
-    command:
-      - /bin/sh
-      - -lc
-      - sleep infinity
+    environment:
+      SPINNER_ENV: ${SPINNER_ENV:-production}
+      SPINNER_WORKSPACE_ROOT: /data/workspaces
+      SPINNER_QMD_BINARY: ${SPINNER_QMD_BINARY:-qmd}
+      SPINNER_QMD_SIDECAR_ADDR: ${SPINNER_QMD_SIDECAR_ADDR:-:8091}
+      SPINNER_QMD_INDEX: ${SPINNER_QMD_INDEX:-spinner}
+      SPINNER_QMD_SHARED_MODELS_DIR: /data/qmd-models
+      SPINNER_QMD_INDEX_TIMEOUT_SECONDS: ${SPINNER_QMD_INDEX_TIMEOUT_SECONDS:-180}
+      SPINNER_QMD_QUERY_TIMEOUT_SECONDS: ${SPINNER_QMD_QUERY_TIMEOUT_SECONDS:-30}
     volumes:
       - ./data:/data
-      - ./context:/context
     networks:
       - spinner_net
 

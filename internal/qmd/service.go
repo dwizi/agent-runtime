@@ -1,17 +1,23 @@
 package qmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -22,16 +28,19 @@ var (
 )
 
 type Config struct {
-	WorkspaceRoot string
-	Binary        string
-	IndexName     string
-	Collection    string
-	SearchLimit   int
-	OpenMaxBytes  int
-	Debounce      time.Duration
-	IndexTimeout  time.Duration
-	QueryTimeout  time.Duration
-	AutoEmbed     bool
+	WorkspaceRoot   string
+	Binary          string
+	SidecarURL      string
+	IndexName       string
+	Collection      string
+	SharedModelsDir string
+	EmbedExclude    []string
+	SearchLimit     int
+	OpenMaxBytes    int
+	Debounce        time.Duration
+	IndexTimeout    time.Duration
+	QueryTimeout    time.Duration
+	AutoEmbed       bool
 }
 
 type SearchResult struct {
@@ -61,14 +70,16 @@ type Status struct {
 }
 
 type Service struct {
-	cfg         Config
-	logger      *slog.Logger
-	runner      commandRunner
-	mu          sync.Mutex
-	timers      map[string]*time.Timer
-	indexed     map[string]bool
-	lastIndexed map[string]time.Time
-	closed      bool
+	cfg          Config
+	logger       *slog.Logger
+	runner       commandRunner
+	mu           sync.Mutex
+	timers       map[string]*time.Timer
+	pendingEmbed map[string]bool
+	locks        map[string]*sync.Mutex
+	indexed      map[string]bool
+	lastIndexed  map[string]time.Time
+	closed       bool
 }
 
 type commandRunner interface {
@@ -111,12 +122,14 @@ func newService(cfg Config, logger *slog.Logger, runner commandRunner) *Service 
 	}
 	cfg = withDefaults(cfg)
 	return &Service{
-		cfg:         cfg,
-		logger:      logger,
-		runner:      runner,
-		timers:      map[string]*time.Timer{},
-		indexed:     map[string]bool{},
-		lastIndexed: map[string]time.Time{},
+		cfg:          cfg,
+		logger:       logger,
+		runner:       runner,
+		timers:       map[string]*time.Timer{},
+		pendingEmbed: map[string]bool{},
+		locks:        map[string]*sync.Mutex{},
+		indexed:      map[string]bool{},
+		lastIndexed:  map[string]time.Time{},
 	}
 }
 
@@ -145,6 +158,22 @@ func withDefaults(cfg Config) Config {
 	if cfg.QueryTimeout <= 0 {
 		cfg.QueryTimeout = 30 * time.Second
 	}
+	if len(cfg.EmbedExclude) > 0 {
+		normalized := make([]string, 0, len(cfg.EmbedExclude))
+		seen := map[string]struct{}{}
+		for _, pattern := range cfg.EmbedExclude {
+			value := normalizeEmbedPattern(pattern)
+			if value == "" {
+				continue
+			}
+			if _, exists := seen[value]; exists {
+				continue
+			}
+			seen[value] = struct{}{}
+			normalized = append(normalized, value)
+		}
+		cfg.EmbedExclude = normalized
+	}
 	return cfg
 }
 
@@ -158,14 +187,20 @@ func (s *Service) Close() {
 	for workspaceID, timer := range s.timers {
 		timer.Stop()
 		delete(s.timers, workspaceID)
+		delete(s.pendingEmbed, workspaceID)
 	}
 }
 
 func (s *Service) QueueWorkspaceIndex(workspaceID string) {
+	s.QueueWorkspaceIndexForPath(workspaceID, "")
+}
+
+func (s *Service) QueueWorkspaceIndexForPath(workspaceID, changedPath string) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID == "" {
 		return
 	}
+	embedRequested := s.shouldEmbedForPath(workspaceID, changedPath)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,6 +208,11 @@ func (s *Service) QueueWorkspaceIndex(workspaceID string) {
 		return
 	}
 
+	if current, ok := s.pendingEmbed[workspaceID]; ok {
+		s.pendingEmbed[workspaceID] = current || embedRequested
+	} else {
+		s.pendingEmbed[workspaceID] = embedRequested
+	}
 	if timer, ok := s.timers[workspaceID]; ok {
 		timer.Stop()
 	}
@@ -185,20 +225,27 @@ func (s *Service) runQueuedIndex(workspaceID string) {
 	s.mu.Lock()
 	if s.closed {
 		delete(s.timers, workspaceID)
+		delete(s.pendingEmbed, workspaceID)
 		s.mu.Unlock()
 		return
 	}
 	delete(s.timers, workspaceID)
+	embedRequested := s.pendingEmbed[workspaceID]
+	delete(s.pendingEmbed, workspaceID)
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.IndexTimeout)
 	defer cancel()
-	if err := s.IndexWorkspace(ctx, workspaceID); err != nil {
+	if err := s.indexWorkspace(ctx, workspaceID, embedRequested); err != nil {
 		s.logger.Error("qmd workspace index failed", "workspace_id", workspaceID, "error", err)
 	}
 }
 
 func (s *Service) IndexWorkspace(ctx context.Context, workspaceID string) error {
+	return s.indexWorkspace(ctx, workspaceID, true)
+}
+
+func (s *Service) indexWorkspace(ctx context.Context, workspaceID string, embedRequested bool) error {
 	workspaceDir, err := s.workspaceDir(workspaceID, true)
 	if err != nil {
 		return err
@@ -208,13 +255,26 @@ func (s *Service) IndexWorkspace(ctx context.Context, workspaceID string) error 
 		return err
 	}
 
-	if _, err := s.runQMD(ctx, workspaceDir, "update"); err != nil {
+	updateOutput, err := s.runQMD(ctx, workspaceDir, "update")
+	if err != nil {
 		return err
 	}
-	if s.cfg.AutoEmbed {
-		if _, err := s.runQMD(ctx, workspaceDir, "embed"); err != nil {
-			return err
+	if s.cfg.AutoEmbed && embedRequested {
+		if !shouldRunEmbedAfterUpdate(updateOutput) {
+			s.logger.Debug("qmd embed skipped", "workspace_id", workspaceID, "reason", "no pending vectors")
+		} else if _, err := s.runQMD(ctx, workspaceDir, "embed"); err != nil {
+			if looksLikeKnownBunEmbedCrash(err) {
+				s.logger.Warn(
+					"qmd embed failed with known Bun crash; continuing without refreshed embeddings",
+					"workspace_id", workspaceID,
+					"error", err,
+				)
+			} else {
+				return err
+			}
 		}
+	} else if s.cfg.AutoEmbed && !embedRequested {
+		s.logger.Debug("qmd embed skipped", "workspace_id", workspaceID, "reason", "path excluded")
 	}
 
 	s.mu.Lock()
@@ -293,7 +353,15 @@ func (s *Service) Search(ctx context.Context, workspaceID, query string, limit i
 
 	output, err := s.runQMD(searchCtx, workspaceDir, "query", query, "--json", "-n", strconv.Itoa(limit))
 	if err != nil {
-		return nil, err
+		if looksLikeQueryExpansionKilled(err) {
+			s.logger.Warn("qmd query expansion failed; falling back to bm25 search", "workspace", workspaceID, "error", err)
+			fallbackCtx, fallbackCancel := context.WithTimeout(ctx, s.cfg.QueryTimeout)
+			defer fallbackCancel()
+			output, err = s.runQMD(fallbackCtx, workspaceDir, "search", query, "--json", "-n", strconv.Itoa(limit))
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	return parseSearchResults(output), nil
 }
@@ -448,6 +516,14 @@ func compactLine(input string, maxBytes int) string {
 }
 
 func (s *Service) runQMD(ctx context.Context, workspaceDir string, args ...string) ([]byte, error) {
+	if strings.TrimSpace(s.cfg.SidecarURL) != "" {
+		return s.runQMDViaSidecar(ctx, workspaceDir, args...)
+	}
+
+	lock := s.workspaceLock(workspaceDir)
+	lock.Lock()
+	defer lock.Unlock()
+
 	cacheDir := filepath.Join(workspaceDir, ".qmd", "cache")
 	homeDir := filepath.Join(workspaceDir, ".qmd", "home")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -457,10 +533,358 @@ func (s *Service) runQMD(ctx context.Context, workspaceDir string, args ...strin
 		return nil, err
 	}
 
+	lockFilePath := filepath.Join(workspaceDir, ".qmd", "qmd.lock")
+	fileLock, lockErr := acquireFileLock(ctx, lockFilePath)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	defer releaseFileLock(fileLock)
+	if err := s.ensureModelCache(homeDir); err != nil {
+		return nil, err
+	}
+
 	fullArgs := []string{"--index", s.cfg.IndexName}
 	fullArgs = append(fullArgs, args...)
 
-	cmd := exec.CommandContext(ctx, s.cfg.Binary, fullArgs...)
+	const maxBusyRetries = 4
+	repairedExtension := false
+	attempt := 0
+
+	var (
+		cmd    *exec.Cmd
+		output []byte
+		err    error
+	)
+	for {
+		cmd = s.qmdCommand(ctx, workspaceDir, cacheDir, homeDir, fullArgs)
+		output, err = s.runner.Run(cmd)
+		if err == nil {
+			return output, nil
+		}
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("%w: install qmd and ensure it is in PATH", ErrUnavailable)
+		}
+
+		if !repairedExtension {
+			if repaired, repairPath, repairErr := repairSQLVecDoubleSO(string(output)); repaired {
+				repairedExtension = true
+				if repairErr != nil {
+					s.logger.Warn("sqlite-vec compatibility repair failed", "path", repairPath, "error", repairErr)
+				} else {
+					s.logger.Info("applied sqlite-vec compatibility repair", "path", repairPath)
+					continue
+				}
+			}
+		}
+
+		if !looksLikeRetryableQmdFailure(string(output)) || attempt >= maxBusyRetries {
+			break
+		}
+		attempt++
+		wait := time.Duration(attempt) * 200 * time.Millisecond
+		s.logger.Warn("qmd transient failure; retrying", "workspace", workspaceDir, "attempt", attempt, "wait", wait)
+		select {
+		case <-ctx.Done():
+			return nil, &commandError{
+				command: cmd.String(),
+				output:  strings.TrimSpace(string(output)),
+				err:     ctx.Err(),
+			}
+		case <-time.After(wait):
+		}
+	}
+
+	return nil, &commandError{
+		command: cmd.String(),
+		output:  strings.TrimSpace(string(output)),
+		err:     err,
+	}
+}
+
+func (s *Service) workspaceLock(workspaceDir string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if lock, ok := s.locks[workspaceDir]; ok {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	s.locks[workspaceDir] = lock
+	return lock
+}
+
+func (s *Service) ensureModelCache(homeDir string) error {
+	workspaceModelsDir := filepath.Join(homeDir, ".cache", "qmd", "models")
+	sharedModelsDir := strings.TrimSpace(s.cfg.SharedModelsDir)
+	if sharedModelsDir == "" {
+		return os.MkdirAll(workspaceModelsDir, 0o755)
+	}
+	sharedModelsDir = filepath.Clean(sharedModelsDir)
+	if err := os.MkdirAll(sharedModelsDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(workspaceModelsDir), 0o755); err != nil {
+		return err
+	}
+
+	info, err := os.Lstat(workspaceModelsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Symlink(sharedModelsDir, workspaceModelsDir)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("qmd models path is not a directory: %s", workspaceModelsDir)
+	}
+	if err := migrateModelCacheDir(workspaceModelsDir, sharedModelsDir); err != nil {
+		return err
+	}
+	return replaceWithSymlink(workspaceModelsDir, sharedModelsDir)
+}
+
+func looksLikeRetryableQmdFailure(output string) bool {
+	return looksLikeSQLiteBusy(output) || looksLikeModelRenameENOENT(output)
+}
+
+func looksLikeSQLiteBusy(output string) bool {
+	text := strings.ToLower(output)
+	return strings.Contains(text, "database is locked") || strings.Contains(text, "sqlite_busy")
+}
+
+func looksLikeModelRenameENOENT(output string) bool {
+	text := strings.ToLower(output)
+	return strings.Contains(text, "enoent") && strings.Contains(text, "rename") && strings.Contains(text, ".ipull")
+}
+
+func looksLikeQueryExpansionKilled(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "signal: killed") && strings.Contains(text, "expanding query")
+}
+
+func looksLikeKnownBunEmbedCrash(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "attempted to call a non-gc-safe function inside a napi finalizer") ||
+		strings.Contains(text, "src/bun.js/bindings/napi.h") ||
+		strings.Contains(text, "oh no: bun has crashed") ||
+		strings.Contains(text, "panic: aborted")
+}
+
+func shouldRunEmbedAfterUpdate(output []byte) bool {
+	text := strings.ToLower(string(output))
+	return strings.Contains(text, "run 'qmd embed' to update embeddings")
+}
+
+func normalizeEmbedPattern(pattern string) string {
+	value := filepath.ToSlash(strings.TrimSpace(pattern))
+	value = strings.TrimPrefix(value, "./")
+	value = strings.TrimPrefix(value, "/")
+	return value
+}
+
+func matchEmbedPattern(pattern, relativePath string) bool {
+	pattern = normalizeEmbedPattern(pattern)
+	relativePath = normalizeEmbedPattern(relativePath)
+	if pattern == "" || relativePath == "" {
+		return false
+	}
+	if strings.HasSuffix(pattern, "/**") {
+		prefix := strings.TrimSuffix(pattern, "/**")
+		return relativePath == prefix || strings.HasPrefix(relativePath, prefix+"/")
+	}
+	matched, err := filepath.Match(filepath.FromSlash(pattern), filepath.FromSlash(relativePath))
+	return err == nil && matched
+}
+
+func (s *Service) shouldEmbedForPath(workspaceID, changedPath string) bool {
+	if len(s.cfg.EmbedExclude) == 0 {
+		return true
+	}
+	changedPath = strings.TrimSpace(changedPath)
+	if changedPath == "" {
+		return true
+	}
+	workspaceDir, err := s.workspaceDir(workspaceID, false)
+	if err != nil {
+		return true
+	}
+	relativePath, _, err := sanitizePath(workspaceDir, changedPath)
+	if err != nil {
+		if filepath.IsAbs(changedPath) {
+			cleaned := filepath.Clean(changedPath)
+			if rel, relErr := filepath.Rel(workspaceDir, cleaned); relErr == nil {
+				rel = filepath.ToSlash(rel)
+				if rel != "." && !strings.HasPrefix(rel, "../") {
+					relativePath = rel
+				}
+			}
+		}
+		if relativePath == "" {
+			return true
+		}
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	for _, pattern := range s.cfg.EmbedExclude {
+		if matchEmbedPattern(pattern, relativePath) {
+			return false
+		}
+	}
+	return true
+}
+
+func acquireFileLock(ctx context.Context, lockPath string) (*os.File, error) {
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = file.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func releaseFileLock(file *os.File) {
+	if file == nil {
+		return
+	}
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
+}
+
+func migrateModelCacheDir(sourceDir, sharedDir string) error {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		sourcePath := filepath.Join(sourceDir, name)
+		targetPath := filepath.Join(sharedDir, name)
+
+		if _, err := os.Stat(targetPath); err == nil {
+			if removeErr := os.RemoveAll(sourcePath); removeErr != nil {
+				return removeErr
+			}
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+
+		if renameErr := os.Rename(sourcePath, targetPath); renameErr == nil {
+			continue
+		} else if !errors.Is(renameErr, syscall.EXDEV) {
+			return renameErr
+		}
+
+		if copyErr := copyPath(sourcePath, targetPath); copyErr != nil {
+			return copyErr
+		}
+		if removeErr := os.RemoveAll(sourcePath); removeErr != nil {
+			return removeErr
+		}
+	}
+	return nil
+}
+
+func replaceWithSymlink(path, target string) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return os.Symlink(target, path)
+}
+
+func copyPath(sourcePath, targetPath string) error {
+	info, err := os.Lstat(sourcePath)
+	if err != nil {
+		return err
+	}
+	switch {
+	case info.Mode().IsRegular():
+		return copyRegularFile(sourcePath, targetPath, info.Mode().Perm())
+	case info.IsDir():
+		return copyDir(sourcePath, targetPath)
+	case info.Mode()&os.ModeSymlink != 0:
+		linkTarget, err := os.Readlink(sourcePath)
+		if err != nil {
+			return err
+		}
+		return os.Symlink(linkTarget, targetPath)
+	default:
+		return fmt.Errorf("unsupported model cache entry type: %s", sourcePath)
+	}
+}
+
+func copyDir(sourceDir, targetDir string) error {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := strings.TrimSpace(entry.Name())
+		if name == "" || name == "." || name == ".." {
+			continue
+		}
+		if err := copyPath(filepath.Join(sourceDir, name), filepath.Join(targetDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyRegularFile(sourcePath, targetPath string, perm fs.FileMode) error {
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer sourceFile.Close()
+
+	targetFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	defer targetFile.Close()
+
+	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) qmdCommand(ctx context.Context, workspaceDir, cacheDir, homeDir string, args []string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, s.cfg.Binary, args...)
 	cmd.Dir = workspaceDir
 	cmd.Env = append(
 		os.Environ(),
@@ -468,19 +892,97 @@ func (s *Service) runQMD(ctx context.Context, workspaceDir string, args ...strin
 		"XDG_CACHE_HOME="+cacheDir,
 		"HOME="+homeDir,
 	)
+	return cmd
+}
 
-	output, err := s.runner.Run(cmd)
-	if err == nil {
-		return output, nil
+func (s *Service) runQMDViaSidecar(ctx context.Context, workspaceDir string, args ...string) ([]byte, error) {
+	endpoint := strings.TrimRight(strings.TrimSpace(s.cfg.SidecarURL), "/") + "/run"
+	requestBody, err := json.Marshal(map[string]any{
+		"workspace_dir": workspaceDir,
+		"args":          args,
+	})
+	if err != nil {
+		return nil, err
 	}
-	if errors.Is(err, exec.ErrNotFound) {
-		return nil, fmt.Errorf("%w: install qmd and ensure it is in PATH", ErrUnavailable)
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		return nil, err
 	}
-	return nil, &commandError{
-		command: cmd.String(),
-		output:  strings.TrimSpace(string(output)),
-		err:     err,
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%w: qmd sidecar request failed: %v", ErrUnavailable, err)
 	}
+	defer response.Body.Close()
+
+	responseBytes, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+
+	var payload struct {
+		Output string `json:"output"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(responseBytes, &payload)
+
+	if response.StatusCode != http.StatusOK {
+		message := strings.TrimSpace(payload.Error)
+		if message == "" {
+			message = strings.TrimSpace(string(responseBytes))
+		}
+		if message == "" {
+			message = "qmd sidecar request failed"
+		}
+		return nil, errors.New(message)
+	}
+
+	if strings.TrimSpace(payload.Output) == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload.Output)
+	if err != nil {
+		return nil, fmt.Errorf("decode qmd sidecar output: %w", err)
+	}
+	return decoded, nil
+}
+
+func repairSQLVecDoubleSO(output string) (bool, string, error) {
+	const marker = "Error loading shared library "
+	index := strings.Index(output, marker)
+	if index < 0 {
+		return false, "", nil
+	}
+	remainder := output[index+len(marker):]
+	separator := strings.Index(remainder, ":")
+	if separator <= 0 {
+		return false, "", nil
+	}
+	missingPath := strings.TrimSpace(remainder[:separator])
+	if !strings.HasSuffix(missingPath, ".so.so") {
+		return false, "", nil
+	}
+	sourcePath := strings.TrimSuffix(missingPath, ".so")
+	if sourcePath == missingPath {
+		return false, "", nil
+	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		return false, missingPath, nil
+	}
+	if _, err := os.Stat(missingPath); err == nil {
+		return false, missingPath, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return true, missingPath, err
+	}
+	if err := os.Symlink(filepath.Base(sourcePath), missingPath); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return true, missingPath, nil
+		}
+		return true, missingPath, err
+	}
+	return true, missingPath, nil
 }
 
 func parseSearchResults(input []byte) []SearchResult {
