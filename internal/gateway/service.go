@@ -242,7 +242,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		return MessageOutput{
 			Handled: true,
-			Reply:   fmt.Sprintf("Action `%s` approved, execution skipped (no executor configured).", record.ID),
+			Reply:   formatActionExecutionReply(record),
 		}, nil
 	}
 
@@ -260,7 +260,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		return MessageOutput{
 			Handled: true,
-			Reply:   fmt.Sprintf("Action `%s` approved but execution failed: %s", record.ID, compactSnippet(record.ExecutionMessage)),
+			Reply:   formatActionExecutionReply(record),
 		}, nil
 	}
 
@@ -279,7 +279,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 	}
 	return MessageOutput{
 		Handled: true,
-		Reply:   fmt.Sprintf("Action `%s` approved and executed via `%s`: %s", record.ID, fallbackPluginLabel(record.ExecutorPlugin), record.ExecutionMessage),
+		Reply:   formatActionExecutionReply(record),
 	}, nil
 }
 
@@ -1357,6 +1357,87 @@ func compactSnippet(input string) string {
 		return text
 	}
 	return text[:120] + "..."
+}
+
+func formatActionExecutionReply(record store.ActionApproval) string {
+	actionID := strings.TrimSpace(record.ID)
+	if actionID == "" {
+		actionID = "(unknown-action)"
+	}
+	switch strings.ToLower(strings.TrimSpace(record.ExecutionStatus)) {
+	case "skipped":
+		reason := humanizeExecutionMessage(record.ExecutionMessage)
+		if reason == "" {
+			reason = "No executor is configured for this workspace."
+		}
+		return fmt.Sprintf("I approved action `%s`, but it was not run. Outcome: %s", actionID, reason)
+	case "failed":
+		detail := humanizeExecutionFailure(record.ExecutionMessage)
+		if detail == "" {
+			detail = "Execution failed without additional details."
+		}
+		return fmt.Sprintf("I approved action `%s`, but execution failed. Outcome: %s", actionID, detail)
+	default:
+		plugin := fallbackPluginLabel(record.ExecutorPlugin)
+		outcome := humanizeExecutionMessage(record.ExecutionMessage)
+		if outcome == "" {
+			outcome = "Completed successfully."
+		}
+		return fmt.Sprintf("I approved action `%s` and ran it with `%s`. Outcome: %s", actionID, plugin, outcome)
+	}
+}
+
+func humanizeExecutionMessage(message string) string {
+	text := strings.TrimSpace(message)
+	if text == "" {
+		return ""
+	}
+	text = trimCaseInsensitivePrefix(text, "command succeeded:")
+	text = trimCaseInsensitivePrefix(text, "command completed:")
+	text = trimCaseInsensitivePrefix(text, "webhook request completed with status")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(message)), "webhook request completed with status") {
+		return "Webhook request completed with status " + text
+	}
+	return compactSnippet(text)
+}
+
+func humanizeExecutionFailure(message string) string {
+	text := strings.TrimSpace(message)
+	if text == "" {
+		return ""
+	}
+	text = trimCaseInsensitivePrefix(text, "command failed:")
+	parts := strings.SplitN(text, "; output=", 2)
+	switch len(parts) {
+	case 2:
+		cause := compactSnippet(parts[0])
+		output := compactSnippet(parts[1])
+		if output == "" {
+			return cause
+		}
+		if cause == "" {
+			return "Output: " + output
+		}
+		return cause + ". Output: " + output
+	default:
+		return compactSnippet(text)
+	}
+}
+
+func trimCaseInsensitivePrefix(value, prefix string) string {
+	trimmedValue := strings.TrimSpace(value)
+	trimmedPrefix := strings.TrimSpace(prefix)
+	if trimmedValue == "" || trimmedPrefix == "" {
+		return trimmedValue
+	}
+	if strings.HasPrefix(strings.ToLower(trimmedValue), strings.ToLower(trimmedPrefix)) {
+		return strings.TrimSpace(trimmedValue[len(trimmedPrefix):])
+	}
+	return trimmedValue
 }
 
 func isAdminRole(role string) bool {

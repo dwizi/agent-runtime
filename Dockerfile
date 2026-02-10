@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/spinner ./cmd/spinner
 
 FROM alpine:3.20 AS spinner-runtime
-RUN apk add --no-cache ca-certificates curl
+RUN apk add --no-cache ca-certificates curl git jq ripgrep
 WORKDIR /
 COPY --from=builder /out/spinner /spinner
 ENTRYPOINT ["/spinner"]

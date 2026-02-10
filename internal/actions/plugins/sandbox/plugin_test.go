@@ -140,3 +140,23 @@ func TestExecuteWithRunnerCommand(t *testing.T) {
 		t.Fatalf("unexpected runner output: %s", result.Message)
 	}
 }
+
+func TestSummarizeCommandOutcomeCurlRedirectHint(t *testing.T) {
+	message := summarizeCommandOutcome("curl", []string{"-sS", "https://example.com"}, "Redirecting to https://www.example.com", false)
+	if !strings.Contains(message, "curl stopped at an HTTP redirect") {
+		t.Fatalf("expected redirect explanation, got %s", message)
+	}
+	if !strings.Contains(message, "-L") {
+		t.Fatalf("expected -L hint, got %s", message)
+	}
+}
+
+func TestSummarizeCommandOutcomeCurlWithLocationDoesNotWarn(t *testing.T) {
+	message := summarizeCommandOutcome("curl", []string{"-sS", "-L", "https://example.com"}, "Redirecting to https://www.example.com", false)
+	if strings.Contains(message, "stopped at an HTTP redirect") {
+		t.Fatalf("expected no redirect warning when using -L, got %s", message)
+	}
+	if !strings.Contains(message, "Output:") {
+		t.Fatalf("expected output summary, got %s", message)
+	}
+}

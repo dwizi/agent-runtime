@@ -138,6 +138,63 @@ func TestSearchFallsBackWhenQueryExpansionIsKilled(t *testing.T) {
 	}
 }
 
+func TestSearchFallsBackWhenQueryExpansionTimesOut(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-query-timeout-fallback"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	runner := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			args := strings.Join(cmd.Args, " ")
+			switch {
+			case strings.Contains(args, " query "):
+				return []byte("timed out after 30s: Expanding query..."), errors.New("exit status 1")
+			case strings.Contains(args, " search "):
+				return []byte(`[{"path":"faq.md","docid":"#f1","score":0.82,"snippet":"pricing faq"}]`), nil
+			default:
+				return []byte("ok"), nil
+			}
+		},
+	}
+	service := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runner,
+	)
+
+	results, err := service.Search(context.Background(), workspaceID, "pricing", 3)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected one fallback result, got %d", len(results))
+	}
+	if results[0].Path != "faq.md" {
+		t.Fatalf("unexpected path: %s", results[0].Path)
+	}
+
+	calls := runner.callsSnapshot()
+	seenQuery := false
+	seenSearch := false
+	for _, call := range calls {
+		if strings.Contains(call, " query ") {
+			seenQuery = true
+		}
+		if strings.Contains(call, " search ") {
+			seenSearch = true
+		}
+	}
+	if !seenQuery || !seenSearch {
+		t.Fatalf("expected query then search fallback calls, got %v", calls)
+	}
+}
+
 func TestOpenMarkdownFromWorkspacePath(t *testing.T) {
 	root := t.TempDir()
 	workspaceID := "ws-open"
@@ -379,6 +436,60 @@ func TestIndexWorkspaceRunsEmbedWhenUpdateReportsPendingVectors(t *testing.T) {
 	}
 	if !seenEmbed {
 		t.Fatalf("expected embed call when update reports pending vectors, got calls=%v", calls)
+	}
+}
+
+func TestIndexWorkspaceEnsuresCollectionOnlyOncePerWorkspace(t *testing.T) {
+	root := t.TempDir()
+	workspaceID := "ws-collection-cache"
+	workspacePath := filepath.Join(root, workspaceID)
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+
+	runner := &fakeRunner{
+		resolver: func(cmd *exec.Cmd) ([]byte, error) {
+			args := strings.Join(cmd.Args, " ")
+			switch {
+			case strings.Contains(args, " update"):
+				return []byte("Indexed: 0 new, 0 updated, 0 unchanged, 0 removed"), nil
+			default:
+				return []byte("ok"), nil
+			}
+		},
+	}
+	service := newService(
+		Config{
+			WorkspaceRoot: root,
+			AutoEmbed:     false,
+		},
+		slog.Default(),
+		runner,
+	)
+
+	if err := service.IndexWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("first index workspace failed: %v", err)
+	}
+	if err := service.IndexWorkspace(context.Background(), workspaceID); err != nil {
+		t.Fatalf("second index workspace failed: %v", err)
+	}
+
+	calls := runner.callsSnapshot()
+	collectionCalls := 0
+	updateCalls := 0
+	for _, call := range calls {
+		if strings.Contains(call, " collection add ") {
+			collectionCalls++
+		}
+		if strings.Contains(call, " update") {
+			updateCalls++
+		}
+	}
+	if collectionCalls != 1 {
+		t.Fatalf("expected one collection add call, got %d (all calls=%v)", collectionCalls, calls)
+	}
+	if updateCalls != 2 {
+		t.Fatalf("expected two update calls, got %d (all calls=%v)", updateCalls, calls)
 	}
 }
 

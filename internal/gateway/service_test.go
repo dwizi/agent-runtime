@@ -824,6 +824,9 @@ func TestHandleApproveActionCommand(t *testing.T) {
 	if !output.Handled || !strings.Contains(output.Reply, "approved") {
 		t.Fatalf("expected approved output, got %s", output.Reply)
 	}
+	if !strings.Contains(output.Reply, "Outcome:") {
+		t.Fatalf("expected outcome summary in reply, got %s", output.Reply)
+	}
 	if !fStore.executionUpdateInvoked {
 		t.Fatal("expected execution update when action is approved")
 	}
@@ -859,8 +862,11 @@ func TestHandleApproveActionCommandExecutesPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle message failed: %v", err)
 	}
-	if !output.Handled || !strings.Contains(output.Reply, "executed") {
+	if !output.Handled || !strings.Contains(output.Reply, "ran it with") {
 		t.Fatalf("expected executed output, got %s", output.Reply)
+	}
+	if !strings.Contains(output.Reply, "Outcome:") {
+		t.Fatalf("expected outcome summary in reply, got %s", output.Reply)
 	}
 	if fStore.lastExecutionUpdate.ExecutionStatus != "succeeded" {
 		t.Fatalf("expected succeeded status, got %s", fStore.lastExecutionUpdate.ExecutionStatus)
@@ -893,6 +899,9 @@ func TestHandleApproveActionCommandExecutionFailure(t *testing.T) {
 	}
 	if !output.Handled || !strings.Contains(output.Reply, "failed") {
 		t.Fatalf("expected execution failure output, got %s", output.Reply)
+	}
+	if !strings.Contains(output.Reply, "Outcome:") {
+		t.Fatalf("expected outcome summary in failure reply, got %s", output.Reply)
 	}
 	if fStore.lastExecutionUpdate.ExecutionStatus != "failed" {
 		t.Fatalf("expected failed status, got %s", fStore.lastExecutionUpdate.ExecutionStatus)
@@ -1082,8 +1091,11 @@ func TestHandleApproveActionNaturalLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle message failed: %v", err)
 	}
-	if !output.Handled || !strings.Contains(output.Reply, "approved and executed") {
+	if !output.Handled || !strings.Contains(output.Reply, "Outcome:") {
 		t.Fatalf("expected natural-language approve action to execute, got %s", output.Reply)
+	}
+	if !strings.Contains(output.Reply, "ran it with") {
+		t.Fatalf("expected execution explanation in reply, got %s", output.Reply)
 	}
 }
 
@@ -1114,8 +1126,11 @@ func TestHandleApproveActionNaturalLanguageImplicitLatest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle message failed: %v", err)
 	}
-	if !output.Handled || !strings.Contains(output.Reply, "approved and executed") {
+	if !output.Handled || !strings.Contains(output.Reply, "Outcome:") {
 		t.Fatalf("expected implicit nl approve action to execute, got %s", output.Reply)
+	}
+	if !strings.Contains(output.Reply, "ran it with") {
+		t.Fatalf("expected execution explanation in reply, got %s", output.Reply)
 	}
 }
 

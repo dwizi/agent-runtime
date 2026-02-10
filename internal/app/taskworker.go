@@ -57,6 +57,11 @@ func (e *taskWorkerExecutor) executeReindex(ctx context.Context, task orchestrat
 	if workspaceID == "" {
 		return orchestrator.TaskResult{}, fmt.Errorf("workspace id is required for reindex")
 	}
+	if strings.EqualFold(strings.TrimSpace(task.ContextID), "system:filewatcher") {
+		return orchestrator.TaskResult{
+			Summary: fmt.Sprintf("workspace `%s` reindex already queued by watcher", workspaceID),
+		}, nil
+	}
 	const prefix = "markdown file changed:"
 	trimmedPrompt := strings.TrimSpace(task.Prompt)
 	if strings.HasPrefix(strings.ToLower(trimmedPrompt), prefix) {

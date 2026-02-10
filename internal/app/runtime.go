@@ -166,6 +166,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		schedulerService.SetHeartbeatReporter(heartbeatRegistry)
 	}
 	var reindexMu sync.Mutex
+	reindexLastQueued := map[string]time.Time{}
+	const reindexTaskDebounce = 2 * time.Second
 
 	watchService, err := watcher.New(
 		[]string{cfg.WorkspaceRoot},
@@ -181,6 +183,11 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			}
 			reindexMu.Lock()
 			defer reindexMu.Unlock()
+			now := time.Now().UTC()
+			if last, ok := reindexLastQueued[workspaceID]; ok && now.Sub(last) < reindexTaskDebounce {
+				logger.Debug("reindex task recently queued; skipping enqueue", "workspace_id", workspaceID, "path", path)
+				return
+			}
 
 			pending, pendingErr := hasPendingReindexTask(ctx, sqlStore, workspaceID)
 			if pendingErr != nil {
@@ -211,6 +218,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			}); persistErr != nil {
 				logger.Error("failed to persist reindex task", "path", path, "task_id", task.ID, "error", persistErr)
 			}
+			reindexLastQueued[workspaceID] = now
 		},
 	)
 	if err != nil {

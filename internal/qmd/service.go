@@ -77,6 +77,7 @@ type Service struct {
 	timers       map[string]*time.Timer
 	pendingEmbed map[string]bool
 	locks        map[string]*sync.Mutex
+	collections  map[string]bool
 	indexed      map[string]bool
 	lastIndexed  map[string]time.Time
 	closed       bool
@@ -128,6 +129,7 @@ func newService(cfg Config, logger *slog.Logger, runner commandRunner) *Service 
 		timers:       map[string]*time.Timer{},
 		pendingEmbed: map[string]bool{},
 		locks:        map[string]*sync.Mutex{},
+		collections:  map[string]bool{},
 		indexed:      map[string]bool{},
 		lastIndexed:  map[string]time.Time{},
 	}
@@ -188,6 +190,9 @@ func (s *Service) Close() {
 		timer.Stop()
 		delete(s.timers, workspaceID)
 		delete(s.pendingEmbed, workspaceID)
+	}
+	for workspaceDir := range s.collections {
+		delete(s.collections, workspaceDir)
 	}
 }
 
@@ -438,11 +443,24 @@ func (s *Service) ensureIndexed(ctx context.Context, workspaceID string) error {
 }
 
 func (s *Service) ensureCollection(ctx context.Context, workspaceDir string) error {
+	s.mu.Lock()
+	if s.collections[workspaceDir] {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
 	_, err := s.runQMD(ctx, workspaceDir, "collection", "add", ".", "--name", s.cfg.Collection, "--mask", "**/*.md")
 	if err == nil {
+		s.mu.Lock()
+		s.collections[workspaceDir] = true
+		s.mu.Unlock()
 		return nil
 	}
 	if looksLikeAlreadyExists(err) {
+		s.mu.Lock()
+		s.collections[workspaceDir] = true
+		s.mu.Unlock()
 		return nil
 	}
 	return err
@@ -664,7 +682,10 @@ func looksLikeQueryExpansionKilled(err error) bool {
 		return false
 	}
 	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "signal: killed") && strings.Contains(text, "expanding query")
+	if !strings.Contains(text, "expanding query") {
+		return false
+	}
+	return strings.Contains(text, "signal: killed") || strings.Contains(text, "timed out after")
 }
 
 func looksLikeKnownBunEmbedCrash(err error) bool {

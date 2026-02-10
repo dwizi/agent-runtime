@@ -180,7 +180,7 @@ func TestTaskObserverPersistsLifecycle(t *testing.T) {
 	}
 }
 
-func TestTaskWorkerExecutorReindexQueuesDebouncedIndex(t *testing.T) {
+func TestTaskWorkerExecutorReindexSkipsDuplicateQueueForFileWatcherContext(t *testing.T) {
 	tempRoot := t.TempDir()
 	qmdService := qmd.New(qmd.Config{
 		WorkspaceRoot: tempRoot,
@@ -207,12 +207,12 @@ func TestTaskWorkerExecutorReindexQueuesDebouncedIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute reindex task: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(result.Summary), "scheduled") {
-		t.Fatalf("expected scheduled summary, got %q", result.Summary)
+	if !strings.Contains(strings.ToLower(result.Summary), "already queued") {
+		t.Fatalf("expected already queued summary, got %q", result.Summary)
 	}
 }
 
-func TestTaskWorkerExecutorReindexUsesChangedPathFromPrompt(t *testing.T) {
+func TestTaskWorkerExecutorReindexUsesChangedPathFromPromptForManualTask(t *testing.T) {
 	tempRoot := t.TempDir()
 	qmdService := qmd.New(qmd.Config{
 		WorkspaceRoot: tempRoot,
@@ -229,7 +229,7 @@ func TestTaskWorkerExecutorReindexUsesChangedPathFromPrompt(t *testing.T) {
 	task := orchestrator.Task{
 		ID:          "task-reindex-2",
 		WorkspaceID: "ws-2",
-		ContextID:   "system:filewatcher",
+		ContextID:   "system:manual",
 		Kind:        orchestrator.TaskKindReindex,
 		Title:       "Reindex markdown",
 		Prompt:      "markdown file changed: /tmp/workspaces/ws-2/logs/chats/discord.md",

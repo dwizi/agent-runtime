@@ -99,7 +99,7 @@ func (p *Plugin) Execute(ctx context.Context, approval store.ActionApproval) (ex
 	}
 	return executor.Result{
 		Plugin:  p.PluginKey(),
-		Message: "command succeeded: " + compactOutput(combinedOutput.String(), combinedOutput.Truncated),
+		Message: summarizeCommandOutcome(command, args, combinedOutput.String(), combinedOutput.Truncated),
 	}, nil
 }
 
@@ -224,6 +224,38 @@ func compactOutput(output string, truncated bool) string {
 		return trimmed[:280] + "..."
 	}
 	return trimmed
+}
+
+func summarizeCommandOutcome(command string, args []string, output string, truncated bool) string {
+	snippet := compactOutput(output, truncated)
+	if snippet == "(no output)" {
+		return "The command ran successfully and produced no output."
+	}
+	if strings.EqualFold(strings.TrimSpace(command), "curl") && !curlFollowsRedirects(args) && looksLikeRedirectResponse(snippet) {
+		return "The command ran successfully, but curl stopped at an HTTP redirect. Use `-L` to follow redirects. Output: " + snippet
+	}
+	return "The command ran successfully. Output: " + snippet
+}
+
+func curlFollowsRedirects(args []string) bool {
+	for _, arg := range args {
+		switch strings.TrimSpace(arg) {
+		case "-L", "--location", "--location-trusted":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeRedirectResponse(output string) bool {
+	lower := strings.ToLower(strings.TrimSpace(output))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "redirecting") ||
+		strings.Contains(lower, "moved permanently") ||
+		strings.Contains(lower, "found. redirecting to") ||
+		(strings.Contains(lower, "http-equiv=\"refresh\"") && strings.Contains(lower, "url="))
 }
 
 func (p *Plugin) executionSpec(command string, args []string) (string, []string) {
