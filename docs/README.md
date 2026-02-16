@@ -1,6 +1,6 @@
-# Spinner Docs (Overlord/Admin)
+# Agent Runtime Docs (Overlord/Admin)
 
-This documentation is written for the operators who install, secure, and run Spinner.
+This documentation is written for the operators who install, secure, and run Agent Runtime.
 
 ## Start Here
 

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakePlugin struct {

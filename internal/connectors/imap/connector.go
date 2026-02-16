@@ -23,9 +23,9 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type Store interface {

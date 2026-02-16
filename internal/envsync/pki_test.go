@@ -12,9 +12,9 @@ func TestSyncLocalPKIEnvFillsEmptyValues(t *testing.T) {
 	t.Chdir(tempDir)
 
 	writeFile(t, filepath.Join(tempDir, ".env"), strings.Join([]string{
-		"SPINNER_ADMIN_TLS_CA_FILE=",
-		"SPINNER_ADMIN_TLS_CERT_FILE=",
-		"SPINNER_ADMIN_TLS_KEY_FILE=",
+		"AGENT_RUNTIME_ADMIN_TLS_CA_FILE=",
+		"AGENT_RUNTIME_ADMIN_TLS_CERT_FILE=",
+		"AGENT_RUNTIME_ADMIN_TLS_KEY_FILE=",
 	}, "\n")+"\n")
 	writeFile(t, filepath.Join(tempDir, "ops/caddy/pki/clients-ca.crt"), "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n")
 	writeFile(t, filepath.Join(tempDir, "ops/caddy/pki/admin-client.crt"), "-----BEGIN CERTIFICATE-----\ncrt\n-----END CERTIFICATE-----\n")
@@ -38,13 +38,13 @@ func TestSyncLocalPKIEnvFillsEmptyValues(t *testing.T) {
 	}
 
 	envContent := readFile(t, filepath.Join(tempDir, ".env"))
-	if !strings.Contains(envContent, "SPINNER_ADMIN_TLS_CA_FILE="+filepath.Join(tempDir, "ops/caddy/pki/clients-ca.crt")) {
+	if !strings.Contains(envContent, "AGENT_RUNTIME_ADMIN_TLS_CA_FILE="+filepath.Join(tempDir, "ops/caddy/pki/clients-ca.crt")) {
 		t.Fatalf("expected ca path to be set, got %s", envContent)
 	}
-	if !strings.Contains(envContent, "SPINNER_ADMIN_TLS_CERT_FILE="+filepath.Join(tempDir, "ops/caddy/pki/admin-client.crt")) {
+	if !strings.Contains(envContent, "AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="+filepath.Join(tempDir, "ops/caddy/pki/admin-client.crt")) {
 		t.Fatalf("expected cert path to be set, got %s", envContent)
 	}
-	if !strings.Contains(envContent, "SPINNER_ADMIN_TLS_KEY_FILE="+filepath.Join(tempDir, "ops/caddy/pki/admin-client.key")) {
+	if !strings.Contains(envContent, "AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="+filepath.Join(tempDir, "ops/caddy/pki/admin-client.key")) {
 		t.Fatalf("expected key path to be set, got %s", envContent)
 	}
 }
@@ -54,9 +54,9 @@ func TestSyncLocalPKIEnvDoesNotOverwriteExisting(t *testing.T) {
 	t.Chdir(tempDir)
 
 	writeFile(t, filepath.Join(tempDir, ".env"), strings.Join([]string{
-		"SPINNER_ADMIN_TLS_CA_FILE=/custom/ca.crt",
-		"SPINNER_ADMIN_TLS_CERT_FILE=",
-		"SPINNER_ADMIN_TLS_KEY_FILE=",
+		"AGENT_RUNTIME_ADMIN_TLS_CA_FILE=/custom/ca.crt",
+		"AGENT_RUNTIME_ADMIN_TLS_CERT_FILE=",
+		"AGENT_RUNTIME_ADMIN_TLS_KEY_FILE=",
 	}, "\n")+"\n")
 	writeFile(t, filepath.Join(tempDir, "ops/caddy/pki/clients-ca.crt"), "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n")
 	writeFile(t, filepath.Join(tempDir, "ops/caddy/pki/admin-client.crt"), "-----BEGIN CERTIFICATE-----\ncrt\n-----END CERTIFICATE-----\n")
@@ -71,7 +71,7 @@ func TestSyncLocalPKIEnvDoesNotOverwriteExisting(t *testing.T) {
 	}
 
 	envContent := readFile(t, filepath.Join(tempDir, ".env"))
-	if !strings.Contains(envContent, "SPINNER_ADMIN_TLS_CA_FILE=/custom/ca.crt") {
+	if !strings.Contains(envContent, "AGENT_RUNTIME_ADMIN_TLS_CA_FILE=/custom/ca.crt") {
 		t.Fatalf("expected existing ca path to be preserved, got %s", envContent)
 	}
 }

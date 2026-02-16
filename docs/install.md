@@ -10,41 +10,41 @@ This runbook covers first-time installation and secure bootstrap.
 
 Notes:
 - Docker runtime image already includes `qmd`.
-- Install local `qmd` only when running Spinner directly on host (`make run`, `make tui`).
+- Install local `qmd` only when running Agent Runtime directly on host (`make run`, `make tui`).
 
 ## 2. Clone and Prepare
 
 ```bash
-git clone <repo-url> spinner
-cd spinner
+git clone <repo-url> agent-runtime
+cd agent-runtime
 cp .env.example .env
 ```
 
 If you need to force architecture (for example, run x86_64 images on arm64 hosts), set:
-- `SPINNER_IMAGE_PLATFORM=linux/amd64`
-- `SPINNER_QMD_IMAGE_PLATFORM=linux/amd64`
+- `AGENT_RUNTIME_IMAGE_PLATFORM=linux/amd64`
+- `AGENT_RUNTIME_QMD_IMAGE_PLATFORM=linux/amd64`
 
 ## 3. Set Required Secrets in `.env`
 
 Minimum for production bootstrap:
 
-- `SPINNER_LLM_PROVIDER` (default `openai`; set to `anthropic` for Claude, and configure `SPINNER_LLM_BASE_URL`, `SPINNER_LLM_MODEL`, and `SPINNER_LLM_API_KEY` as needed)
-- `SPINNER_DISCORD_TOKEN` (if enabling Discord)
-- `SPINNER_TELEGRAM_TOKEN` (if enabling Telegram)
+- `AGENT_RUNTIME_LLM_PROVIDER` (default `openai`; set to `anthropic` for Claude, and configure `AGENT_RUNTIME_LLM_BASE_URL`, `AGENT_RUNTIME_LLM_MODEL`, and `AGENT_RUNTIME_LLM_API_KEY` as needed)
+- `AGENT_RUNTIME_DISCORD_TOKEN` (if enabling Discord)
+- `AGENT_RUNTIME_TELEGRAM_TOKEN` (if enabling Telegram)
 - `PUBLIC_HOST`
 - `ADMIN_HOST`
 - `ACME_EMAIL`
 
-`SPINNER_LLM_API_KEY` is required for authenticated remote providers (OpenAI, Z.ai, Claude) but may stay empty when pointing `SPINNER_LLM_BASE_URL` at a local Ollama/vLLM endpoint.
+`AGENT_RUNTIME_LLM_API_KEY` is required for authenticated remote providers (OpenAI, Z.ai, Claude) but may stay empty when pointing `AGENT_RUNTIME_LLM_BASE_URL` at a local Ollama/vLLM endpoint.
 
 Optional but recommended for connector command UX:
-- `SPINNER_COMMAND_SYNC_ENABLED=true`
-- `SPINNER_DISCORD_COMMAND_GUILD_IDS=<guild-id-csv>` (faster slash-command visibility)
-- `SPINNER_DISCORD_APPLICATION_ID=<app-id>` (when automatic app id lookup is restricted)
+- `AGENT_RUNTIME_COMMAND_SYNC_ENABLED=true`
+- `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS=<guild-id-csv>` (faster slash-command visibility)
+- `AGENT_RUNTIME_DISCORD_APPLICATION_ID=<app-id>` (when automatic app id lookup is restricted)
 
 Then set admin API target for local TUI:
 
-- `SPINNER_ADMIN_API_URL=https://<ADMIN_HOST>`
+- `AGENT_RUNTIME_ADMIN_API_URL=https://<ADMIN_HOST>`
 
 ## 4. Start the Stack
 
@@ -53,7 +53,7 @@ make compose-up
 ```
 
 What this does:
-- starts `spinner` and `caddy`
+- starts `agent-runtime` and `caddy`
 - provisions local admin mTLS material under `ops/caddy/pki`
 - syncs missing mTLS env paths into `.env`
 - bind-mounts host paths for live editing:
@@ -105,11 +105,11 @@ This marks the context as admin scope for stricter policy use.
 
 ## 8. Recommended Immediate Hardening
 
-- Set `SPINNER_ADMIN_TLS_SKIP_VERIFY=false` for operator clients.
+- Set `AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY=false` for operator clients.
 - Rotate connector tokens after initial validation.
 - Set sandbox policy:
-  - `SPINNER_SANDBOX_ALLOWED_COMMANDS`
-  - `SPINNER_SANDBOX_RUNNER_COMMAND` (if using isolation wrapper)
+  - `AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS`
+  - `AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND` (if using isolation wrapper)
 - Set objective polling and IMAP only when needed.
 
 ## 9. Local Dev Mode (optional)

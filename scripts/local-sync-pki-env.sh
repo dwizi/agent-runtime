@@ -99,9 +99,9 @@ if ! is_pem_cert "$PKI_DIR/clients-ca.crt" || ! is_pem_cert "$PKI_DIR/admin-clie
   exit 0
 fi
 
-set_if_empty "SPINNER_ADMIN_TLS_CA_FILE" "$PKI_DIR/clients-ca.crt"
-set_if_empty "SPINNER_ADMIN_TLS_CERT_FILE" "$PKI_DIR/admin-client.crt"
-set_if_empty "SPINNER_ADMIN_TLS_KEY_FILE" "$PKI_DIR/admin-client.key"
+set_if_empty "AGENT_RUNTIME_ADMIN_TLS_CA_FILE" "$PKI_DIR/clients-ca.crt"
+set_if_empty "AGENT_RUNTIME_ADMIN_TLS_CERT_FILE" "$PKI_DIR/admin-client.crt"
+set_if_empty "AGENT_RUNTIME_ADMIN_TLS_KEY_FILE" "$PKI_DIR/admin-client.key"
 
 if [ "$BACKUP_DONE" -eq 1 ]; then
   echo "synced local mTLS paths to $ENV_FILE (backup: $BACKUP_PATH)"

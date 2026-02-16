@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/connectors"
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/connectors"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type heartbeatNotifier struct {

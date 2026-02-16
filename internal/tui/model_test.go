@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/carlos/spinner/internal/adminclient"
-	"github.com/carlos/spinner/internal/config"
+	"github.com/dwizi/agent-runtime/internal/adminclient"
+	"github.com/dwizi/agent-runtime/internal/config"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

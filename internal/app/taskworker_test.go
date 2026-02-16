@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	actionexecutor "github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/store"
+	actionexecutor "github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakeResponder struct {
@@ -97,7 +97,7 @@ func TestTaskWorkerExecutorWritesArtifact(t *testing.T) {
 
 func TestTaskWorkerExecutorQueuesActionApprovalFromTaskOutput(t *testing.T) {
 	tempRoot := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent-runtime.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
@@ -187,7 +187,7 @@ func TestTaskWorkerExecutorGeneralTaskSkipsGrounding(t *testing.T) {
 
 func TestTaskWorkerExecutorRunsAutonomousCurlLoopForRoutedTask(t *testing.T) {
 	tempRoot := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent-runtime.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
@@ -265,7 +265,7 @@ func TestTaskWorkerExecutorRunsAutonomousCurlLoopForRoutedTask(t *testing.T) {
 
 func TestTaskWorkerExecutorAutonomousFinalSummaryUsesExecutionEvidence(t *testing.T) {
 	tempRoot := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent-runtime.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
@@ -331,7 +331,7 @@ func TestTaskWorkerExecutorAutonomousFinalSummaryUsesExecutionEvidence(t *testin
 
 func TestTaskWorkerExecutorAutonomousFallbackSummaryIsGeneric(t *testing.T) {
 	tempRoot := t.TempDir()
-	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent-runtime.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)
@@ -395,7 +395,7 @@ func TestTaskWorkerExecutorAutonomousFallbackSummaryIsGeneric(t *testing.T) {
 }
 
 func TestTaskObserverPersistsLifecycle(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "spinner.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent-runtime.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)

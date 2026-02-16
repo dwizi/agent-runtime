@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/config"
+	"github.com/dwizi/agent-runtime/internal/config"
 )
 
 type Client struct {
@@ -115,7 +115,7 @@ func New(cfg config.Config) (*Client, error) {
 	}
 	if cfg.AdminTLSCertFile != "" || cfg.AdminTLSKeyFile != "" {
 		if cfg.AdminTLSCertFile == "" || cfg.AdminTLSKeyFile == "" {
-			return nil, fmt.Errorf("both SPINNER_ADMIN_TLS_CERT_FILE and SPINNER_ADMIN_TLS_KEY_FILE are required")
+			return nil, fmt.Errorf("both AGENT_RUNTIME_ADMIN_TLS_CERT_FILE and AGENT_RUNTIME_ADMIN_TLS_KEY_FILE are required")
 		}
 		clientCert, err := tls.LoadX509KeyPair(cfg.AdminTLSCertFile, cfg.AdminTLSKeyFile)
 		if err != nil {

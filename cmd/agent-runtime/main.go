@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/carlos/spinner/internal/cli"
+	"github.com/dwizi/agent-runtime/internal/cli"
 )
 
 func main() {

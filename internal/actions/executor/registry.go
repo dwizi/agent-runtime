@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 var ErrPluginNotFound = errors.New("action plugin not found")

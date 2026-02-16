@@ -1,10 +1,10 @@
-# Project Brief — spinner (Overlord/Admin)
+# Project Brief — agent-runtime (Overlord/Admin)
 
-This brief is for the team that installs and operates Spinner.
+This brief is for the team that installs and operates Agent Runtime.
 
-## What Spinner Is
+## What Agent Runtime Is
 
-Spinner is a channel-first orchestration runtime with:
+Agent Runtime is a channel-first orchestration runtime with:
 - secure edge (`caddy`)
 - admin mTLS access
 - chat connectors (Telegram, Discord)

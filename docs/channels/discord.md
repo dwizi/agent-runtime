@@ -16,13 +16,13 @@ This guide covers creating a Discord bot token and validating admin/task command
 3. Set it in your local `.env`:
 
 ```env
-SPINNER_DISCORD_TOKEN=your_discord_bot_token
-SPINNER_DISCORD_API_BASE=https://discord.com/api/v10
-SPINNER_DISCORD_GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json
-SPINNER_COMMAND_SYNC_ENABLED=true
+AGENT_RUNTIME_DISCORD_TOKEN=your_discord_bot_token
+AGENT_RUNTIME_DISCORD_API_BASE=https://discord.com/api/v10
+AGENT_RUNTIME_DISCORD_GATEWAY_URL=wss://gateway.discord.gg/?v=10&encoding=json
+AGENT_RUNTIME_COMMAND_SYNC_ENABLED=true
 # Optional (recommended for immediate slash-command updates):
-SPINNER_DISCORD_APPLICATION_ID=
-SPINNER_DISCORD_COMMAND_GUILD_IDS=123456789012345678
+AGENT_RUNTIME_DISCORD_APPLICATION_ID=
+AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS=123456789012345678
 ```
 
 ## 3. Enable required intents
@@ -32,7 +32,7 @@ In the **Bot** page, enable:
 - **Server Members Intent** (optional now, useful later)
 - **Message Content Intent** (required for message-based commands)
 
-Spinner supports both:
+Agent Runtime supports both:
 - message commands parsed from `MESSAGE_CREATE`
 - Discord slash commands from `INTERACTION_CREATE`
 
@@ -51,14 +51,14 @@ Spinner supports both:
    - `Manage Messages` (optional)
 4. Open the generated URL and invite the bot to your server.
 
-## 5. Validate with Spinner
+## 5. Validate with Agent Runtime
 
-1. Start Spinner:
+1. Start Agent Runtime:
    - `make run`
 2. In Discord:
    - DM the bot: `pair`
    - In a server channel: `/task write a short test summary`
-   - Verify slash menu shows Spinner commands after startup sync
+   - Verify slash menu shows Agent Runtime commands after startup sync
    - In your admin channel: `/admin-channel enable`
 
 If the bot does not respond:
@@ -71,20 +71,20 @@ If the bot does not respond:
 If slash commands do not show up:
 
 - Confirm `applications.commands` scope was included during bot invite.
-- Restart Spinner to trigger command sync at connector bootstrap.
+- Restart Agent Runtime to trigger command sync at connector bootstrap.
 - Prefer guild-scoped sync for faster propagation:
-  - set `SPINNER_DISCORD_COMMAND_GUILD_IDS=<your-guild-id-csv>`
-- If app lookup fails in your environment, set `SPINNER_DISCORD_APPLICATION_ID` explicitly.
+  - set `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS=<your-guild-id-csv>`
+- If app lookup fails in your environment, set `AGENT_RUNTIME_DISCORD_APPLICATION_ID` explicitly.
 
 ## Production hardening
 
 1. Keep tokens out of git
    - Never commit `.env`.
-   - Store `SPINNER_DISCORD_TOKEN` in a secret manager (for example: cloud secret store, Vault, or CI/CD secrets).
+   - Store `AGENT_RUNTIME_DISCORD_TOKEN` in a secret manager (for example: cloud secret store, Vault, or CI/CD secrets).
 
 2. Rotate tokens regularly
    - Reset the bot token on a defined schedule (for example monthly/quarterly).
-   - Re-deploy Spinner immediately after rotation.
+   - Re-deploy Agent Runtime immediately after rotation.
 
 3. Use least privilege
    - Only grant required bot permissions:
@@ -92,7 +92,7 @@ If slash commands do not show up:
      - `Send Messages`
      - `Read Message History`
    - Disable optional permissions unless needed.
-   - Keep privileged intents limited to what Spinner uses.
+   - Keep privileged intents limited to what Agent Runtime uses.
 
 4. Restrict bot access scope
    - Invite the bot only to required servers.

@@ -14,29 +14,29 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/actions/plugins/sandbox"
-	"github.com/carlos/spinner/internal/actions/plugins/smtp"
-	"github.com/carlos/spinner/internal/actions/plugins/webhook"
-	"github.com/carlos/spinner/internal/config"
-	"github.com/carlos/spinner/internal/connectors"
-	"github.com/carlos/spinner/internal/connectors/discord"
-	"github.com/carlos/spinner/internal/connectors/imap"
-	"github.com/carlos/spinner/internal/connectors/telegram"
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/httpapi"
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/llm/anthropic"
-	"github.com/carlos/spinner/internal/llm/grounded"
-	"github.com/carlos/spinner/internal/llm/openai"
-	"github.com/carlos/spinner/internal/llm/promptpolicy"
-	"github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/scheduler"
-	"github.com/carlos/spinner/internal/store"
-	"github.com/carlos/spinner/internal/watcher"
+	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/sandbox"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/smtp"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/webhook"
+	"github.com/dwizi/agent-runtime/internal/config"
+	"github.com/dwizi/agent-runtime/internal/connectors"
+	"github.com/dwizi/agent-runtime/internal/connectors/discord"
+	"github.com/dwizi/agent-runtime/internal/connectors/imap"
+	"github.com/dwizi/agent-runtime/internal/connectors/telegram"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/httpapi"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/llm/anthropic"
+	"github.com/dwizi/agent-runtime/internal/llm/grounded"
+	"github.com/dwizi/agent-runtime/internal/llm/openai"
+	"github.com/dwizi/agent-runtime/internal/llm/promptpolicy"
+	"github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/scheduler"
+	"github.com/dwizi/agent-runtime/internal/store"
+	"github.com/dwizi/agent-runtime/internal/watcher"
 )
 
 type Runtime struct {
@@ -125,8 +125,12 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}))
 	}
 	actionExecutor := executor.NewRegistry(plugins...)
-	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor)
+	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor, cfg.WorkspaceRoot, logger.With("component", "gateway"))
 	commandGateway.SetTriageEnabled(cfg.TriageEnabled)
+	if cfg.AgentMaxTurnDurationSec > 0 {
+		commandGateway.SetAgentMaxTurnDuration(time.Duration(cfg.AgentMaxTurnDurationSec) * time.Second)
+	}
+	commandGateway.SetSensitiveApprovalTTL(time.Duration(cfg.AgentSensitiveApprovalTTLSeconds) * time.Second)
 
 	// Load Reasoning Prompt
 	if cfg.ReasoningPromptFile != "" {
@@ -136,8 +140,8 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		} else if !os.IsNotExist(err) {
 			logger.Warn("failed to read reasoning prompt file", "path", cfg.ReasoningPromptFile, "error", err)
 		} else {
-			// If relative path fails, try relative to workspace root? 
-			// For now, assume absolute or CWD relative. 
+			// If relative path fails, try relative to workspace root?
+			// For now, assume absolute or CWD relative.
 			// In docker, /context/REASONING.md is absolute.
 			// Locally, it might be relative.
 		}
@@ -361,6 +365,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		cfg.TaskNotifyPolicy,
 		cfg.TaskNotifySuccessPolicy,
 		cfg.TaskNotifyFailurePolicy,
+		commandGateway,
 		logger.With("component", "task-notifier"),
 	)
 	engine.SetObserver(newTaskObserver(sqlStore, notifier, logger.With("component", "task-observer")))
@@ -409,7 +414,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
-	r.logger.Info("spinner runtime starting", "addr", r.cfg.HTTPAddr, "workspace_root", r.cfg.WorkspaceRoot)
+	r.logger.Info("agent-runtime runtime starting", "addr", r.cfg.HTTPAddr, "workspace_root", r.cfg.WorkspaceRoot)
 	if r.heartbeat != nil {
 		r.heartbeat.Beat("runtime", "runtime loop started")
 	}

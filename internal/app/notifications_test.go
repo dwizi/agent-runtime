@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/connectors"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/connectors"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type publishedMessage struct {
@@ -34,6 +34,12 @@ func (f *fakePublisher) Publish(ctx context.Context, externalID, text string) er
 		text:       text,
 	})
 	return nil
+}
+
+type mockAgentService struct{}
+
+func (m *mockAgentService) NarrateTaskResult(ctx context.Context, connector, externalID string, task orchestrator.Task, result orchestrator.TaskResult) (string, error) {
+	return "", nil // Return empty to force fallback to summary in existing tests
 }
 
 func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
@@ -57,7 +63,7 @@ func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n1",
@@ -106,7 +112,7 @@ func TestTaskCompletionNotificationAppendsOutboundChatLog(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier(workspaceRoot, sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier(workspaceRoot, sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-log-1",
@@ -164,7 +170,7 @@ func TestRoutedTaskSuccessNotificationUsesNaturalReply(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-success",
@@ -227,7 +233,7 @@ func TestRoutedTaskFailureSkipsNonAdminChannels(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-failure",
@@ -289,7 +295,7 @@ func TestRoutedTaskFailureNotifiesAdminChannelOnly(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-routed-admin-failure",
@@ -337,7 +343,7 @@ func TestTaskCompletionNotificationToAdminContextForSystemTasks(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n2",
@@ -384,7 +390,7 @@ func TestTaskCompletionNotificationPolicyOriginSkipsAdminContexts(t *testing.T) 
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "origin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "origin", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n3",
@@ -428,7 +434,7 @@ func TestTaskCompletionNotificationPolicyAdminSkipsOriginContext(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "admin", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "admin", "", "", &mockAgentService{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	task := orchestrator.Task{
 		ID:          "task-n4",
@@ -490,6 +496,7 @@ func TestTaskCompletionNotificationPolicyOverridesByOutcome(t *testing.T) {
 		"both",
 		"origin",
 		"admin",
+		&mockAgentService{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -530,7 +537,7 @@ func TestTaskCompletionNotificationPolicyOverridesByOutcome(t *testing.T) {
 
 func openAppTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "spinner_app.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent_runtime_app.sqlite")
 	sqlStore, err := store.New(dbPath)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

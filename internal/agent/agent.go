@@ -4,17 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
-	"github.com/carlos/spinner/internal/agent/tools"
-	"github.com/carlos/spinner/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/llm"
 )
 
 // Agent coordinates the "Think-Act" loop.
 type Agent struct {
+	logger         *slog.Logger
 	llm            llm.Responder
 	registry       *tools.Registry
 	prompt         string // Base system prompt
@@ -25,12 +28,20 @@ type Agent struct {
 	taskEvents map[string][]time.Time
 }
 
+type contextKey string
+
+const sensitiveToolApprovalKey contextKey = "agent_sensitive_tool_approval"
+
 // New creates a new Agent.
-func New(responder llm.Responder, registry *tools.Registry, systemPrompt string) *Agent {
+func New(logger *slog.Logger, responder llm.Responder, registry *tools.Registry, systemPrompt string) *Agent {
 	if systemPrompt == "" {
 		systemPrompt = "You are a helpful AI agent."
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Agent{
+		logger:        logger,
 		llm:           responder,
 		registry:      registry,
 		prompt:        systemPrompt,
@@ -45,6 +56,7 @@ type Result struct {
 	ActionTaken bool   // Whether a tool was executed
 	ToolName    string
 	ToolOutput  string
+	ToolCalls   []ToolCall
 	Steps       int
 	Confidence  float64
 	Error       error
@@ -59,6 +71,23 @@ type TraceEvent struct {
 	Time    time.Time
 	Stage   string
 	Message string
+}
+
+// ToolCall captures a tool invocation attempted by the agent loop.
+type ToolCall struct {
+	ToolName   string
+	ToolArgs   string
+	Status     string
+	ToolOutput string
+	Error      string
+}
+
+// WithSensitiveToolApproval marks the context as approved for sensitive tool execution.
+func WithSensitiveToolApproval(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, sensitiveToolApprovalKey, true)
 }
 
 func (a *Agent) SetDefaultPolicy(policy Policy) {
@@ -93,6 +122,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			Stage:   strings.TrimSpace(stage),
 			Message: strings.TrimSpace(message),
 		})
+		a.logger.Info("agent_trace", "stage", stage, "message", message)
 	}
 
 	policy := a.resolvePolicy(ctx, input)
@@ -119,7 +149,18 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 	if a.registry != nil {
 		toolDesc = a.registry.DescribeAll()
 	}
-	fullPrompt := fmt.Sprintf("%s\n\nAVAILABLE TOOLS:\n%s\n\nINSTRUCTIONS:\n- You may call tools when needed.\n- To call a tool, output ONLY JSON: {\"tool\": \"name\", \"args\": {...}}\n- To finalize, output JSON: {\"final\": \"answer text\", \"confidence\": 0.0-1.0}\n- Plain text is also accepted as a final response.", a.prompt, toolDesc)
+
+	// We assume a.prompt contains instructions and a placeholder for tools.
+	// If it doesn't have placeholders, we just append them.
+	fullPrompt := a.prompt
+	now := time.Now().UTC().Format(time.RFC1123)
+	fullPrompt = fmt.Sprintf("CURRENT TIME (UTC): %s\n\n%s", now, fullPrompt)
+
+	if strings.Contains(fullPrompt, "%s") {
+		fullPrompt = fmt.Sprintf(fullPrompt, toolDesc)
+	} else {
+		fullPrompt = fmt.Sprintf("%s\n\nAVAILABLE TOOLS:\n%s", fullPrompt, toolDesc)
+	}
 	appendTrace("prompt.ready", "prepared prompt with tool catalog")
 
 	maxSteps := policy.MaxLoopSteps
@@ -171,11 +212,19 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		toolName := decision.ToolName
 		toolArgs := decision.ToolArgs
 		appendTrace("decision.tool", fmt.Sprintf("model selected tool %s", toolName))
+		toolCallIndex := len(result.ToolCalls)
+		result.ToolCalls = append(result.ToolCalls, ToolCall{
+			ToolName: strings.TrimSpace(toolName),
+			ToolArgs: compactLoopText(string(toolArgs), 800),
+			Status:   "selected",
+		})
 
 		if policy.MaxToolCallsPerTurn > 0 && toolCalls+1 > policy.MaxToolCallsPerTurn {
 			result.Blocked = true
 			result.BlockReason = "tool call exceeds per-turn policy"
 			result.Reply = "I cannot run more tools for this request under current policy."
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = result.BlockReason
 			appendTrace("policy.blocked", result.BlockReason)
 			return result
 		}
@@ -184,6 +233,53 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			result.Blocked = true
 			result.BlockReason = fmt.Sprintf("tool %s is not allowed by policy", toolName)
 			result.Reply = "I cannot run that tool in this context."
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = result.BlockReason
+			appendTrace("policy.blocked", result.BlockReason)
+			return result
+		}
+
+		if a.registry == nil {
+			result.ActionTaken = true
+			result.ToolName = toolName
+			result.Error = fmt.Errorf("tool execution failed: tool registry is not configured")
+			result.Reply = fmt.Sprintf("I tried to use `%s` but no tool registry is configured.", toolName)
+			result.ToolCalls[toolCallIndex].Status = "failed"
+			result.ToolCalls[toolCallIndex].Error = compactLoopText(result.Error.Error(), 800)
+			appendTrace("tool.error", "tool registry is nil")
+			return result
+		}
+		toolDef, exists := a.registry.Get(toolName)
+		if !exists {
+			result.ActionTaken = true
+			result.ToolName = toolName
+			result.Error = fmt.Errorf("tool execution failed: tool not found: %s", toolName)
+			result.Reply = fmt.Sprintf("I tried to use `%s` but it is not registered.", toolName)
+			result.ToolCalls[toolCallIndex].Status = "failed"
+			result.ToolCalls[toolCallIndex].Error = compactLoopText(result.Error.Error(), 800)
+			appendTrace("tool.error", fmt.Sprintf("tool %s not found", toolName))
+			return result
+		}
+		toolClass, requiresApproval := toolPolicyMetadata(toolDef)
+		appendTrace("policy.class", fmt.Sprintf("tool %s class=%s approval_required=%t", toolName, toolClass, requiresApproval))
+
+		if !isToolClassAllowed(policy, toolClass) {
+			result.Blocked = true
+			result.BlockReason = fmt.Sprintf("tool class %s is not allowed by policy", toolClass)
+			result.Reply = "I cannot run that action type in this context."
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = result.BlockReason
+			appendTrace("audit.class_policy_block", fmt.Sprintf("blocked tool=%s class=%s connector=%s workspace=%s context=%s external=%s user=%s", toolName, toolClass, strings.TrimSpace(input.Connector), strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ContextID), strings.TrimSpace(input.ExternalID), strings.TrimSpace(input.FromUserID)))
+			appendTrace("policy.blocked", result.BlockReason)
+			return result
+		}
+		if requiresApproval && !hasSensitiveToolApproval(ctx) {
+			result.Blocked = true
+			result.BlockReason = fmt.Sprintf("tool %s requires approval", toolName)
+			result.Reply = "I need explicit approval before running that sensitive action."
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = result.BlockReason
+			appendTrace("audit.approval_required", fmt.Sprintf("blocked tool=%s class=%s connector=%s workspace=%s context=%s external=%s user=%s", toolName, toolClass, strings.TrimSpace(input.Connector), strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ContextID), strings.TrimSpace(input.ExternalID), strings.TrimSpace(input.FromUserID)))
 			appendTrace("policy.blocked", result.BlockReason)
 			return result
 		}
@@ -194,19 +290,12 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 				result.Blocked = true
 				result.BlockReason = reason
 				result.Reply = "I am at the autonomous task limit right now. Please try again shortly."
+				result.ToolCalls[toolCallIndex].Status = "blocked"
+				result.ToolCalls[toolCallIndex].Error = result.BlockReason
 				appendTrace("policy.blocked", result.BlockReason)
 				return result
 			}
 			appendTrace("policy.quota", "autonomous task quota accepted")
-		}
-
-		if a.registry == nil {
-			result.ActionTaken = true
-			result.ToolName = toolName
-			result.Error = fmt.Errorf("tool execution failed: tool registry is not configured")
-			result.Reply = fmt.Sprintf("I tried to use `%s` but no tool registry is configured.", toolName)
-			appendTrace("tool.error", "tool registry is nil")
-			return result
 		}
 
 		output, err := a.registry.ExecuteTool(ctx, toolName, toolArgs)
@@ -216,6 +305,8 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			result.ToolName = toolName
 			result.Error = fmt.Errorf("tool execution failed: %w", err)
 			result.Reply = fmt.Sprintf("I tried to use `%s` but it failed: %v", toolName, err)
+			result.ToolCalls[toolCallIndex].Status = "failed"
+			result.ToolCalls[toolCallIndex].Error = compactLoopText(err.Error(), 800)
 			return result
 		}
 
@@ -223,6 +314,8 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		result.ActionTaken = true
 		result.ToolName = toolName
 		result.ToolOutput = output
+		result.ToolCalls[toolCallIndex].Status = "succeeded"
+		result.ToolCalls[toolCallIndex].ToolOutput = compactLoopText(output, 1200)
 		appendTrace("tool.ok", fmt.Sprintf("tool %s executed successfully", toolName))
 
 		toolSteps = append(toolSteps, loopToolStep{
@@ -262,19 +355,21 @@ func buildLoopInput(userText string, toolSteps []loopToolStep, step, maxSteps in
 }
 
 func (a *Agent) parseDecision(response string) parsedDecision {
-	trimmed := sanitizeModelPayload(response)
-	if trimmed == "" {
-		return parsedDecision{FinalReply: ""}
-	}
-	if !strings.HasPrefix(trimmed, "{") {
+	// 1. Try to find a JSON object in the response
+	jsonStr := findFirstJSON(response)
+
+	// 2. If no JSON found, treat entire response as reply
+	if jsonStr == "" {
 		return parsedDecision{FinalReply: strings.TrimSpace(response)}
 	}
 
 	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(jsonStr), &envelope); err != nil {
+		// If valid JSON extraction failed (should be rare with findFirstJSON), treat as text
 		return parsedDecision{FinalReply: strings.TrimSpace(response)}
 	}
 
+	// 3. Check for Tool Call
 	var toolName string
 	if rawTool, ok := envelope["tool"]; ok {
 		_ = json.Unmarshal(rawTool, &toolName)
@@ -291,11 +386,25 @@ func (a *Agent) parseDecision(response string) parsedDecision {
 		return decision
 	}
 
+	// 3b. Compatibility: convert legacy action payload JSON into a run_action tool call.
+	if normalizedArgs, ok := normalizeRunActionArgs(envelope); ok {
+		return parsedDecision{
+			IsTool:   true,
+			ToolName: "run_action",
+			ToolArgs: normalizedArgs,
+		}
+	}
+
+	// 4. Check for Final Answer with Confidence
 	reply := firstStringField(envelope, "final", "reply", "answer")
 	confidence, hasConfidence := parseConfidence(envelope["confidence"])
+
+	// If it was valid JSON but had no 'tool' or 'final' field, it might be a weird hallucination.
+	// But if 'reply' is empty, we fall back to the raw response just in case.
 	if strings.TrimSpace(reply) == "" {
 		reply = strings.TrimSpace(response)
 	}
+
 	return parsedDecision{
 		FinalReply:    reply,
 		HasConfidence: hasConfidence,
@@ -303,13 +412,109 @@ func (a *Agent) parseDecision(response string) parsedDecision {
 	}
 }
 
+func normalizeRunActionArgs(envelope map[string]json.RawMessage) (json.RawMessage, bool) {
+	actionType := firstStringField(envelope, "type")
+	if strings.TrimSpace(actionType) == "" {
+		return nil, false
+	}
+	target := firstStringField(envelope, "target")
+	summary := firstStringField(envelope, "summary")
+
+	payload := map[string]any{}
+	if rawPayload, ok := envelope["payload"]; ok && len(strings.TrimSpace(string(rawPayload))) > 0 {
+		var decodedPayload map[string]any
+		if err := json.Unmarshal(rawPayload, &decodedPayload); err == nil {
+			for key, value := range decodedPayload {
+				payload[key] = value
+			}
+		}
+	}
+
+	skippedKeys := map[string]struct{}{
+		"type":    {},
+		"target":  {},
+		"summary": {},
+		"payload": {},
+	}
+	keys := make([]string, 0, len(envelope))
+	for key := range envelope {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, skip := skippedKeys[strings.ToLower(strings.TrimSpace(key))]; skip {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal(envelope[key], &decoded); err != nil {
+			continue
+		}
+		payload[key] = decoded
+	}
+
+	normalized := map[string]any{
+		"type":    strings.TrimSpace(actionType),
+		"target":  strings.TrimSpace(target),
+		"summary": strings.TrimSpace(summary),
+		"payload": payload,
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, false
+	}
+	return json.RawMessage(raw), true
+}
+
+// findFirstJSON attempts to locate the first outer-most JSON object {...} in the text.
+func findFirstJSON(input string) string {
+	start := strings.Index(input, "{")
+	if start == -1 {
+		return ""
+	}
+
+	depth := 0
+	inString := false
+	escaped := false
+
+	for i := start; i < len(input); i++ {
+		char := input[i]
+
+		if inString {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		switch char {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				// Found the closing brace
+				candidate := input[start : i+1]
+				if json.Valid([]byte(candidate)) {
+					return candidate
+				}
+				// If invalid, keep searching? For now, we return empty if validation fails
+				// because we might have captured a partial block or non-JSON.
+				return ""
+			}
+		}
+	}
+	return ""
+}
+
+// Deprecated: use findFirstJSON
 func sanitizeModelPayload(response string) string {
-	trimmed := strings.TrimSpace(response)
-	trimmed = strings.TrimPrefix(trimmed, "```json")
-	trimmed = strings.TrimPrefix(trimmed, "```JSON")
-	trimmed = strings.TrimPrefix(trimmed, "```")
-	trimmed = strings.TrimSuffix(trimmed, "```")
-	return strings.TrimSpace(trimmed)
+	return response
 }
 
 func firstStringField(fields map[string]json.RawMessage, keys ...string) string {
@@ -390,6 +595,41 @@ func isToolAllowed(policy Policy, toolName string) bool {
 		}
 	}
 	return false
+}
+
+func isToolClassAllowed(policy Policy, className string) bool {
+	if len(policy.AllowedToolClasses) == 0 {
+		return true
+	}
+	normalizedClass := strings.ToLower(strings.TrimSpace(className))
+	for _, allowed := range policy.AllowedToolClasses {
+		if strings.ToLower(strings.TrimSpace(allowed)) == normalizedClass {
+			return true
+		}
+	}
+	return false
+}
+
+func toolPolicyMetadata(tool tools.Tool) (string, bool) {
+	className := string(tools.ToolClassGeneral)
+	requiresApproval := false
+	metadata, ok := tool.(tools.MetadataProvider)
+	if !ok {
+		return className, requiresApproval
+	}
+	normalized := strings.ToLower(strings.TrimSpace(string(metadata.ToolClass())))
+	if normalized != "" {
+		className = normalized
+	}
+	return className, metadata.RequiresApproval()
+}
+
+func hasSensitiveToolApproval(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	granted, ok := ctx.Value(sensitiveToolApprovalKey).(bool)
+	return ok && granted
 }
 
 func (a *Agent) allowAutonomousTask(input llm.MessageInput, policy Policy, now time.Time) (bool, string) {

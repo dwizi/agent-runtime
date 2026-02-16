@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 func TestExecuteAllowedCommand(t *testing.T) {

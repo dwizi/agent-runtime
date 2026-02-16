@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakeBase struct {

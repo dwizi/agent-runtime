@@ -24,14 +24,14 @@ is_pem_key() {
 if ! is_pem_cert "$CA_CRT" || ! is_pem_key "$CA_KEY"; then
   rm -f "$CA_CRT" "$CA_KEY" "$PKI_DIR/clients-ca.srl"
   openssl req -x509 -newkey rsa:4096 -nodes -sha256 -days 3650 \
-    -subj "/CN=Spinner Admin Client CA" \
+    -subj "/CN=Agent Runtime Admin Client CA" \
     -keyout "$CA_KEY" -out "$CA_CRT"
 fi
 
 if ! is_pem_key "$CLIENT_KEY" || ! is_pem_cert "$CLIENT_CRT"; then
   rm -f "$CLIENT_KEY" "$CLIENT_CRT" "$CLIENT_CSR" "$CLIENT_P12"
   openssl req -newkey rsa:2048 -nodes \
-    -subj "/CN=spinner-admin-client" \
+    -subj "/CN=agent-runtime-admin-client" \
     -keyout "$CLIENT_KEY" -out "$CLIENT_CSR"
   openssl x509 -req -days 825 -sha256 \
     -in "$CLIENT_CSR" \
@@ -41,7 +41,7 @@ if ! is_pem_key "$CLIENT_KEY" || ! is_pem_cert "$CLIENT_CRT"; then
     -inkey "$CLIENT_KEY" \
     -in "$CLIENT_CRT" \
     -certfile "$CA_CRT" \
-    -passout pass:spinner \
+    -passout pass:agent-runtime \
     -out "$CLIENT_P12"
   rm -f "$CLIENT_CSR"
 fi

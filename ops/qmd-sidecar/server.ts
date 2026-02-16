@@ -7,13 +7,13 @@ type RunPayload = {
 	args?: unknown;
 };
 
-const workspaceRoot = resolve((process.env.SPINNER_WORKSPACE_ROOT || "/data/workspaces").trim());
-const sidecarAddr = (process.env.SPINNER_QMD_SIDECAR_ADDR || ":8091").trim();
-const qmdBinary = (process.env.SPINNER_QMD_BINARY || "qmd").trim();
-const qmdIndex = (process.env.SPINNER_QMD_INDEX || "spinner").trim();
-const sharedModelsDir = (process.env.SPINNER_QMD_SHARED_MODELS_DIR || "").trim();
-const indexTimeoutSeconds = intFromEnv("SPINNER_QMD_INDEX_TIMEOUT_SECONDS", 180);
-const queryTimeoutSeconds = intFromEnv("SPINNER_QMD_QUERY_TIMEOUT_SECONDS", 30);
+const workspaceRoot = resolve((process.env.AGENT_RUNTIME_WORKSPACE_ROOT || "/data/workspaces").trim());
+const sidecarAddr = (process.env.AGENT_RUNTIME_QMD_SIDECAR_ADDR || ":8091").trim();
+const qmdBinary = (process.env.AGENT_RUNTIME_QMD_BINARY || "qmd").trim();
+const qmdIndex = (process.env.AGENT_RUNTIME_QMD_INDEX || "agent-runtime").trim();
+const sharedModelsDir = (process.env.AGENT_RUNTIME_QMD_SHARED_MODELS_DIR || "").trim();
+const indexTimeoutSeconds = intFromEnv("AGENT_RUNTIME_QMD_INDEX_TIMEOUT_SECONDS", 180);
+const queryTimeoutSeconds = intFromEnv("AGENT_RUNTIME_QMD_QUERY_TIMEOUT_SECONDS", 30);
 const maxBusyRetries = 4;
 
 const workspaceLocks = new Map<string, Promise<void>>();

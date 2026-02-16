@@ -1,16 +1,16 @@
-# spinner
+# agent-runtime
 
 Security-first, cloud-agnostic, multi-channel agent orchestrator for communities.
 
-`spinner` runs as Docker Compose with:
+`agent-runtime` runs as Docker Compose with:
 - `caddy` for TLS, reverse proxy, and admin mTLS.
-- `spinner` (Go) for gateway, orchestration, task engine, and markdown indexing triggers.
+- `agent-runtime` (Go) for gateway, orchestration, task engine, and markdown indexing triggers.
 
 ## What is included in this scaffold
 
 - Go CLI with:
-  - `spinner serve` for API + runtime services
-  - `spinner tui` for a Charm Bubble Tea admin interface
+  - `agent-runtime serve` for API + runtime services
+  - `agent-runtime tui` for a Charm Bubble Tea admin interface
 - SQLite bootstrap and initial schema (`users`, `identities`, `workspaces`, `contexts`, `tasks`, `pairing_requests`)
 - Discord gateway connector (`MESSAGE_CREATE` + `INTERACTION_CREATE`) with command routing and DM pairing
 - Telegram command gateway with pairing and task/admin commands
@@ -24,7 +24,7 @@ Security-first, cloud-agnostic, multi-channel agent orchestrator for communities
 
 1. Copy env:
    - `cp .env.example .env`
-2. Install qmd locally only if you run `spinner` outside Docker (`make run`, `make tui`):
+2. Install qmd locally only if you run `agent-runtime` outside Docker (`make run`, `make tui`):
    - `bun install -g github:tobi/qmd`
    - ensure `qmd` is in `PATH`
 3. Run local:
@@ -57,7 +57,7 @@ Health endpoints:
 Pairing flow (Telegram DM -> TUI approve):
 1. Linked Telegram bot receives `pair` (or `/pair`) in private DM.
 2. Connector creates a one-time token and sends it back in DM.
-3. Admin runs `spinner tui`, pastes token, and presses:
+3. Admin runs `agent-runtime tui`, pastes token, and presses:
    - `[` / `]` to choose role (`overlord`, `admin`, `operator`, `member`, `viewer`)
    - `a` to approve and link identity with selected role
    - `d` to deny
@@ -95,8 +95,8 @@ Telegram command gateway:
   - replies in DM chats
   - replies in group chats only when bot is mentioned (e.g. `@your_bot_username`)
 - startup command sync:
-  - Spinner calls Telegram `setMyCommands` on connector startup
-  - Telegram menu commands are generated from Spinner's shared command catalog
+  - Agent Runtime calls Telegram `setMyCommands` on connector startup
+  - Telegram menu commands are generated from Agent Runtime's shared command catalog
   - command names are normalized to Telegram format (for example `admin-channel` becomes `admin_channel`)
   - advanced text commands remain available even if not present in the Telegram menu
 
@@ -112,10 +112,10 @@ Discord command gateway:
   - replies in DMs
   - replies in guild channels only when the bot is tagged/mentioned
 - startup command sync:
-  - Spinner upserts Discord application commands on connector startup
+  - Agent Runtime upserts Discord application commands on connector startup
   - by default, commands are registered globally
-  - for immediate availability, set `SPINNER_DISCORD_COMMAND_GUILD_IDS` to target guild IDs
-  - `SPINNER_DISCORD_APPLICATION_ID` can be set explicitly; otherwise Spinner resolves it through Discord API
+  - for immediate availability, set `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS` to target guild IDs
+  - `AGENT_RUNTIME_DISCORD_APPLICATION_ID` can be set explicitly; otherwise Agent Runtime resolves it through Discord API
   - advanced text commands remain available even if not present in slash registration
 
 Command surface matrix:
@@ -143,30 +143,30 @@ Notes:
 - Natural-language intents (for example, `please create a task ...`) are text parsing features, not slash/menu commands.
 
 LLM runtime env:
-- `SPINNER_LLM_PROVIDER` (default: `openai`; selects the adapter that handles OpenAI-compatible APIs, while `anthropic` routes calls to Claude)
-- `SPINNER_LLM_BASE_URL` (default: `https://api.openai.com/v1`; point it at any OpenAI-compatible endpoint or Claude base URL)
-- `SPINNER_LLM_API_KEY` (provider key for OpenAI/Z.ai/Claude; leave empty for unauthenticated local endpoints)
-- `SPINNER_LLM_MODEL` (default: `gpt-4o`; can override with Z.ai/Claude/local model names such as `glm-4.7-flash`, `claude-3.5-sonic`, or `qwen2.5`)
-- `SPINNER_LLM_TIMEOUT_SECONDS` (default: `60`; request timeout per attempt)
+- `AGENT_RUNTIME_LLM_PROVIDER` (default: `openai`; selects the adapter that handles OpenAI-compatible APIs, while `anthropic` routes calls to Claude)
+- `AGENT_RUNTIME_LLM_BASE_URL` (default: `https://api.openai.com/v1`; point it at any OpenAI-compatible endpoint or Claude base URL)
+- `AGENT_RUNTIME_LLM_API_KEY` (provider key for OpenAI/Z.ai/Claude; leave empty for unauthenticated local endpoints)
+- `AGENT_RUNTIME_LLM_MODEL` (default: `gpt-4o`; can override with Z.ai/Claude/local model names such as `glm-4.7-flash`, `claude-3.5-sonic`, or `qwen2.5`)
+- `AGENT_RUNTIME_LLM_TIMEOUT_SECONDS` (default: `60`; request timeout per attempt)
 Notes:
-- Setting `SPINNER_LLM_PROVIDER=openai` routes LLM calls through `internal/llm/openai`, which can talk to any OpenAI-compatible endpoint (OpenAI itself, Z.ai, Ollama, vLLM, etc.).
-- Run locally against Ollama or vLLM by pointing `SPINNER_LLM_BASE_URL` at your local server (`http://localhost:11434/v1`) and updating `SPINNER_LLM_MODEL` accordingly.
-- Use Z.ai by keeping `SPINNER_LLM_PROVIDER=openai`, setting `SPINNER_LLM_BASE_URL=https://api.z.ai/api/paas/v4`, `SPINNER_LLM_MODEL=glm-4.7-flash`, and supplying `SPINNER_LLM_API_KEY`.
-- Switch to Claude by setting `SPINNER_LLM_PROVIDER=anthropic`, providing `SPINNER_LLM_API_KEY`, and picking a Claude model name (for example `claude-3.5-sonic`).
+- Setting `AGENT_RUNTIME_LLM_PROVIDER=openai` routes LLM calls through `internal/llm/openai`, which can talk to any OpenAI-compatible endpoint (OpenAI itself, Z.ai, Ollama, vLLM, etc.).
+- Run locally against Ollama or vLLM by pointing `AGENT_RUNTIME_LLM_BASE_URL` at your local server (`http://localhost:11434/v1`) and updating `AGENT_RUNTIME_LLM_MODEL` accordingly.
+- Use Z.ai by keeping `AGENT_RUNTIME_LLM_PROVIDER=openai`, setting `AGENT_RUNTIME_LLM_BASE_URL=https://api.z.ai/api/paas/v4`, `AGENT_RUNTIME_LLM_MODEL=glm-4.7-flash`, and supplying `AGENT_RUNTIME_LLM_API_KEY`.
+- Switch to Claude by setting `AGENT_RUNTIME_LLM_PROVIDER=anthropic`, providing `AGENT_RUNTIME_LLM_API_KEY`, and picking a Claude model name (for example `claude-3.5-sonic`).
 
 Command sync runtime env:
-- `SPINNER_COMMAND_SYNC_ENABLED` (default: `true`)
-- `SPINNER_DISCORD_APPLICATION_ID` (optional explicit app id for command registration)
-- `SPINNER_DISCORD_COMMAND_GUILD_IDS` (optional CSV guild list for fast guild-scoped command propagation)
+- `AGENT_RUNTIME_COMMAND_SYNC_ENABLED` (default: `true`)
+- `AGENT_RUNTIME_DISCORD_APPLICATION_ID` (optional explicit app id for command registration)
+- `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS` (optional CSV guild list for fast guild-scoped command propagation)
 
 IMAP runtime env:
-- `SPINNER_IMAP_HOST` (required to enable IMAP connector)
-- `SPINNER_IMAP_PORT` (default: `993`)
-- `SPINNER_IMAP_USERNAME`
-- `SPINNER_IMAP_PASSWORD`
-- `SPINNER_IMAP_MAILBOX` (default: `INBOX`)
-- `SPINNER_IMAP_POLL_SECONDS` (default: `60`)
-- `SPINNER_IMAP_TLS_SKIP_VERIFY` (default: `false`)
+- `AGENT_RUNTIME_IMAP_HOST` (required to enable IMAP connector)
+- `AGENT_RUNTIME_IMAP_PORT` (default: `993`)
+- `AGENT_RUNTIME_IMAP_USERNAME`
+- `AGENT_RUNTIME_IMAP_PASSWORD`
+- `AGENT_RUNTIME_IMAP_MAILBOX` (default: `INBOX`)
+- `AGENT_RUNTIME_IMAP_POLL_SECONDS` (default: `60`)
+- `AGENT_RUNTIME_IMAP_TLS_SKIP_VERIFY` (default: `false`)
 
 IMAP ingestion behavior:
 - unread emails are polled from the configured mailbox
@@ -176,13 +176,13 @@ IMAP ingestion behavior:
 - each ingested message queues a review task in the orchestrator
 
 Objective scheduler runtime env:
-- `SPINNER_OBJECTIVE_POLL_SECONDS` (default: `15`)
+- `AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS` (default: `15`)
 
 Heartbeat runtime env:
-- `SPINNER_HEARTBEAT_ENABLED` (default: `true`)
-- `SPINNER_HEARTBEAT_INTERVAL_SECONDS` (default: `30`)
-- `SPINNER_HEARTBEAT_STALE_SECONDS` (default: `120`)
-- `SPINNER_HEARTBEAT_NOTIFY_ADMIN` (default: `true`)
+- `AGENT_RUNTIME_HEARTBEAT_ENABLED` (default: `true`)
+- `AGENT_RUNTIME_HEARTBEAT_INTERVAL_SECONDS` (default: `30`)
+- `AGENT_RUNTIME_HEARTBEAT_STALE_SECONDS` (default: `120`)
+- `AGENT_RUNTIME_HEARTBEAT_NOTIFY_ADMIN` (default: `true`)
 
 Heartbeat behavior:
 - monitors orchestrator, scheduler, watcher, connectors, and API loop
@@ -215,55 +215,55 @@ Objectives and proactivity:
   - `j/k` select, `p` pause/resume, `x` delete, `r` refresh
 
 SMTP runtime env (for `send_email` approvals):
-- `SPINNER_SMTP_HOST` (required for SMTP email execution)
-- `SPINNER_SMTP_PORT` (default: `587`)
-- `SPINNER_SMTP_USERNAME` (optional)
-- `SPINNER_SMTP_PASSWORD` (required when username is set)
-- `SPINNER_SMTP_FROM` (default sender, can be overridden by approved action payload `from`)
+- `AGENT_RUNTIME_SMTP_HOST` (required for SMTP email execution)
+- `AGENT_RUNTIME_SMTP_PORT` (default: `587`)
+- `AGENT_RUNTIME_SMTP_USERNAME` (optional)
+- `AGENT_RUNTIME_SMTP_PASSWORD` (required when username is set)
+- `AGENT_RUNTIME_SMTP_FROM` (default sender, can be overridden by approved action payload `from`)
 
 Sandbox command runtime env:
-- `SPINNER_SANDBOX_ENABLED` (default: `true`)
-- `SPINNER_SANDBOX_ALLOWED_COMMANDS` CSV allowlist (default: `echo,cat,ls,curl,grep,head,tail`)
-- `SPINNER_SANDBOX_RUNNER_COMMAND` optional wrapper binary for isolation (e.g. `just-bash`)
-- `SPINNER_SANDBOX_RUNNER_ARGS` optional runner arguments (space separated)
-- `SPINNER_SANDBOX_TIMEOUT_SECONDS` (default: `20`)
+- `AGENT_RUNTIME_SANDBOX_ENABLED` (default: `true`)
+- `AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS` CSV allowlist (default: `echo,cat,ls,curl,grep,head,tail`)
+- `AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND` optional wrapper binary for isolation (e.g. `just-bash`)
+- `AGENT_RUNTIME_SANDBOX_RUNNER_ARGS` optional runner arguments (space separated)
+- `AGENT_RUNTIME_SANDBOX_TIMEOUT_SECONDS` (default: `20`)
 
 LLM grounding:
-- before generating a reply, Spinner runs qmd search in the current workspace and injects top Markdown context snippets/excerpts into the prompt.
+- before generating a reply, Agent Runtime runs qmd search in the current workspace and injects top Markdown context snippets/excerpts into the prompt.
 
 Prompt policies and skill templates:
 - context prompt policy is stored in `contexts.system_prompt` and can be managed with `/prompt ...`
 - default baseline prompts:
-  - `SPINNER_LLM_ADMIN_SYSTEM_PROMPT`
-  - `SPINNER_LLM_PUBLIC_SYSTEM_PROMPT`
+  - `AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT`
+  - `AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT`
 - optional file-based system prompts:
-  - `SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`
-  - `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
-  - `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`
-  - `SPINNER_SKILLS_GLOBAL_ROOT`
+  - `AGENT_RUNTIME_SYSTEM_PROMPT_GLOBAL_FILE`
+  - `AGENT_RUNTIME_SYSTEM_PROMPT_WORKSPACE_REL_PATH`
+  - `AGENT_RUNTIME_SYSTEM_PROMPT_CONTEXT_REL_PATH`
+  - `AGENT_RUNTIME_SKILLS_GLOBAL_ROOT`
 - system prompt file precedence:
-  - global (`SPINNER_SYSTEM_PROMPT_GLOBAL_FILE`)
-  - workspace override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_WORKSPACE_REL_PATH`)
-  - context override (`/data/workspaces/<workspace>/` + `SPINNER_SYSTEM_PROMPT_CONTEXT_REL_PATH`, `{context_id}` replaced)
+  - global (`AGENT_RUNTIME_SYSTEM_PROMPT_GLOBAL_FILE`)
+  - workspace override (`/data/workspaces/<workspace>/` + `AGENT_RUNTIME_SYSTEM_PROMPT_WORKSPACE_REL_PATH`)
+  - context override (`/data/workspaces/<workspace>/` + `AGENT_RUNTIME_SYSTEM_PROMPT_CONTEXT_REL_PATH`, `{context_id}` replaced)
 - skill templates are loaded from workspace and global paths:
   - workspace: `skills/contexts/<context-id>/*.md`, `skills/admin/*.md` or `skills/public/*.md`, `skills/common/*.md`
-  - global: `<SPINNER_SKILLS_GLOBAL_ROOT>/contexts/<context-id>/*.md`, `<SPINNER_SKILLS_GLOBAL_ROOT>/admin|public/*.md`, `<SPINNER_SKILLS_GLOBAL_ROOT>/common/*.md`
+  - global: `<AGENT_RUNTIME_SKILLS_GLOBAL_ROOT>/contexts/<context-id>/*.md`, `<AGENT_RUNTIME_SKILLS_GLOBAL_ROOT>/admin|public/*.md`, `<AGENT_RUNTIME_SKILLS_GLOBAL_ROOT>/common/*.md`
   - workspace templates win over global templates when filenames match
   - starter global templates are included in `context/skills/common` and `context/skills/admin`
 
 LLM safety controls:
-- `SPINNER_LLM_ENABLED` toggles all LLM replies
-- `SPINNER_LLM_ALLOW_DM` allows/blocks DM LLM replies
-- `SPINNER_LLM_REQUIRE_MENTION_IN_GROUPS` requires mention/tag for group/channel replies
-- `SPINNER_LLM_ALLOWED_ROLES` optional CSV role allowlist (empty = all roles)
-- `SPINNER_LLM_ALLOWED_CONTEXT_IDS` optional CSV context allowlist (empty = all contexts)
-- `SPINNER_LLM_RATE_LIMIT_PER_WINDOW` and `SPINNER_LLM_RATE_LIMIT_WINDOW_SECONDS` configure LLM reply limits
+- `AGENT_RUNTIME_LLM_ENABLED` toggles all LLM replies
+- `AGENT_RUNTIME_LLM_ALLOW_DM` allows/blocks DM LLM replies
+- `AGENT_RUNTIME_LLM_REQUIRE_MENTION_IN_GROUPS` requires mention/tag for group/channel replies
+- `AGENT_RUNTIME_LLM_ALLOWED_ROLES` optional CSV role allowlist (empty = all roles)
+- `AGENT_RUNTIME_LLM_ALLOWED_CONTEXT_IDS` optional CSV context allowlist (empty = all contexts)
+- `AGENT_RUNTIME_LLM_RATE_LIMIT_PER_WINDOW` and `AGENT_RUNTIME_LLM_RATE_LIMIT_WINDOW_SECONDS` configure LLM reply limits
 - rate limit applies to non-admin users only (`admin`, `overlord` bypass)
 
 LLM action approvals:
 - when the LLM includes an action proposal block:
   - ```action {"type":"...","target":"...","summary":"..."} ```
-- Spinner stores it as a pending approval in SQLite and posts an approval notice with action id.
+- Agent Runtime stores it as a pending approval in SQLite and posts an approval notice with action id.
 - no external action executes automatically until an admin explicitly approves it.
 - `/approve-action <id>` runs the selected plugin and stores execution status (`succeeded`, `failed`, or `skipped`) plus execution message.
 - `/deny-action <id> [reason]` keeps the action unexecuted and records an audit reason.
@@ -298,23 +298,23 @@ On first start, Caddy generates admin mTLS assets in `ops/caddy/pki`:
 - `clients-ca.crt`
 - `admin-client.crt`
 - `admin-client.key`
-- `admin-client.p12` (password: `spinner`)
+- `admin-client.p12` (password: `agent-runtime`)
 
 Local helper:
 - `make compose-up` or `make sync-env` fills these vars in `.env` only when empty:
-  - `SPINNER_ADMIN_TLS_CA_FILE`
-  - `SPINNER_ADMIN_TLS_CERT_FILE`
-  - `SPINNER_ADMIN_TLS_KEY_FILE`
+  - `AGENT_RUNTIME_ADMIN_TLS_CA_FILE`
+  - `AGENT_RUNTIME_ADMIN_TLS_CERT_FILE`
+  - `AGENT_RUNTIME_ADMIN_TLS_KEY_FILE`
 - before writing, a backup `.env.bak.<timestamp>` is created automatically
-- `spinner tui` also runs the same fill-if-empty startup sync automatically (when `ops/caddy/pki` exists locally)
+- `agent-runtime tui` also runs the same fill-if-empty startup sync automatically (when `ops/caddy/pki` exists locally)
 
 For remote/local TUI usage, point the TUI to the admin endpoint:
-- `SPINNER_ADMIN_API_URL=https://admin.<your-domain>`
+- `AGENT_RUNTIME_ADMIN_API_URL=https://admin.<your-domain>`
 - Optional client cert auth:
-  - `SPINNER_ADMIN_TLS_CA_FILE=...`
-  - `SPINNER_ADMIN_TLS_CERT_FILE=...`
-  - `SPINNER_ADMIN_TLS_KEY_FILE=...`
-  - `SPINNER_ADMIN_TLS_SKIP_VERIFY=false`
+  - `AGENT_RUNTIME_ADMIN_TLS_CA_FILE=...`
+  - `AGENT_RUNTIME_ADMIN_TLS_CERT_FILE=...`
+  - `AGENT_RUNTIME_ADMIN_TLS_KEY_FILE=...`
+  - `AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY=false`
 
 Rotate these artifacts before production use.
 

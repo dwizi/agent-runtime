@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 const markdownUpdatedEventKey = "markdown.updated"

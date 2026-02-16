@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/agent"
-	"github.com/carlos/spinner/internal/agent/tools"
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/agent"
+	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/memorylog"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type Store interface {
@@ -24,6 +27,7 @@ type Store interface {
 	LookupUserIdentity(ctx context.Context, connector, connectorUserID string) (store.UserIdentity, error)
 	CreateTask(ctx context.Context, input store.CreateTaskInput) error
 	LookupTask(ctx context.Context, id string) (store.TaskRecord, error)
+	MarkTaskCompleted(ctx context.Context, id string, finishedAt time.Time, summary, resultPath string) error
 	UpdateTaskRouting(ctx context.Context, input store.UpdateTaskRoutingInput) (store.TaskRecord, error)
 	ApprovePairing(ctx context.Context, input store.ApprovePairingInput) (store.ApprovePairingResult, error)
 	DenyPairing(ctx context.Context, input store.DenyPairingInput) (store.PairingRequest, error)
@@ -34,6 +38,8 @@ type Store interface {
 	DenyActionApproval(ctx context.Context, input store.DenyActionApprovalInput) (store.ActionApproval, error)
 	UpdateActionExecution(ctx context.Context, input store.UpdateActionExecutionInput) (store.ActionApproval, error)
 	CreateObjective(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error)
+	UpdateObjective(ctx context.Context, input store.UpdateObjectiveInput) (store.Objective, error)
+	CreateAgentAuditEvent(ctx context.Context, input store.CreateAgentAuditEventInput) (store.AgentAuditEvent, error)
 }
 
 type Engine interface {
@@ -62,9 +68,15 @@ type Service struct {
 	agent                   *agent.Agent
 	toolRegistry            *tools.Registry
 	reasoningPromptTemplate string
+	workspaceRoot           string
+	agentMaxTurnDuration    time.Duration
 	triageAcknowledger      llm.Responder
 	triageEnabled           bool
 	routingNotify           RoutingNotifier
+	approvalMu              sync.Mutex
+	sensitiveApprovals      map[string]time.Time
+	sensitiveApprovalTTL    time.Duration
+	logger                  *slog.Logger
 }
 
 type MessageInput struct {
@@ -82,18 +94,33 @@ type MessageOutput struct {
 
 const latestPendingActionAlias = "__latest_pending__"
 
-func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor) *Service {
+func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor, workspaceRoot string, logger *slog.Logger) *Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	registry := tools.NewRegistry()
 	registry.Register(NewSearchTool(retriever))
 	registry.Register(NewCreateTaskTool(store, engine))
+	registry.Register(NewModerationTriageTool())
+	registry.Register(NewDraftEscalationTool())
+	registry.Register(NewDraftFAQAnswerTool())
+	registry.Register(NewCreateObjectiveTool(store))
+	registry.Register(NewUpdateObjectiveTool(store))
+	registry.Register(NewUpdateTaskTool(store))
+	registry.Register(NewLearnSkillTool(workspaceRoot))
+	registry.Register(NewRunActionTool(store, actionExecutor))
 
 	return &Service{
-		store:          store,
-		engine:         engine,
-		retriever:      retriever,
-		actionExecutor: actionExecutor,
-		toolRegistry:   registry,
-		triageEnabled:  true,
+		store:                store,
+		engine:               engine,
+		retriever:            retriever,
+		actionExecutor:       actionExecutor,
+		toolRegistry:         registry,
+		workspaceRoot:        workspaceRoot,
+		triageEnabled:        true,
+		sensitiveApprovals:   map[string]time.Time{},
+		sensitiveApprovalTTL: 10 * time.Minute,
+		logger:               logger,
 	}
 }
 
@@ -101,17 +128,36 @@ func (s *Service) SetTriageEnabled(enabled bool) {
 	s.triageEnabled = enabled
 }
 
+func (s *Service) SetSensitiveApprovalTTL(ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	s.sensitiveApprovalTTL = ttl
+}
+
+func (s *Service) SetAgentMaxTurnDuration(duration time.Duration) {
+	s.agentMaxTurnDuration = duration
+	if s.agent != nil {
+		s.agent.SetDefaultPolicy(agent.Policy{MaxTurnDuration: duration})
+	}
+}
+
 func (s *Service) SetReasoningPromptTemplate(template string) {
 	s.reasoningPromptTemplate = template
 	if s.triageAcknowledger != nil {
-		s.agent = agent.New(s.triageAcknowledger, s.toolRegistry, s.reasoningPromptTemplate)
+		s.agent = agent.New(s.logger.With("component", "agent"), s.triageAcknowledger, s.toolRegistry, s.reasoningPromptTemplate)
 	}
 }
 
 func (s *Service) SetTriageAcknowledger(responder llm.Responder) {
 	s.triageAcknowledger = responder
 	if responder != nil {
-		s.agent = agent.New(responder, s.toolRegistry, s.reasoningPromptTemplate)
+		s.agent = agent.New(s.logger.With("component", "agent"), responder, s.toolRegistry, s.reasoningPromptTemplate)
+		if s.agentMaxTurnDuration > 0 {
+			s.agent.SetDefaultPolicy(agent.Policy{MaxTurnDuration: s.agentMaxTurnDuration})
+		}
 	}
 }
 
@@ -285,6 +331,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		return MessageOutput{}, err
 	}
+	s.grantSensitiveToolApproval(input, time.Now().UTC())
 
 	if s.actionExecutor == nil {
 		record, err = s.store.UpdateActionExecution(ctx, store.UpdateActionExecutionInput{
@@ -684,38 +731,302 @@ func (s *Service) handleAutoTriage(ctx context.Context, input MessageInput, text
 	if !s.triageEnabled {
 		return MessageOutput{}, nil
 	}
-	legacyOutput, err := s.handleLegacyAutoTriage(ctx, input, text)
-	if err != nil {
-		return MessageOutput{}, err
+	if s.agent != nil {
+		return s.handleAgentAutoTriage(ctx, input, text), nil
 	}
-	if legacyOutput.Handled {
-		return legacyOutput, nil
-	}
-	return s.handleAgentAutoTriage(ctx, input, text), nil
+	return s.handleLegacyAutoTriage(ctx, input, text)
 }
 
 func (s *Service) handleAgentAutoTriage(ctx context.Context, input MessageInput, text string) MessageOutput {
 	if s.agent == nil {
 		return MessageOutput{}
 	}
-	result := s.agent.Execute(ctx, llm.MessageInput{
+	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+	if err != nil {
+		return MessageOutput{
+			Handled: true,
+			Reply:   "I started work on that, but I hit an internal routing issue. Please try again in a moment.",
+		}
+	}
+
+	// 1. Get Conversation Context (Memory)
+	history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
+	agentInputText := strings.TrimSpace(text)
+	if history != "" {
+		agentInputText = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\nNEW MESSAGE:\n%s", history, agentInputText)
+	}
+
+	agentCtx := context.WithValue(ctx, contextKeyRecord, contextRecord)
+	agentCtx = context.WithValue(agentCtx, contextKeyInput, input)
+	if s.consumeSensitiveToolApproval(input, time.Now().UTC()) {
+		agentCtx = agent.WithSensitiveToolApproval(agentCtx)
+	}
+	result := s.agent.Execute(agentCtx, llm.MessageInput{
 		Connector:   strings.TrimSpace(input.Connector),
+		WorkspaceID: strings.TrimSpace(contextRecord.WorkspaceID),
+		ContextID:   strings.TrimSpace(contextRecord.ID),
 		ExternalID:  strings.TrimSpace(input.ExternalID),
 		DisplayName: strings.TrimSpace(input.DisplayName),
 		FromUserID:  strings.TrimSpace(input.FromUserID),
-		Text:        strings.TrimSpace(text),
+		Text:        agentInputText,
 	})
-	if result.Error != nil {
-		return MessageOutput{}
-	}
+	s.persistAgentAuditTraces(ctx, contextRecord, input, result)
+	s.appendAgentToolCallLogs(contextRecord, input, result)
 	reply := strings.TrimSpace(result.Reply)
+	if result.Error != nil {
+		if reply != "" {
+			return MessageOutput{
+				Handled: true,
+				Reply:   reply,
+			}
+		}
+		return MessageOutput{
+			Handled: true,
+			Reply:   "I started work on that but ran into an internal error. Please try again in a moment.",
+		}
+	}
 	if reply == "" {
-		return MessageOutput{}
+		return MessageOutput{
+			Handled: true,
+			Reply:   "I started work on that and I am still processing. Share more detail if you want me to keep digging now.",
+		}
 	}
 	return MessageOutput{
 		Handled: true,
 		Reply:   reply,
 	}
+}
+
+func (s *Service) appendAgentToolCallLogs(contextRecord store.ContextRecord, input MessageInput, result agent.Result) {
+	if s == nil || len(result.ToolCalls) == 0 {
+		return
+	}
+	workspaceRoot := strings.TrimSpace(s.workspaceRoot)
+	workspaceID := strings.TrimSpace(contextRecord.WorkspaceID)
+	connector := strings.ToLower(strings.TrimSpace(input.Connector))
+	externalID := strings.TrimSpace(input.ExternalID)
+	if workspaceRoot == "" || workspaceID == "" || connector == "" || externalID == "" {
+		return
+	}
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		displayName = externalID
+	}
+	for _, call := range result.ToolCalls {
+		logText := formatToolCallLog(call)
+		if logText == "" {
+			continue
+		}
+		if err := memorylog.Append(memorylog.Entry{
+			WorkspaceRoot: workspaceRoot,
+			WorkspaceID:   workspaceID,
+			Connector:     connector,
+			ExternalID:    externalID,
+			Direction:     "tool",
+			ActorID:       "agent-runtime",
+			DisplayName:   displayName,
+			Text:          logText,
+			Timestamp:     time.Now().UTC(),
+		}); err != nil {
+			s.logger.Error("tool call log append failed", "error", err, "connector", connector, "external_id", externalID)
+		}
+	}
+}
+
+func formatToolCallLog(call agent.ToolCall) string {
+	toolName := strings.TrimSpace(call.ToolName)
+	if toolName == "" {
+		return ""
+	}
+	status := strings.TrimSpace(call.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	lines := []string{
+		"Tool call",
+		fmt.Sprintf("- tool: `%s`", toolName),
+		fmt.Sprintf("- status: `%s`", status),
+	}
+	args := strings.TrimSpace(call.ToolArgs)
+	if args != "" {
+		lines = append(lines, fmt.Sprintf("- args: `%s`", truncateToolLogField(args, 500)))
+	}
+	if errText := strings.TrimSpace(call.Error); errText != "" {
+		lines = append(lines, fmt.Sprintf("- error: %s", truncateToolLogField(errText, 500)))
+	}
+	if output := strings.TrimSpace(call.ToolOutput); output != "" {
+		lines = append(lines, fmt.Sprintf("- output: %s", truncateToolLogField(output, 700)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func truncateToolLogField(input string, maxLen int) string {
+	value := strings.Join(strings.Fields(strings.TrimSpace(input)), " ")
+	if value == "" {
+		return ""
+	}
+	if maxLen < 1 || len(value) <= maxLen {
+		return value
+	}
+	return strings.TrimSpace(value[:maxLen]) + "..."
+}
+
+func (s *Service) NarrateTaskResult(ctx context.Context, connector, externalID string, task orchestrator.Task, result orchestrator.TaskResult) (string, error) {
+	if s.agent == nil {
+		return "", fmt.Errorf("agent not configured")
+	}
+
+	// 1. Ensure context
+	contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, connector, externalID, "")
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Build synthetic input
+	narrativePrompt := fmt.Sprintf(
+		"BACKGROUND TASK FINISHED\nTask: %s\nResult: %s\n\nExplain this result to the user naturally and decide if any follow-up actions are needed.",
+		task.Title, result.Summary,
+	)
+
+	// 3. Get history for context
+	history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, connector, externalID, 10)
+	if history != "" {
+		narrativePrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, narrativePrompt)
+	}
+
+	// 4. Execute Agent turn
+	agentCtx := context.WithValue(ctx, contextKeyRecord, contextRecord)
+	agentCtx = context.WithValue(agentCtx, contextKeyInput, MessageInput{
+		Connector:  connector,
+		ExternalID: externalID,
+	})
+
+	agentRes := s.agent.Execute(agentCtx, llm.MessageInput{
+		Connector:   connector,
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		ExternalID:  externalID,
+		Text:        narrativePrompt,
+	})
+
+	if agentRes.Error != nil {
+		return "", agentRes.Error
+	}
+
+	return agentRes.Reply, nil
+}
+
+func (s *Service) grantSensitiveToolApproval(input MessageInput, now time.Time) {
+	if s == nil {
+		return
+	}
+	key := sensitiveApprovalKey(input)
+	if key == "" {
+		return
+	}
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	cutoff := now.UTC()
+	for existingKey, expiry := range s.sensitiveApprovals {
+		if !expiry.After(cutoff) {
+			delete(s.sensitiveApprovals, existingKey)
+		}
+	}
+	ttl := s.sensitiveApprovalTTL
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	s.sensitiveApprovals[key] = cutoff.Add(ttl)
+}
+
+func (s *Service) persistAgentAuditTraces(ctx context.Context, contextRecord store.ContextRecord, input MessageInput, result agent.Result) {
+	if s == nil || s.store == nil || len(result.Trace) == 0 {
+		return
+	}
+	workspaceID := strings.TrimSpace(contextRecord.WorkspaceID)
+	contextID := strings.TrimSpace(contextRecord.ID)
+	connector := strings.TrimSpace(input.Connector)
+	externalID := strings.TrimSpace(input.ExternalID)
+	sourceUserID := strings.TrimSpace(input.FromUserID)
+	if workspaceID == "" || contextID == "" || connector == "" || externalID == "" {
+		return
+	}
+	for _, entry := range result.Trace {
+		stage := strings.TrimSpace(entry.Stage)
+		if !strings.HasPrefix(strings.ToLower(stage), "audit.") {
+			continue
+		}
+		eventType := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(stage), "audit."))
+		if eventType == "" {
+			continue
+		}
+		meta := parseAuditMetadata(entry.Message)
+		toolName := strings.TrimSpace(meta["tool"])
+		if toolName == "" {
+			toolName = strings.TrimSpace(result.ToolName)
+		}
+		toolClass := strings.TrimSpace(meta["class"])
+		_, _ = s.store.CreateAgentAuditEvent(ctx, store.CreateAgentAuditEventInput{
+			WorkspaceID:  workspaceID,
+			ContextID:    contextID,
+			Connector:    connector,
+			ExternalID:   externalID,
+			SourceUserID: sourceUserID,
+			EventType:    eventType,
+			Stage:        stage,
+			ToolName:     toolName,
+			ToolClass:    toolClass,
+			Blocked:      result.Blocked,
+			BlockReason:  strings.TrimSpace(result.BlockReason),
+			Message:      strings.TrimSpace(entry.Message),
+		})
+	}
+}
+
+func parseAuditMetadata(message string) map[string]string {
+	fields := strings.Fields(strings.TrimSpace(message))
+	parsed := map[string]string{}
+	for _, item := range fields {
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		value := strings.TrimSpace(parts[1])
+		if key == "" || value == "" {
+			continue
+		}
+		parsed[key] = value
+	}
+	return parsed
+}
+
+func (s *Service) consumeSensitiveToolApproval(input MessageInput, now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	key := sensitiveApprovalKey(input)
+	if key == "" {
+		return false
+	}
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	expiry, ok := s.sensitiveApprovals[key]
+	if !ok {
+		return false
+	}
+	delete(s.sensitiveApprovals, key)
+	return expiry.After(now.UTC())
+}
+
+func sensitiveApprovalKey(input MessageInput) string {
+	connector := strings.ToLower(strings.TrimSpace(input.Connector))
+	externalID := strings.TrimSpace(input.ExternalID)
+	fromUser := strings.TrimSpace(input.FromUserID)
+	if connector == "" || externalID == "" || fromUser == "" {
+		return ""
+	}
+	return connector + "|" + externalID + "|" + fromUser
 }
 
 func (s *Service) handleLegacyAutoTriage(ctx context.Context, input MessageInput, text string) (MessageOutput, error) {

@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/qmd"
 )
 
 type Retriever interface {

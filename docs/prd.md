@@ -1,4 +1,4 @@
-# PRD — spinner (Product Requirements Document)
+# PRD — agent-runtime (Product Requirements Document)
 
 Operational note:
 - This file is a product planning artifact.
@@ -9,7 +9,7 @@ Operational note:
 
 ## 1. Summary
 
-Spinner is a cloud-agnostic, security-first orchestration platform that connects **Discord**, **Telegram**, local **Markdown workspaces**, and **email inboxes** into a unified system. Spinner runs without a web UI: operators work via chat commands and a **Charm TUI**. The system is **Markdown-native** (knowledge + state represented as `.md`) and **context-isolated** (each channel/subchannel has its own system prompt and permissions).
+Agent Runtime is a cloud-agnostic, security-first orchestration platform that connects **Discord**, **Telegram**, local **Markdown workspaces**, and **email inboxes** into a unified system. Agent Runtime runs without a web UI: operators work via chat commands and a **Charm TUI**. The system is **Markdown-native** (knowledge + state represented as `.md`) and **context-isolated** (each channel/subchannel has its own system prompt and permissions).
 
 Key attributes:
 - **Zero-trust posture**: edge TLS/certs via Caddy, mTLS for admin API, strict RBAC, audit logs.
@@ -183,7 +183,7 @@ Requirements:
 
 Operational constraints (acknowledged):
 - qmd downloads and uses an embedding model (large) and stores index in SQLite.
-- Spinner must manage indexes **per workspace** and not cross-contaminate data.
+- Agent Runtime must manage indexes **per workspace** and not cross-contaminate data.
 
 Implementation approach (v1 proposal):
 - Run `qmd` as a controlled subprocess (or internal sidecar) with:
@@ -287,11 +287,11 @@ Deliverables (v1):
 
 - **caddy**
   - TLS certs (ACME HTTP-01 on ports 80/443)
-  - reverse proxy to spinner HTTP API
+  - reverse proxy to agent-runtime HTTP API
   - optional mTLS enforcement for admin endpoints
   - security headers, rate limits
 
-- **spinner (Go)**
+- **agent-runtime (Go)**
   - connectors (Discord/Telegram)
   - orchestration engine
   - task engine + scheduler + file watcher
@@ -299,21 +299,21 @@ Deliverables (v1):
   - SQLite metadata store
 
 Optional (recommended for isolation as system grows):
-- **spinner-toolrunner**
+- **agent-runtime-toolrunner**
   - executes allowlisted tools/commands in a restricted container
-- **spinner-qmd**
+- **agent-runtime-qmd**
   - encapsulates qmd runtime and model/index artifacts
 
 ### 7.2 Data stores
 
-- SQLite metadata DB (in `/data/spinner/meta.sqlite`)
+- SQLite metadata DB (in `/data/agent-runtime/meta.sqlite`)
 - Per-workspace directories under `/data/workspaces/<id>/...`
 - Per-workspace qmd index (isolated) under `/data/workspaces/<id>/.qmd/`
 
 ### 7.3 Networking
 
 Inbound:
-- 80/443 → Caddy → spinner
+- 80/443 → Caddy → agent-runtime
 
 Internal:
 - Compose private network for internal services
@@ -330,7 +330,7 @@ Admin access:
 - Separate admin endpoints with mTLS.
 
 ### 8.2 Admin API (mTLS)
-- Spinner maintains an internal CA.
+- Agent Runtime maintains an internal CA.
 - TUI enrolls a client cert via an out-of-band bootstrap secret (overlord-only).
 - Client cert required for admin endpoints; RBAC checks still apply.
 

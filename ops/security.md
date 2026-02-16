@@ -1,14 +1,14 @@
-# Spinner Security Checklist
+# Agent Runtime Security Checklist
 
-This checklist is for running Spinner in production with a strong default posture.
+This checklist is for running Agent Runtime in production with a strong default posture.
 
 ## 1. Secrets management
 
 - Keep `.env` out of git.
 - Store secrets in a secret manager (not plaintext on developer laptops):
-  - `SPINNER_DISCORD_TOKEN`
-  - `SPINNER_TELEGRAM_TOKEN`
-  - `SPINNER_LLM_API_KEY` (and keep `SPINNER_LLM_BASE_URL`/`SPINNER_LLM_PROVIDER` guarded as needed)
+  - `AGENT_RUNTIME_DISCORD_TOKEN`
+  - `AGENT_RUNTIME_TELEGRAM_TOKEN`
+  - `AGENT_RUNTIME_LLM_API_KEY` (and keep `AGENT_RUNTIME_LLM_BASE_URL`/`AGENT_RUNTIME_LLM_PROVIDER` guarded as needed)
 - Use separate credentials per environment (`dev`, `staging`, `prod`).
 - Rotate all connector/API tokens on a schedule and after personnel changes.
 
@@ -48,7 +48,7 @@ This checklist is for running Spinner in production with a strong default postur
   - no direct public access to internal service ports
 - Keep host OS patched.
 - Limit Docker host access to trusted operators only.
-- Back up persistent volumes (`spinner_data`, Caddy data/config, and `ops/caddy/pki`).
+- Back up persistent volumes (`agent_runtime_data`, Caddy data/config, and `ops/caddy/pki`).
 
 ## 6. Network and edge security
 

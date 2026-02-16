@@ -140,7 +140,7 @@ func withDefaults(cfg Config) Config {
 		cfg.Binary = "qmd"
 	}
 	if strings.TrimSpace(cfg.IndexName) == "" {
-		cfg.IndexName = "spinner"
+		cfg.IndexName = "agent-runtime"
 	}
 	if strings.TrimSpace(cfg.Collection) == "" {
 		cfg.Collection = "workspace"
@@ -508,7 +508,7 @@ func collectionMarkerPath(workspaceDir, indexName, collectionName string) string
 		return builder.String()
 	}
 	fileName := sanitize(indexName) + "__" + sanitize(collectionName) + ".ready"
-	return filepath.Join(workspaceDir, ".qmd", "spinner", fileName)
+	return filepath.Join(workspaceDir, ".qmd", "agent-runtime", fileName)
 }
 
 func looksLikeAlreadyExists(err error) bool {

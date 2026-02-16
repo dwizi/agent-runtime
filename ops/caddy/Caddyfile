@@ -11,7 +11,7 @@
 		Permissions-Policy "interest-cohort=()"
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 	}
-	reverse_proxy spinner:8080
+	reverse_proxy agent-runtime:8080
 }
 
 {$ADMIN_HOST:admin.localhost} {
@@ -22,5 +22,5 @@
 			trusted_ca_cert_file /etc/caddy/pki/clients-ca.crt
 		}
 	}
-	reverse_proxy spinner:8080
+	reverse_proxy agent-runtime:8080
 }

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/connectors"
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/connectors"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type routingNotifier struct {

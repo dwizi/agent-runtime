@@ -50,9 +50,9 @@ func SyncLocalPKIEnv() (Result, error) {
 	}
 
 	requiredFiles := map[string]string{
-		"SPINNER_ADMIN_TLS_CA_FILE":   filepath.Join(pkiDir, "clients-ca.crt"),
-		"SPINNER_ADMIN_TLS_CERT_FILE": filepath.Join(pkiDir, "admin-client.crt"),
-		"SPINNER_ADMIN_TLS_KEY_FILE":  filepath.Join(pkiDir, "admin-client.key"),
+		"AGENT_RUNTIME_ADMIN_TLS_CA_FILE":   filepath.Join(pkiDir, "clients-ca.crt"),
+		"AGENT_RUNTIME_ADMIN_TLS_CERT_FILE": filepath.Join(pkiDir, "admin-client.crt"),
+		"AGENT_RUNTIME_ADMIN_TLS_KEY_FILE":  filepath.Join(pkiDir, "admin-client.key"),
 	}
 
 	for _, path := range requiredFiles {
@@ -65,9 +65,9 @@ func SyncLocalPKIEnv() (Result, error) {
 			return result, fmt.Errorf("check pki file %s: %w", path, err)
 		}
 	}
-	if !looksLikePEMCert(requiredFiles["SPINNER_ADMIN_TLS_CA_FILE"]) ||
-		!looksLikePEMCert(requiredFiles["SPINNER_ADMIN_TLS_CERT_FILE"]) ||
-		!looksLikePEMKey(requiredFiles["SPINNER_ADMIN_TLS_KEY_FILE"]) {
+	if !looksLikePEMCert(requiredFiles["AGENT_RUNTIME_ADMIN_TLS_CA_FILE"]) ||
+		!looksLikePEMCert(requiredFiles["AGENT_RUNTIME_ADMIN_TLS_CERT_FILE"]) ||
+		!looksLikePEMKey(requiredFiles["AGENT_RUNTIME_ADMIN_TLS_KEY_FILE"]) {
 		result.Skipped = true
 		result.Reason = "pki files are not valid PEM yet"
 		return result, nil

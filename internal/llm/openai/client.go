@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/llm"
 )
 
 type Config struct {

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 func TestPluginExecuteSuccess(t *testing.T) {

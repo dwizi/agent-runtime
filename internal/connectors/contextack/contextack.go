@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/carlos/spinner/internal/llm"
-	llmgrounded "github.com/carlos/spinner/internal/llm/grounded"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	llmgrounded "github.com/dwizi/agent-runtime/internal/llm/grounded"
 )
 
 func PlanAndGenerate(ctx context.Context, responder llm.Responder, input llm.MessageInput) (llmgrounded.MemoryDecision, string) {

@@ -19,3 +19,27 @@ type Tool interface {
 	// Execute runs the tool with the given input (usually JSON) and returns a result string.
 	Execute(ctx context.Context, input json.RawMessage) (string, error)
 }
+
+// ArgumentValidator is an optional interface for strict argument validation.
+// If a tool implements this, the registry validates arguments before Execute.
+type ArgumentValidator interface {
+	ValidateArgs(input json.RawMessage) error
+}
+
+type ToolClass string
+
+const (
+	ToolClassGeneral    ToolClass = "general"
+	ToolClassKnowledge  ToolClass = "knowledge"
+	ToolClassTasking    ToolClass = "tasking"
+	ToolClassModeration ToolClass = "moderation"
+	ToolClassObjective  ToolClass = "objective"
+	ToolClassDrafting   ToolClass = "drafting"
+	ToolClassSensitive  ToolClass = "sensitive"
+)
+
+// MetadataProvider is an optional interface for policy/risk metadata.
+type MetadataProvider interface {
+	ToolClass() ToolClass
+	RequiresApproval() bool
+}

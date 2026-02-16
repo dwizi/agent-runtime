@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/qmd"
 )
 
 type fakeBase struct {
@@ -160,7 +160,7 @@ func TestReplyUsesChatTailForMemoryCue(t *testing.T) {
 	base := &fakeBase{reply: "ok"}
 	retriever := &fakeRetriever{
 		openByTarget: map[string]string{
-			"logs/chats/discord/chan-1.md": "# Chat Log\n\n## 2026-02-10T11:00:00Z `INBOUND`\n- direction: `inbound`\n- actor: `u1`\n\nfirst\n\n## 2026-02-10T11:01:00Z `OUTBOUND`\n- direction: `outbound`\n- actor: `spinner`\n\nsecond\n",
+			"logs/chats/discord/chan-1.md": "# Chat Log\n\n## 2026-02-10T11:00:00Z `INBOUND`\n- direction: `inbound`\n- actor: `u1`\n\nfirst\n\n## 2026-02-10T11:01:00Z `OUTBOUND`\n- direction: `outbound`\n- actor: `agent-runtime`\n\nsecond\n",
 		},
 	}
 	responder := New(base, retriever, Config{TopK: 1, ChatTailLines: 8, ChatTailBytes: 800}, nil)

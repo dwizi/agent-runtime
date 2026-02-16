@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakeStore struct {

@@ -3,15 +3,17 @@ package gateway
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakeStore struct {
@@ -29,6 +31,7 @@ type fakeStore struct {
 	executionUpdateInvoked bool
 	lastObjective          store.CreateObjectiveInput
 	objectiveInvoked       bool
+	auditEvents            []store.CreateAgentAuditEventInput
 }
 
 func (f *fakeStore) EnsureContextForExternalChannel(ctx context.Context, connector, externalID, displayName string) (store.ContextRecord, error) {
@@ -107,6 +110,22 @@ func (f *fakeStore) LookupTask(ctx context.Context, id string) (store.TaskRecord
 		return store.TaskRecord{}, store.ErrTaskNotFound
 	}
 	return record, nil
+}
+
+func (f *fakeStore) MarkTaskCompleted(ctx context.Context, id string, finishedAt time.Time, summary, resultPath string) error {
+	if f.tasks == nil {
+		return store.ErrTaskNotFound
+	}
+	record, ok := f.tasks[id]
+	if !ok {
+		return store.ErrTaskNotFound
+	}
+	record.Status = "succeeded"
+	record.FinishedAt = finishedAt
+	record.ResultSummary = strings.TrimSpace(summary)
+	record.ResultPath = strings.TrimSpace(resultPath)
+	f.tasks[id] = record
+	return nil
 }
 
 func (f *fakeStore) UpdateTaskRouting(ctx context.Context, input store.UpdateTaskRoutingInput) (store.TaskRecord, error) {
@@ -244,6 +263,68 @@ func (f *fakeStore) CreateObjective(ctx context.Context, input store.CreateObjec
 	}, nil
 }
 
+func (f *fakeStore) UpdateObjective(ctx context.Context, input store.UpdateObjectiveInput) (store.Objective, error) {
+	id := strings.TrimSpace(input.ID)
+	if id == "" {
+		return store.Objective{}, store.ErrObjectiveInvalid
+	}
+	title := "objective"
+	if input.Title != nil {
+		title = strings.TrimSpace(*input.Title)
+	}
+	prompt := "prompt"
+	if input.Prompt != nil {
+		prompt = strings.TrimSpace(*input.Prompt)
+	}
+	active := true
+	if input.Active != nil {
+		active = *input.Active
+	}
+	interval := 3600
+	if input.IntervalSeconds != nil {
+		interval = *input.IntervalSeconds
+	}
+	trigger := store.ObjectiveTriggerSchedule
+	if input.TriggerType != nil {
+		trigger = *input.TriggerType
+	}
+	eventKey := ""
+	if input.EventKey != nil {
+		eventKey = strings.TrimSpace(*input.EventKey)
+	}
+	return store.Objective{
+		ID:              id,
+		WorkspaceID:     "ws-1",
+		ContextID:       "ctx-1",
+		Title:           title,
+		Prompt:          prompt,
+		TriggerType:     trigger,
+		EventKey:        eventKey,
+		IntervalSeconds: interval,
+		Active:          active,
+	}, nil
+}
+
+func (f *fakeStore) CreateAgentAuditEvent(ctx context.Context, input store.CreateAgentAuditEventInput) (store.AgentAuditEvent, error) {
+	f.auditEvents = append(f.auditEvents, input)
+	return store.AgentAuditEvent{
+		ID:           "audit-1",
+		WorkspaceID:  input.WorkspaceID,
+		ContextID:    input.ContextID,
+		Connector:    input.Connector,
+		ExternalID:   input.ExternalID,
+		SourceUserID: input.SourceUserID,
+		EventType:    input.EventType,
+		Stage:        input.Stage,
+		ToolName:     input.ToolName,
+		ToolClass:    input.ToolClass,
+		Blocked:      input.Blocked,
+		BlockReason:  input.BlockReason,
+		Message:      input.Message,
+		CreatedAt:    time.Now().UTC(),
+	}, nil
+}
+
 type fakeEngine struct {
 	lastTask orchestrator.Task
 }
@@ -270,6 +351,7 @@ type fakeActionExecutor struct {
 
 type fakeTriageAcknowledger struct {
 	reply     string
+	replies   []string
 	err       error
 	callCount int
 	lastInput llm.MessageInput
@@ -298,6 +380,13 @@ func (f *fakeTriageAcknowledger) Reply(ctx context.Context, input llm.MessageInp
 	if f.err != nil {
 		return "", f.err
 	}
+	if len(f.replies) > 0 {
+		index := f.callCount - 1
+		if index >= 0 && index < len(f.replies) {
+			return f.replies[index], nil
+		}
+		return f.replies[len(f.replies)-1], nil
+	}
 	return f.reply, nil
 }
 
@@ -325,7 +414,7 @@ func (f *fakeRetriever) Status(ctx context.Context, workspaceID string) (qmd.Sta
 func TestHandleTaskCommand(t *testing.T) {
 	fStore := &fakeStore{}
 	fEngine := &fakeEngine{}
-	service := New(fStore, fEngine, nil, nil)
+	service := New(fStore, fEngine, nil, nil, "", nil)
 
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:   "telegram",
@@ -348,7 +437,7 @@ func TestHandleTaskCommand(t *testing.T) {
 func TestHandleTaskNaturalLanguage(t *testing.T) {
 	fStore := &fakeStore{}
 	fEngine := &fakeEngine{}
-	service := New(fStore, fEngine, nil, nil)
+	service := New(fStore, fEngine, nil, nil, "", nil)
 
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:   "telegram",
@@ -372,7 +461,7 @@ func TestHandleAdminChannelEnableRequiresAdmin(t *testing.T) {
 	fStore := &fakeStore{
 		identityErr: store.ErrIdentityNotFound,
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -397,7 +486,7 @@ func TestHandleAdminChannelEnable(t *testing.T) {
 			Role:   "admin",
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -422,7 +511,7 @@ func TestHandleApproveCommand(t *testing.T) {
 			Role:   "overlord",
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -444,7 +533,7 @@ func TestHandleApprovePairingNaturalLanguage(t *testing.T) {
 			Role:   "admin",
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -466,7 +555,7 @@ func TestHandleDenyPairingNaturalLanguage(t *testing.T) {
 			Role:   "admin",
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "discord",
 		ExternalID: "42",
@@ -483,7 +572,7 @@ func TestHandleDenyPairingNaturalLanguage(t *testing.T) {
 
 func TestHandleRoutesUnknownMessage(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector: "telegram",
 		Text:      "hello world",
@@ -502,7 +591,7 @@ func TestHandleRoutesUnknownMessage(t *testing.T) {
 func TestHandleAutoTriageCreatesTaskAndNotifies(t *testing.T) {
 	fStore := &fakeStore{}
 	fEngine := &fakeEngine{}
-	service := New(fStore, fEngine, nil, nil)
+	service := New(fStore, fEngine, nil, nil, "", nil)
 	notifier := &fakeRoutingNotifier{}
 	service.SetRoutingNotifier(notifier)
 
@@ -542,7 +631,7 @@ func TestHandleAutoTriageCreatesTaskAndNotifies(t *testing.T) {
 func TestHandleAutoTriageUsesLLMAckWhenAvailable(t *testing.T) {
 	fStore := &fakeStore{}
 	fEngine := &fakeEngine{}
-	service := New(fStore, fEngine, nil, nil)
+	service := New(fStore, fEngine, nil, nil, "", nil)
 	ack := &fakeTriageAcknowledger{
 		reply: "Absolutely - I am digging into this now and will report back shortly.",
 	}
@@ -567,8 +656,8 @@ func TestHandleAutoTriageUsesLLMAckWhenAvailable(t *testing.T) {
 	if ack.callCount != 1 {
 		t.Fatalf("expected one triage ack call, got %d", ack.callCount)
 	}
-	if !strings.Contains(strings.ToLower(ack.lastInput.Text), "route class: issue") {
-		t.Fatalf("expected route class in ack prompt, got %q", ack.lastInput.Text)
+	if !strings.Contains(ack.lastInput.Text, "USER REQUEST") {
+		t.Fatalf("expected agent prompt structure, got %q", ack.lastInput.Text)
 	}
 	if !ack.lastInput.SkipGrounding {
 		t.Fatal("expected triage acknowledgement to skip grounding")
@@ -577,7 +666,7 @@ func TestHandleAutoTriageUsesLLMAckWhenAvailable(t *testing.T) {
 
 func TestHandleAutoTriageQuestionWithoutFollowUpSkipsTask(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector: "telegram",
 		Text:      "how are you today?",
@@ -595,7 +684,7 @@ func TestHandleAutoTriageQuestionWithoutFollowUpSkipsTask(t *testing.T) {
 
 func TestHandleAutoTriageFallsBackToAgentWhenLegacySkips(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	ack := &fakeTriageAcknowledger{
 		reply: "I ran some checks and here is the answer.",
 	}
@@ -625,9 +714,324 @@ func TestHandleAutoTriageFallsBackToAgentWhenLegacySkips(t *testing.T) {
 	}
 }
 
+func TestHandleAutoTriageFallbackAgentErrorReturnsStatusReply(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		err: errors.New("llm unavailable"),
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback agent error path to remain handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "internal error") {
+		t.Fatalf("expected user-visible internal error reply, got %q", output.Reply)
+	}
+}
+
+func TestHandleAutoTriageFallbackAgentToolErrorKeepsSpecificReply(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		reply: `{"tool":"missing_tool","args":{}}`,
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback tool error path to remain handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "not registered") {
+		t.Fatalf("expected tool-specific error reply, got %q", output.Reply)
+	}
+}
+
+func TestHandleAutoTriageFallbackAgentEmptyReplyReturnsStatusReply(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		reply: "   ",
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback empty-reply path to remain handled")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "still processing") {
+		t.Fatalf("expected status reply for empty model output, got %q", output.Reply)
+	}
+}
+
+func TestHandleAutoTriageFallbackAgentCanExecuteTools(t *testing.T) {
+	fStore := &fakeStore{}
+	fEngine := &fakeEngine{}
+	service := New(fStore, fEngine, &fakeRetriever{}, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		replies: []string{
+			`{"tool":"create_task","args":{"title":"Investigate report","description":"follow up with logs","priority":"p2"}}`,
+			`{"final":"I created a follow-up task and will keep you posted.","confidence":0.9}`,
+		},
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback agent response to handle message")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "follow-up task") {
+		t.Fatalf("expected final fallback reply, got %q", output.Reply)
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected create_task tool to persist a task")
+	}
+	if fStore.lastTask.Title != "Investigate report" {
+		t.Fatalf("expected tool task title, got %q", fStore.lastTask.Title)
+	}
+	if ack.callCount < 2 {
+		t.Fatalf("expected looped agent calls, got %d", ack.callCount)
+	}
+}
+
+func TestHandleAutoTriageFallbackAgentConvertsActionPayloadToRunActionTool(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, &fakeRetriever{}, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		replies: []string{
+			"I'll fetch this now.\n```action\n{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch SWAPI person 3\",\"payload\":{\"args\":[\"-sS\",\"https://swapi.dev/api/people/3/\"]}}\n```",
+			`{"final":"Queued for approval. Reply /approve-action act-1 to execute.","confidence":0.92}`,
+		},
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "fetch swapi person 3 and summarize",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback agent response to handle message")
+	}
+	if len(fStore.actionApprovals) != 1 {
+		t.Fatalf("expected one action approval, got %d", len(fStore.actionApprovals))
+	}
+	if fStore.actionApprovals[0].ActionType != "run_command" {
+		t.Fatalf("expected run_command action type, got %q", fStore.actionApprovals[0].ActionType)
+	}
+	if fStore.actionApprovals[0].ActionTarget != "curl" {
+		t.Fatalf("expected curl action target, got %q", fStore.actionApprovals[0].ActionTarget)
+	}
+	if strings.Contains(output.Reply, "```action") {
+		t.Fatalf("expected final reply without raw action block, got %q", output.Reply)
+	}
+}
+
+func TestHandleAutoTriageFallbackAgentAppendsToolCallsToChatLog(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, &fakeRetriever{}, nil, workspaceRoot, nil)
+	ack := &fakeTriageAcknowledger{
+		replies: []string{
+			`{"tool":"create_task","args":{"title":"Investigate report","description":"follow up with logs","priority":"p2"}}`,
+			`{"final":"Queued a follow-up task.","confidence":0.93}`,
+		},
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "please investigate this",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected message to be handled")
+	}
+
+	logPath := filepath.Join(workspaceRoot, "ws-1", "logs", "chats", "telegram", "42.md")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	logText := string(content)
+	if !strings.Contains(logText, "`TOOL`") {
+		t.Fatalf("expected TOOL log entry, got %s", logText)
+	}
+	if !strings.Contains(logText, "Tool call") {
+		t.Fatalf("expected tool call marker in log entry, got %s", logText)
+	}
+	if !strings.Contains(logText, "create_task") {
+		t.Fatalf("expected tool name in log entry, got %s", logText)
+	}
+	if !strings.Contains(logText, "succeeded") {
+		t.Fatalf("expected tool status in log entry, got %s", logText)
+	}
+}
+
+func TestHandleAutoTriageSensitiveToolBlockedWithoutApproval(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, &fakeRetriever{}, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		replies: []string{
+			`{"tool":"create_objective","args":{"title":"Watch spam","prompt":"Monitor repeated spam"}}`,
+		},
+	}
+	service.SetTriageAcknowledger(ack)
+
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected fallback path to handle the message")
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "explicit approval") {
+		t.Fatalf("expected approval-required reply, got %q", output.Reply)
+	}
+	if fStore.objectiveInvoked {
+		t.Fatal("expected sensitive objective tool to be blocked before execution")
+	}
+	if len(fStore.auditEvents) == 0 {
+		t.Fatal("expected blocked sensitive attempt to be persisted as audit event")
+	}
+	lastAudit := fStore.auditEvents[len(fStore.auditEvents)-1]
+	if lastAudit.EventType != "approval_required" {
+		t.Fatalf("expected approval_required audit event type, got %s", lastAudit.EventType)
+	}
+	if strings.TrimSpace(lastAudit.ToolName) != "create_objective" {
+		t.Fatalf("expected audit tool create_objective, got %s", lastAudit.ToolName)
+	}
+}
+
+func TestHandleAutoTriageSensitiveApprovalTokenFromApproveAction(t *testing.T) {
+	fStore := &fakeStore{
+		identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+		actionApprovals: []store.ActionApproval{
+			{ID: "act-1", ActionType: "run_command", Status: "pending"},
+		},
+	}
+	service := New(fStore, &fakeEngine{}, &fakeRetriever{}, nil, "", nil)
+	ack := &fakeTriageAcknowledger{
+		replies: []string{
+			`{"tool":"create_objective","args":{"title":"Watch spam","prompt":"Monitor repeated spam"}}`,
+			`{"final":"Objective created and monitoring started.","confidence":0.9}`,
+			`{"tool":"create_objective","args":{"title":"Watch spam","prompt":"Monitor repeated spam"}}`,
+		},
+	}
+	service.SetTriageAcknowledger(ack)
+
+	approveOutput, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "/approve-action act-1",
+	})
+	if err != nil {
+		t.Fatalf("approve-action failed: %v", err)
+	}
+	if !approveOutput.Handled {
+		t.Fatal("expected approve-action to be handled")
+	}
+
+	firstRun, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("first fallback run failed: %v", err)
+	}
+	if !firstRun.Handled {
+		t.Fatal("expected first fallback run to be handled")
+	}
+	if !strings.Contains(strings.ToLower(firstRun.Reply), "monitoring started") {
+		t.Fatalf("expected successful sensitive-tool run after approval, got %q", firstRun.Reply)
+	}
+	if !fStore.objectiveInvoked {
+		t.Fatal("expected create_objective to run with approval token")
+	}
+
+	// Token is one-shot; the next sensitive tool attempt should be blocked again.
+	fStore.objectiveInvoked = false
+	secondRun, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "how are you today?",
+	})
+	if err != nil {
+		t.Fatalf("second fallback run failed: %v", err)
+	}
+	if !secondRun.Handled {
+		t.Fatal("expected second fallback run to be handled")
+	}
+	if !strings.Contains(strings.ToLower(secondRun.Reply), "explicit approval") {
+		t.Fatalf("expected approval-required block after token consumption, got %q", secondRun.Reply)
+	}
+	if fStore.objectiveInvoked {
+		t.Fatal("expected sensitive tool to be blocked after approval token is consumed")
+	}
+}
+
 func TestHandleAutoTriageQuestionWithExternalResearchRoutesTask(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:   "telegram",
 		ExternalID:  "42",
@@ -649,11 +1053,11 @@ func TestHandleAutoTriageQuestionWithExternalResearchRoutesTask(t *testing.T) {
 	}
 }
 
-func TestHandleAutoTriageLegacyRoutingSkipsAgentFallback(t *testing.T) {
+func TestHandleAutoTriageAgentPrecedesLegacy(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	ack := &fakeTriageAcknowledger{
-		reply: "Absolutely - I am investigating and will report back shortly.",
+		reply: "I am handling this via agent.",
 	}
 	service.SetTriageAcknowledger(ack)
 
@@ -668,13 +1072,16 @@ func TestHandleAutoTriageLegacyRoutingSkipsAgentFallback(t *testing.T) {
 		t.Fatalf("handle message failed: %v", err)
 	}
 	if !output.Handled {
-		t.Fatal("expected legacy triage to handle routed issue")
+		t.Fatal("expected agent to handle message")
 	}
-	if fStore.lastTask.ID == "" {
-		t.Fatal("expected routed task to be created")
+	if output.Reply != "I am handling this via agent." {
+		t.Fatalf("expected agent reply, got %q", output.Reply)
+	}
+	if fStore.lastTask.ID != "" {
+		t.Fatal("expected no legacy task to be created automatically")
 	}
 	if ack.callCount != 1 {
-		t.Fatalf("expected one llm call for triage ack only, got %d", ack.callCount)
+		t.Fatalf("expected one llm call, got %d", ack.callCount)
 	}
 }
 
@@ -693,7 +1100,7 @@ func TestHandleRouteOverrideCommand(t *testing.T) {
 			"task-1": {ID: "task-1", WorkspaceID: "ws-1", ContextID: "ctx-1"},
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -736,7 +1143,7 @@ func TestHandleRouteOverrideRequiresAdminChannel(t *testing.T) {
 			"task-1": {ID: "task-1", WorkspaceID: "ws-1", ContextID: "ctx-1"},
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -769,7 +1176,7 @@ func TestHandleRouteOverrideRejectsCrossWorkspaceTask(t *testing.T) {
 			"task-1": {ID: "task-1", WorkspaceID: "ws-2", ContextID: "ctx-other"},
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -789,7 +1196,7 @@ func TestHandleRouteOverrideRejectsCrossWorkspaceTask(t *testing.T) {
 
 func TestHandleAutoTriageSkipsNoise(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	_, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector: "telegram",
 		Text:      "ok",
@@ -806,7 +1213,7 @@ func TestHandleDenyPropagatesErrors(t *testing.T) {
 	fStore := &fakeStore{
 		identityErr: errors.New("db down"),
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	_, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -831,6 +1238,8 @@ func TestHandleSearchCommand(t *testing.T) {
 				},
 			},
 		},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -860,6 +1269,8 @@ func TestHandleOpenCommand(t *testing.T) {
 				Truncated: false,
 			},
 		},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -892,6 +1303,8 @@ func TestHandleStatusCommand(t *testing.T) {
 			},
 		},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -920,6 +1333,8 @@ func TestHandlePromptSetCommand(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -940,7 +1355,7 @@ func TestHandlePromptSetCommand(t *testing.T) {
 
 func TestHandleMonitorNaturalLanguageIntentCreatesObjective(t *testing.T) {
 	fStore := &fakeStore{}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:   "telegram",
 		ExternalID:  "42",
@@ -976,6 +1391,8 @@ func TestHandlePendingActionsCommand(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1002,6 +1419,8 @@ func TestHandlePendingActionsNaturalLanguage(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1027,6 +1446,8 @@ func TestHandlePendingActionsFallsBackToGlobalList(t *testing.T) {
 		},
 		&fakeEngine{},
 		&fakeRetriever{},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -1057,6 +1478,8 @@ func TestHandleApproveActionCommand(t *testing.T) {
 		fStore,
 		&fakeEngine{},
 		&fakeRetriever{},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -1094,6 +1517,8 @@ func TestHandleApproveActionCommandAcceptsQuotedID(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1120,6 +1545,8 @@ func TestHandleApproveActionNaturalLanguageFallsBackToGlobalPending(t *testing.T
 		fStore,
 		&fakeEngine{},
 		&fakeRetriever{},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -1153,6 +1580,8 @@ func TestHandleApproveActionCommandExecutesPlugin(t *testing.T) {
 				Message: "webhook request completed with status 200",
 			},
 		},
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1188,6 +1617,8 @@ func TestHandleApproveActionCommandExecutionFailure(t *testing.T) {
 		&fakeActionExecutor{
 			err: errors.New("target blocked by policy"),
 		},
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1220,6 +1651,8 @@ func TestHandleDenyActionCommand(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1249,6 +1682,8 @@ func TestHandleSearchNaturalLanguage(t *testing.T) {
 			},
 		},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1274,6 +1709,8 @@ func TestHandleOpenNaturalLanguage(t *testing.T) {
 				Truncated: false,
 			},
 		},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -1303,6 +1740,8 @@ func TestHandleStatusNaturalLanguage(t *testing.T) {
 			},
 		},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1328,6 +1767,8 @@ func TestHandlePromptNaturalLanguage(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1350,7 +1791,7 @@ func TestHandleAdminChannelEnableNaturalLanguage(t *testing.T) {
 			Role:   "admin",
 		},
 	}
-	service := New(fStore, &fakeEngine{}, nil, nil)
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
 		ExternalID: "42",
@@ -1382,6 +1823,8 @@ func TestHandleApproveActionNaturalLanguage(t *testing.T) {
 				Message: "command completed",
 			},
 		},
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1417,6 +1860,8 @@ func TestHandleApproveActionNaturalLanguageImplicitLatest(t *testing.T) {
 				Message: "command completed",
 			},
 		},
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "discord",
@@ -1446,6 +1891,8 @@ func TestHandleDenyActionNaturalLanguage(t *testing.T) {
 		fStore,
 		&fakeEngine{},
 		&fakeRetriever{},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
@@ -1477,6 +1924,8 @@ func TestHandleDenyActionNaturalLanguageImplicitLatest(t *testing.T) {
 		&fakeEngine{},
 		&fakeRetriever{},
 		nil,
+		"",
+		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{
 		Connector:  "telegram",
@@ -1507,6 +1956,8 @@ func TestHandleApproveActionImplicitMultiplePending(t *testing.T) {
 		fStore,
 		&fakeEngine{},
 		&fakeRetriever{},
+		nil,
+		"",
 		nil,
 	)
 	output, err := service.HandleMessage(context.Background(), MessageInput{

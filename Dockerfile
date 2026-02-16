@@ -11,11 +11,11 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/spinner ./cmd/spinner
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/agent-runtime ./cmd/agent-runtime
 
-FROM alpine:3.20 AS spinner-runtime
+FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates curl git jq ripgrep
 WORKDIR /
-COPY --from=builder /out/spinner /spinner
-ENTRYPOINT ["/spinner"]
+COPY --from=builder /out/agent-runtime /agent-runtime
+ENTRYPOINT ["/agent-runtime"]
 CMD ["serve"]

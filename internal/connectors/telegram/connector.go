@@ -16,14 +16,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions"
-	"github.com/carlos/spinner/internal/connectors/contextack"
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/llm"
-	llmsafety "github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/memorylog"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/actions"
+	"github.com/dwizi/agent-runtime/internal/connectors/contextack"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	llmsafety "github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/memorylog"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 const pairingMessage = "pair"
@@ -264,7 +264,7 @@ func (c *Connector) handleMessage(ctx context.Context, message telegramMessage) 
 		}
 
 		reply := fmt.Sprintf(
-			"Pairing token: `%s`\nOpen Spinner TUI and approve this token.\nThis token expires at %s UTC.",
+			"Pairing token: `%s`\nOpen Agent Runtime TUI and approve this token.\nThis token expires at %s UTC.",
 			pairing.Token,
 			pairing.ExpiresAt.Format("2006-01-02 15:04:05"),
 		)
@@ -300,33 +300,54 @@ func (c *Connector) handleMessage(ctx context.Context, message telegramMessage) 
 	if err != nil {
 		return err
 	}
-	if !output.Handled || strings.TrimSpace(output.Reply) == "" {
+	trimmedGatewayReply := strings.TrimSpace(output.Reply)
+	if !output.Handled || trimmedGatewayReply == "" {
+		c.logger.Info(
+			"telegram gateway produced no direct reply",
+			"chat_id", message.Chat.ID,
+			"message_id", message.MessageID,
+			"handled", output.Handled,
+			"reply_len", len(trimmedGatewayReply),
+		)
 		replyToSend := attachmentReply
 		shouldReply, isMention := c.shouldAutoReply(message, text)
 		if shouldReply {
 			llmReply, notice, llmErr := c.generateReply(ctx, contextRecord, message, text, isMention)
 			if llmErr != nil {
+				c.logger.Error(
+					"telegram llm reply generation failed",
+					"error", llmErr,
+					"chat_id", message.Chat.ID,
+					"message_id", message.MessageID,
+					"is_mention", isMention,
+				)
 				if replyToSend == "" {
-					return nil
+					replyToSend = "I started working on that but ran into an internal error. Please try again in a moment."
 				}
-				return c.sendMessage(ctx, message.Chat.ID, replyToSend)
-			}
-			if strings.TrimSpace(notice) != "" {
-				if replyToSend != "" {
-					replyToSend = strings.TrimSpace(notice) + "\n\n" + replyToSend
-				} else {
-					replyToSend = strings.TrimSpace(notice)
+			} else {
+				if strings.TrimSpace(notice) != "" {
+					if replyToSend != "" {
+						replyToSend = strings.TrimSpace(notice) + "\n\n" + replyToSend
+					} else {
+						replyToSend = strings.TrimSpace(notice)
+					}
 				}
-			}
-			if strings.TrimSpace(llmReply) != "" {
-				if replyToSend != "" {
-					replyToSend = strings.TrimSpace(llmReply) + "\n\n" + replyToSend
-				} else {
-					replyToSend = strings.TrimSpace(llmReply)
+				if strings.TrimSpace(llmReply) != "" {
+					if replyToSend != "" {
+						replyToSend = strings.TrimSpace(llmReply) + "\n\n" + replyToSend
+					} else {
+						replyToSend = strings.TrimSpace(llmReply)
+					}
 				}
 			}
 		}
 		if replyToSend == "" {
+			c.logger.Info(
+				"telegram message produced no outbound reply",
+				"chat_id", message.Chat.ID,
+				"message_id", message.MessageID,
+				"reason", "no_gateway_reply_and_no_fallback_reply",
+			)
 			return nil
 		}
 		c.logOutbound(contextRecord, message, replyToSend)
@@ -661,7 +682,7 @@ func (c *Connector) logOutbound(contextRecord store.ContextRecord, message teleg
 		Connector:     "telegram",
 		ExternalID:    strconv.FormatInt(message.Chat.ID, 10),
 		Direction:     "outbound",
-		ActorID:       "spinner",
+		ActorID:       "agent-runtime",
 		DisplayName:   message.Chat.Title,
 		Text:          logText,
 		Timestamp:     time.Now().UTC(),
@@ -695,13 +716,29 @@ func (c *Connector) sendMessage(ctx context.Context, chatID int64, text string) 
 	defer res.Body.Close()
 
 	var response struct {
-		OK bool `json:"ok"`
+		OK          bool   `json:"ok"`
+		ErrorCode   int    `json:"error_code"`
+		Description string `json:"description"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
-		return fmt.Errorf("decode sendMessage: %w", err)
+	bodyBytes, err := io.ReadAll(io.LimitReader(res.Body, 8192))
+	if err != nil {
+		return fmt.Errorf("read sendMessage response: %w", err)
+	}
+	if err := json.Unmarshal(bodyBytes, &response); err != nil {
+		return fmt.Errorf("decode sendMessage: status=%d body=%q err=%w", res.StatusCode, strings.TrimSpace(string(bodyBytes)), err)
+	}
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("telegram sendMessage failed: status=%d body=%q", res.StatusCode, strings.TrimSpace(string(bodyBytes)))
 	}
 	if !response.OK {
-		return fmt.Errorf("telegram sendMessage failed")
+		description := strings.TrimSpace(response.Description)
+		if description == "" {
+			description = strings.TrimSpace(string(bodyBytes))
+		}
+		if response.ErrorCode > 0 {
+			return fmt.Errorf("telegram sendMessage failed: status=%d error_code=%d description=%s", res.StatusCode, response.ErrorCode, description)
+		}
+		return fmt.Errorf("telegram sendMessage failed: status=%d description=%s", res.StatusCode, description)
 	}
 	return nil
 }
@@ -797,7 +834,7 @@ func telegramCommandName(name string) string {
 func telegramCommandDescription(description string) string {
 	trimmed := strings.TrimSpace(description)
 	if trimmed == "" {
-		return "Spinner command"
+		return "Agent Runtime command"
 	}
 	if len(trimmed) > 256 {
 		return strings.TrimSpace(trimmed[:256])

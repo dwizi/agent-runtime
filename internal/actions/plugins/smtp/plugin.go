@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type Config struct {
@@ -100,7 +100,7 @@ func (p *Plugin) Execute(ctx context.Context, approval store.ActionApproval) (ex
 		subject = strings.TrimSpace(approval.ActionSummary)
 	}
 	if subject == "" {
-		subject = "Spinner notification"
+		subject = "Agent Runtime notification"
 	}
 	textBody := getString(approval.Payload, "body")
 	if textBody == "" {

@@ -8,10 +8,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/connectors"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/connectors"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
+
+type AgentService interface {
+	NarrateTaskResult(ctx context.Context, connector, externalID string, task orchestrator.Task, result orchestrator.TaskResult) (string, error)
+}
 
 type taskCompletionNotifier struct {
 	workspaceRoot string
@@ -19,6 +23,7 @@ type taskCompletionNotifier struct {
 	publishers    map[string]connectors.Publisher
 	successPolicy string
 	failurePolicy string
+	agentService  AgentService
 	logger        *slog.Logger
 }
 
@@ -29,6 +34,7 @@ func newTaskCompletionNotifier(
 	defaultPolicy string,
 	successPolicy string,
 	failurePolicy string,
+	agentService AgentService,
 	logger *slog.Logger,
 ) *taskCompletionNotifier {
 	if logger == nil {
@@ -52,6 +58,7 @@ func newTaskCompletionNotifier(
 		publishers:    cleanPublishers,
 		successPolicy: success,
 		failurePolicy: failure,
+		agentService:  agentService,
 		logger:        logger,
 	}
 }
@@ -125,7 +132,7 @@ func (n *taskCompletionNotifier) notify(task orchestrator.Task, result orchestra
 		if taskErr != nil && !target.IsAdmin {
 			continue
 		}
-		message := n.messageForTarget(task, taskRecord, hasTaskRecord, result, taskErr, target)
+		message := n.messageForTarget(ctx, task, taskRecord, hasTaskRecord, result, taskErr, target)
 		message = strings.TrimSpace(message)
 		if message == "" {
 			continue
@@ -163,6 +170,7 @@ func (n *taskCompletionNotifier) lookupTaskRecord(ctx context.Context, taskID st
 }
 
 func (n *taskCompletionNotifier) messageForTarget(
+	ctx context.Context,
 	task orchestrator.Task,
 	taskRecord store.TaskRecord,
 	hasTaskRecord bool,
@@ -173,6 +181,18 @@ func (n *taskCompletionNotifier) messageForTarget(
 	if taskErr != nil {
 		return buildTaskFailureMessage(task, taskErr, hasTaskRecord, taskRecord, target.IsAdmin)
 	}
+
+	// Try Agent Narration first for non-admin messages if it's a routed task
+	if n.agentService != nil && hasTaskRecord && strings.TrimSpace(taskRecord.RouteClass) != "" && !target.IsAdmin {
+		narration, err := n.agentService.NarrateTaskResult(ctx, target.Connector, target.ExternalID, task, result)
+		if err == nil && narration != "" {
+			return narration
+		}
+		if err != nil {
+			n.logger.Warn("agent narration failed, falling back to summary", "task_id", task.ID, "error", err)
+		}
+	}
+
 	return buildTaskSuccessMessage(task, result, hasTaskRecord, taskRecord)
 }
 

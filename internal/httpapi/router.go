@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/config"
-	"github.com/carlos/spinner/internal/heartbeat"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/config"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type Dependencies struct {
@@ -75,7 +75,7 @@ func (r *router) handleHeartbeat(w http.ResponseWriter, req *http.Request) {
 
 func (r *router) handleInfo(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":        "spinner",
+		"name":        "agent-runtime",
 		"environment": r.deps.Config.Environment,
 		"public_host": r.deps.Config.PublicHost,
 		"admin_host":  r.deps.Config.AdminHost,

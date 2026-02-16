@@ -7,27 +7,9 @@ import (
 	"testing"
 )
 
-// MockTool is a simple tool for testing purposes.
-type MockTool struct {
-	name        string
-	description string
-	schema      string
-	executeFunc func(input json.RawMessage) (string, error)
-}
-
-func (m *MockTool) Name() string             { return m.name }
-func (m *MockTool) Description() string      { return m.description }
-func (m *MockTool) ParametersSchema() string { return m.schema }
-func (m *MockTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
-	if m.executeFunc != nil {
-		return m.executeFunc(input)
-	}
-	return "mock executed", nil
-}
-
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg := NewRegistry()
-	mock := &MockTool{name: "test_tool"}
+	mock := &MockTool{NameVal: "test_tool"}
 
 	reg.Register(mock)
 
@@ -42,8 +24,8 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 func TestRegistry_List(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(&MockTool{name: "b_tool"})
-	reg.Register(&MockTool{name: "a_tool"})
+	reg.Register(&MockTool{NameVal: "b_tool"})
+	reg.Register(&MockTool{NameVal: "a_tool"})
 
 	list := reg.List()
 	if len(list) != 2 {
@@ -57,8 +39,8 @@ func TestRegistry_List(t *testing.T) {
 func TestRegistry_ExecuteTool(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&MockTool{
-		name: "echo",
-		executeFunc: func(input json.RawMessage) (string, error) {
+		NameVal: "echo",
+		ExecFunc: func(ctx context.Context, input json.RawMessage) (string, error) {
 			return "echo: " + string(input), nil
 		},
 	})
@@ -81,11 +63,11 @@ func TestRegistry_ExecuteTool(t *testing.T) {
 func TestRegistry_DescribeAll(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&MockTool{
-		name:        "search",
-		description: "searches docs",
-		schema:      `{"query": "string"}`,
+		NameVal:     "search",
+		DescVal:     "searches docs",
+		SchemaVal:      `{"query": "string"}`,
 	})
-	
+
 	desc := reg.DescribeAll()
 	if !strings.Contains(desc, "search: searches docs") {
 		t.Errorf("description missing tool details: %s", desc)

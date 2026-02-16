@@ -1,6 +1,6 @@
 # Operations Runbook (Overlord/Admin)
 
-Day-2 tasks for maintaining Spinner safely.
+Day-2 tasks for maintaining Agent Runtime safely.
 
 ## Daily Checks
 
@@ -16,7 +16,7 @@ Day-2 tasks for maintaining Spinner safely.
 4. Review IMAP ingestion paths:
    - `/data/workspaces/<ws>/inbox/imap/...`
 5. Review task execution lifecycle:
-   - `sqlite3 /data/spinner/meta.sqlite "SELECT status, count(*) FROM tasks GROUP BY status ORDER BY status;"`
+   - `sqlite3 /data/agent-runtime/meta.sqlite "SELECT status, count(*) FROM tasks GROUP BY status ORDER BY status;"`
    - task outputs under `/data/workspaces/<ws>/tasks/YYYY/MM/DD/<task-id>.md`
 
 ## Admin/TUI Controls
@@ -95,7 +95,7 @@ If token/cert compromise is suspected:
 
 1. Rotate connector tokens (Discord/Telegram).
 2. Rotate mTLS material (`ops/caddy/pki`) and restart Caddy.
-3. Set `SPINNER_SANDBOX_ENABLED=false` temporarily if command actions are risky.
+3. Set `AGENT_RUNTIME_SANDBOX_ENABLED=false` temporarily if command actions are risky.
 4. Review recent action approvals and chat logs in:
    - `/data/workspaces/<ws>/logs/chats/...`
 5. Re-pair impacted admin identities if necessary.
@@ -103,7 +103,7 @@ If token/cert compromise is suspected:
 ## Backup and Recovery
 
 Back up:
-- `/data/spinner/meta.sqlite`
+- `/data/agent-runtime/meta.sqlite`
 - `/data/workspaces/`
 - `.env` (secure secret storage, never public)
 - `ops/caddy/pki` (if you manage cert continuity there)

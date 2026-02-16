@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/carlos/spinner/internal/agent/tools"
-	"github.com/carlos/spinner/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/llm"
 )
 
 type mockResponder struct {
@@ -19,13 +19,22 @@ func (m *mockResponder) Reply(ctx context.Context, input llm.MessageInput) (stri
 }
 
 type mockTool struct {
-	name string
-	exec func(json.RawMessage) (string, error)
+	name             string
+	toolClass        tools.ToolClass
+	requiresApproval bool
+	exec             func(json.RawMessage) (string, error)
 }
 
 func (m *mockTool) Name() string             { return m.name }
 func (m *mockTool) Description() string      { return "mock" }
 func (m *mockTool) ParametersSchema() string { return "{}" }
+func (m *mockTool) ToolClass() tools.ToolClass {
+	if m.toolClass == "" {
+		return tools.ToolClassGeneral
+	}
+	return m.toolClass
+}
+func (m *mockTool) RequiresApproval() bool { return m.requiresApproval }
 func (m *mockTool) Execute(ctx context.Context, input json.RawMessage) (string, error) {
 	return m.exec(input)
 }
@@ -38,7 +47,7 @@ func TestAgent_Execute_DirectReply(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "hi"})
 
 	if res.ActionTaken {
@@ -69,7 +78,7 @@ func TestAgent_Execute_ToolCall(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "do it"})
 
 	if !res.ActionTaken {
@@ -86,6 +95,18 @@ func TestAgent_Execute_ToolCall(t *testing.T) {
 	}
 	if res.Steps != 2 {
 		t.Fatalf("expected 2 loop steps, got %d", res.Steps)
+	}
+	if len(res.ToolCalls) != 1 {
+		t.Fatalf("expected exactly one tool call record, got %d", len(res.ToolCalls))
+	}
+	if res.ToolCalls[0].Status != "succeeded" {
+		t.Fatalf("expected tool call status succeeded, got %q", res.ToolCalls[0].Status)
+	}
+	if !strings.Contains(res.ToolCalls[0].ToolArgs, "{}") {
+		t.Fatalf("expected tool args in call record, got %q", res.ToolCalls[0].ToolArgs)
+	}
+	if !strings.Contains(strings.ToLower(res.ToolCalls[0].ToolOutput), "success") {
+		t.Fatalf("expected tool output in call record, got %q", res.ToolCalls[0].ToolOutput)
 	}
 }
 
@@ -113,7 +134,7 @@ func TestAgent_Execute_ToolCall_Markdown(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "do it"})
 
 	if !res.ActionTaken {
@@ -121,6 +142,104 @@ func TestAgent_Execute_ToolCall_Markdown(t *testing.T) {
 	}
 	if res.ToolName != "test_tool" {
 		t.Errorf("expected tool 'test_tool', got '%s'", res.ToolName)
+	}
+}
+
+func TestAgent_Execute_ActionBlockPayloadExecutesRunAction(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured struct {
+		Type    string         `json:"type"`
+		Target  string         `json:"target"`
+		Summary string         `json:"summary"`
+		Payload map[string]any `json:"payload"`
+	}
+	reg.Register(&mockTool{
+		name: "run_action",
+		exec: func(input json.RawMessage) (string, error) {
+			if err := json.Unmarshal(input, &captured); err != nil {
+				t.Fatalf("failed to decode run_action args: %v", err)
+			}
+			return "queued", nil
+		},
+	})
+
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			if callCount == 1 {
+				return "I will fetch this now.\n```action\n{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch SWAPI character\",\"payload\":{\"args\":[\"-sS\",\"https://swapi.dev/api/people/3/\"]}}\n```", nil
+			}
+			return `{"final":"Fetch queued and pending approval.","confidence":0.94}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "fetch swapi people 3"})
+
+	if !res.ActionTaken {
+		t.Fatal("expected action taken")
+	}
+	if res.ToolName != "run_action" {
+		t.Fatalf("expected tool run_action, got %q", res.ToolName)
+	}
+	if captured.Type != "run_command" {
+		t.Fatalf("expected action type run_command, got %q", captured.Type)
+	}
+	if captured.Target != "curl" {
+		t.Fatalf("expected target curl, got %q", captured.Target)
+	}
+	if captured.Payload == nil {
+		t.Fatal("expected payload to be present")
+	}
+	args, ok := captured.Payload["args"].([]any)
+	if !ok || len(args) != 2 {
+		t.Fatalf("expected payload.args with two elements, got %#v", captured.Payload["args"])
+	}
+}
+
+func TestAgent_Execute_ActionJSONTopLevelArgsExecutesRunAction(t *testing.T) {
+	reg := tools.NewRegistry()
+	var captured struct {
+		Type    string         `json:"type"`
+		Payload map[string]any `json:"payload"`
+	}
+	reg.Register(&mockTool{
+		name: "run_action",
+		exec: func(input json.RawMessage) (string, error) {
+			if err := json.Unmarshal(input, &captured); err != nil {
+				t.Fatalf("failed to decode run_action args: %v", err)
+			}
+			return "queued", nil
+		},
+	})
+
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			if callCount == 1 {
+				return "{\"type\":\"run_command\",\"target\":\"curl\",\"summary\":\"Fetch SWAPI character\",\"args\":[\"-sS\",\"https://swapi.dev/api/people/3/\"]}", nil
+			}
+			return `{"final":"ok","confidence":0.9}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "fetch swapi people 3"})
+
+	if !res.ActionTaken {
+		t.Fatal("expected action taken")
+	}
+	if res.ToolName != "run_action" {
+		t.Fatalf("expected tool run_action, got %q", res.ToolName)
+	}
+	if captured.Type != "run_command" {
+		t.Fatalf("expected action type run_command, got %q", captured.Type)
+	}
+	args, ok := captured.Payload["args"].([]any)
+	if !ok || len(args) != 2 {
+		t.Fatalf("expected payload.args with two elements, got %#v", captured.Payload["args"])
 	}
 }
 
@@ -138,7 +257,7 @@ func TestAgent_Execute_BlocksDisallowedTool(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	a.SetPolicyResolver(func(ctx context.Context, input llm.MessageInput) Policy {
 		return Policy{AllowedTools: []string{"search_only"}}
 	})
@@ -164,7 +283,7 @@ func TestAgent_Execute_BlocksOversizedInput(t *testing.T) {
 		},
 	}
 
-	a := New(responder, tools.NewRegistry(), "")
+	a := New(nil, responder, tools.NewRegistry(), "")
 	a.SetDefaultPolicy(Policy{MaxInputChars: 4})
 
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "this is too long"})
@@ -195,7 +314,7 @@ func TestAgent_Execute_EnforcesTaskQuota(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	a.SetDefaultPolicy(Policy{
 		MaxLoopSteps:              2,
 		MaxAutonomousTasksPerHour: 1,
@@ -234,7 +353,7 @@ func TestAgent_Execute_BlocksLowConfidenceFinal(t *testing.T) {
 		},
 	}
 
-	a := New(responder, tools.NewRegistry(), "")
+	a := New(nil, responder, tools.NewRegistry(), "")
 	a.SetDefaultPolicy(Policy{MinFinalConfidence: 0.35})
 
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "risky"})
@@ -263,7 +382,7 @@ func TestAgent_Execute_BlocksAfterMaxLoopSteps(t *testing.T) {
 		},
 	}
 
-	a := New(responder, reg, "")
+	a := New(nil, responder, reg, "")
 	a.SetDefaultPolicy(Policy{MaxLoopSteps: 2, MaxToolCallsPerTurn: 2, MinFinalConfidence: 0})
 
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "loop"})
@@ -275,6 +394,105 @@ func TestAgent_Execute_BlocksAfterMaxLoopSteps(t *testing.T) {
 	}
 }
 
+func TestAgent_Execute_BlocksDisallowedToolClass(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:      "mod_tool",
+		toolClass: tools.ToolClassModeration,
+		exec: func(input json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	})
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			return `{"tool":"mod_tool","args":{}}`, nil
+		},
+	}
+	a := New(nil, responder, reg, "")
+	a.SetPolicyResolver(func(ctx context.Context, input llm.MessageInput) Policy {
+		return Policy{AllowedToolClasses: []string{"knowledge"}}
+	})
+
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "moderate this"})
+	if !res.Blocked {
+		t.Fatal("expected class policy block")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "class") {
+		t.Fatalf("expected class block reason, got %q", res.BlockReason)
+	}
+}
+
+func TestAgent_Execute_BlocksSensitiveToolWithoutApproval(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:             "sensitive_tool",
+		toolClass:        tools.ToolClassSensitive,
+		requiresApproval: true,
+		exec: func(input json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	})
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			return `{"tool":"sensitive_tool","args":{}}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "run a risky action"})
+	if !res.Blocked {
+		t.Fatal("expected approval gate block")
+	}
+	if !strings.Contains(strings.ToLower(res.BlockReason), "requires approval") {
+		t.Fatalf("expected approval block reason, got %q", res.BlockReason)
+	}
+	foundAudit := false
+	for _, entry := range res.Trace {
+		if strings.EqualFold(strings.TrimSpace(entry.Stage), "audit.approval_required") {
+			foundAudit = true
+			break
+		}
+	}
+	if !foundAudit {
+		t.Fatal("expected audit.approval_required trace event")
+	}
+}
+
+func TestAgent_Execute_AllowsSensitiveToolWithApproval(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name:             "sensitive_tool",
+		toolClass:        tools.ToolClassSensitive,
+		requiresApproval: true,
+		exec: func(input json.RawMessage) (string, error) {
+			return "ok", nil
+		},
+	})
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			if callCount == 1 {
+				return `{"tool":"sensitive_tool","args":{}}`, nil
+			}
+			return `{"final":"approved run complete","confidence":0.9}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	ctx := WithSensitiveToolApproval(context.Background())
+	res := a.Execute(ctx, llm.MessageInput{Text: "run an approved risky action"})
+	if res.Blocked {
+		t.Fatalf("expected approved sensitive action to run, got block: %s", res.BlockReason)
+	}
+	if !res.ActionTaken {
+		t.Fatal("expected sensitive tool execution")
+	}
+	if res.ToolName != "sensitive_tool" {
+		t.Fatalf("expected sensitive_tool, got %s", res.ToolName)
+	}
+}
+
 func TestAgent_Execute_CapturesTrace(t *testing.T) {
 	responder := &mockResponder{
 		replyFunc: func(input llm.MessageInput) (string, error) {
@@ -282,7 +500,7 @@ func TestAgent_Execute_CapturesTrace(t *testing.T) {
 		},
 	}
 
-	a := New(responder, tools.NewRegistry(), "")
+	a := New(nil, responder, tools.NewRegistry(), "")
 	res := a.Execute(context.Background(), llm.MessageInput{Text: "hi"})
 	if len(res.Trace) == 0 {
 		t.Fatal("expected trace events to be captured")

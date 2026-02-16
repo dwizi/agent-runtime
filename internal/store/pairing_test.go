@@ -103,7 +103,7 @@ func TestPairingDeny(t *testing.T) {
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "spinner_test.sqlite")
+	dbPath := filepath.Join(t.TempDir(), "agent_runtime_test.sqlite")
 	sqlStore, err := New(dbPath)
 	if err != nil {
 		t.Fatalf("open test store: %v", err)

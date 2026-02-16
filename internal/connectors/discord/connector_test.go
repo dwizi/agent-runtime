@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/llm"
-	llmsafety "github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	llmsafety "github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakePairingStore struct {

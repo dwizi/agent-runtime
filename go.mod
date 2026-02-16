@@ -1,4 +1,4 @@
-module github.com/carlos/spinner
+module github.com/dwizi/agent-runtime
 
 go 1.23.0
 

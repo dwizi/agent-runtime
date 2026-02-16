@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/memorylog"
+	"github.com/dwizi/agent-runtime/internal/memorylog"
 )
 
 func appendOutboundChatLog(workspaceRoot, workspaceID, connector, externalID, text string) {
@@ -17,7 +17,7 @@ func appendOutboundChatLog(workspaceRoot, workspaceID, connector, externalID, te
 		Connector:     strings.ToLower(strings.TrimSpace(connector)),
 		ExternalID:    strings.TrimSpace(externalID),
 		Direction:     "outbound",
-		ActorID:       "spinner",
+		ActorID:       "agent-runtime",
 		DisplayName:   strings.TrimSpace(externalID),
 		Text:          strings.TrimSpace(text),
 		Timestamp:     time.Now().UTC(),

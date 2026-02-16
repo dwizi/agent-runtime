@@ -174,6 +174,22 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			UNIQUE(account_key, uid),
 			UNIQUE(account_key, message_id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS agent_audit_events (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL,
+			context_id TEXT NOT NULL,
+			connector TEXT NOT NULL,
+			external_id TEXT NOT NULL,
+			source_user_id TEXT,
+			event_type TEXT NOT NULL,
+			stage TEXT NOT NULL,
+			tool_name TEXT,
+			tool_class TEXT,
+			blocked INTEGER NOT NULL DEFAULT 0,
+			block_reason TEXT,
+			message TEXT,
+			created_at_unix INTEGER NOT NULL
+		);`,
 	}
 
 	for _, query := range queries {

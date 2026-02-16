@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/llm"
-	llmsafety "github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	llmsafety "github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 type fakePairingStore struct {
@@ -621,5 +621,30 @@ func TestPollOnceLLMActionProposalQueuesApproval(t *testing.T) {
 	}
 	if !strings.Contains(sentBody, "'act-1'") {
 		t.Fatalf("expected action id in compact notice, got %s", sentBody)
+	}
+}
+
+func TestSendMessageIncludesTelegramErrorDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":          false,
+			"error_code":  400,
+			"description": "Bad Request: chat not found",
+		})
+	}))
+	defer server.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	connector := New("test-token", server.URL, t.TempDir(), 1, nil, nil, nil, nil, logger)
+
+	err := connector.sendMessage(context.Background(), 99, "hello")
+	if err == nil {
+		t.Fatal("expected sendMessage to fail")
+	}
+	if !strings.Contains(err.Error(), "error_code=400") {
+		t.Fatalf("expected telegram error code in message, got %v", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "chat not found") {
+		t.Fatalf("expected telegram description in message, got %v", err)
 	}
 }

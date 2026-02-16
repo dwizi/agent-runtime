@@ -14,9 +14,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/carlos/spinner/internal/adminclient"
-	"github.com/carlos/spinner/internal/config"
-	"github.com/carlos/spinner/internal/envsync"
+	"github.com/dwizi/agent-runtime/internal/adminclient"
+	"github.com/dwizi/agent-runtime/internal/config"
+	"github.com/dwizi/agent-runtime/internal/envsync"
 )
 
 type model struct {
@@ -248,10 +248,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) View() string {
 	if m.quitting {
-		return "spinner tui closed\n"
+		return "agent-runtime tui closed\n"
 	}
 
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")).Render("spinner admin tui")
+	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")).Render("agent-runtime admin tui")
 	highlight := lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
 	errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -796,21 +796,21 @@ func syncEnvAtStartup(cfg config.Config, logger *slog.Logger) (config.Config, st
 		path := filepathOrEmpty(result.PKIDir, "clients-ca.crt")
 		if path != "" {
 			cfg.AdminTLSCAFile = path
-			_ = os.Setenv("SPINNER_ADMIN_TLS_CA_FILE", path)
+			_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CA_FILE", path)
 		}
 	}
 	if cfg.AdminTLSCertFile == "" {
 		path := filepathOrEmpty(result.PKIDir, "admin-client.crt")
 		if path != "" {
 			cfg.AdminTLSCertFile = path
-			_ = os.Setenv("SPINNER_ADMIN_TLS_CERT_FILE", path)
+			_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE", path)
 		}
 	}
 	if cfg.AdminTLSKeyFile == "" {
 		path := filepathOrEmpty(result.PKIDir, "admin-client.key")
 		if path != "" {
 			cfg.AdminTLSKeyFile = path
-			_ = os.Setenv("SPINNER_ADMIN_TLS_KEY_FILE", path)
+			_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE", path)
 		}
 	}
 
@@ -838,7 +838,7 @@ func recoverInvalidTLSConfig(cfg config.Config, pkiDir string, logger *slog.Logg
 	if strings.TrimSpace(cfg.AdminTLSCAFile) != "" && !validCACert(cfg.AdminTLSCAFile) {
 		logger.Warn("invalid admin ca file configured, clearing for tui session", "path", cfg.AdminTLSCAFile)
 		cfg.AdminTLSCAFile = ""
-		_ = os.Setenv("SPINNER_ADMIN_TLS_CA_FILE", "")
+		_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CA_FILE", "")
 		info = "ignored invalid CA path in environment"
 	}
 
@@ -852,8 +852,8 @@ func recoverInvalidTLSConfig(cfg config.Config, pkiDir string, logger *slog.Logg
 		logger.Warn("incomplete admin client cert configuration, clearing for tui session")
 		cfg.AdminTLSCertFile = ""
 		cfg.AdminTLSKeyFile = ""
-		_ = os.Setenv("SPINNER_ADMIN_TLS_CERT_FILE", "")
-		_ = os.Setenv("SPINNER_ADMIN_TLS_KEY_FILE", "")
+		_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE", "")
+		_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE", "")
 		if info == "" {
 			info = "ignored incomplete client cert config"
 		}
@@ -870,8 +870,8 @@ func recoverInvalidTLSConfig(cfg config.Config, pkiDir string, logger *slog.Logg
 		if _, err := tls.LoadX509KeyPair(fallbackCert, fallbackKey); err == nil {
 			cfg.AdminTLSCertFile = fallbackCert
 			cfg.AdminTLSKeyFile = fallbackKey
-			_ = os.Setenv("SPINNER_ADMIN_TLS_CERT_FILE", fallbackCert)
-			_ = os.Setenv("SPINNER_ADMIN_TLS_KEY_FILE", fallbackKey)
+			_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE", fallbackCert)
+			_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE", fallbackKey)
 			if info == "" {
 				info = "recovered client cert path from local caddy pki"
 			}
@@ -882,8 +882,8 @@ func recoverInvalidTLSConfig(cfg config.Config, pkiDir string, logger *slog.Logg
 	logger.Warn("invalid admin client cert configuration, continuing without client cert for tui")
 	cfg.AdminTLSCertFile = ""
 	cfg.AdminTLSKeyFile = ""
-	_ = os.Setenv("SPINNER_ADMIN_TLS_CERT_FILE", "")
-	_ = os.Setenv("SPINNER_ADMIN_TLS_KEY_FILE", "")
+	_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE", "")
+	_ = os.Setenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE", "")
 	if info == "" {
 		info = "ignored invalid client cert config"
 	}

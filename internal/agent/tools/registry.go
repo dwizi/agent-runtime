@@ -55,6 +55,11 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args json.RawMe
 	if !exists {
 		return "", fmt.Errorf("tool not found: %s", name)
 	}
+	if validator, ok := tool.(ArgumentValidator); ok {
+		if err := validator.ValidateArgs(args); err != nil {
+			return "", fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+	}
 	return tool.Execute(ctx, args)
 }
 
@@ -62,7 +67,7 @@ func (r *Registry) ExecuteTool(ctx context.Context, name string, args json.RawMe
 func (r *Registry) DescribeAll() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	// Sort for deterministic output
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {

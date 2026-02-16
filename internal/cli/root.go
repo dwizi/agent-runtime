@@ -10,18 +10,18 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/carlos/spinner/internal/app"
-	"github.com/carlos/spinner/internal/config"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/tui"
+	"github.com/dwizi/agent-runtime/internal/app"
+	"github.com/dwizi/agent-runtime/internal/config"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/tui"
 )
 
 const version = "0.1.0"
 
 func NewRoot(logger *slog.Logger) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "spinner",
-		Short: "Spinner is a channel-first orchestration runtime",
+		Use:   "agent-runtime",
+		Short: "Agent Runtime is a channel-first orchestration runtime",
 	}
 
 	root.AddCommand(newServeCommand(logger))

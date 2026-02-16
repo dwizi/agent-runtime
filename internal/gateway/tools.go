@@ -1,22 +1,49 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/agent/tools"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 // Ensure implementation
 var _ tools.Tool = (*SearchTool)(nil)
 var _ tools.Tool = (*CreateTaskTool)(nil)
+var _ tools.Tool = (*ModerationTriageTool)(nil)
+var _ tools.Tool = (*DraftEscalationTool)(nil)
+var _ tools.Tool = (*DraftFAQAnswerTool)(nil)
+var _ tools.Tool = (*CreateObjectiveTool)(nil)
+var _ tools.Tool = (*UpdateObjectiveTool)(nil)
+var _ tools.Tool = (*UpdateTaskTool)(nil)
+var _ tools.MetadataProvider = (*SearchTool)(nil)
+var _ tools.MetadataProvider = (*CreateTaskTool)(nil)
+var _ tools.MetadataProvider = (*ModerationTriageTool)(nil)
+var _ tools.MetadataProvider = (*DraftEscalationTool)(nil)
+var _ tools.MetadataProvider = (*DraftFAQAnswerTool)(nil)
+var _ tools.MetadataProvider = (*CreateObjectiveTool)(nil)
+var _ tools.MetadataProvider = (*UpdateObjectiveTool)(nil)
+var _ tools.MetadataProvider = (*UpdateTaskTool)(nil)
+
+var _ tools.ArgumentValidator = (*SearchTool)(nil)
+var _ tools.ArgumentValidator = (*CreateTaskTool)(nil)
+var _ tools.ArgumentValidator = (*ModerationTriageTool)(nil)
+var _ tools.ArgumentValidator = (*DraftEscalationTool)(nil)
+var _ tools.ArgumentValidator = (*DraftFAQAnswerTool)(nil)
+var _ tools.ArgumentValidator = (*CreateObjectiveTool)(nil)
+var _ tools.ArgumentValidator = (*UpdateObjectiveTool)(nil)
+var _ tools.ArgumentValidator = (*UpdateTaskTool)(nil)
 
 type contextKey string
 
@@ -35,32 +62,61 @@ func NewSearchTool(retriever Retriever) *SearchTool {
 }
 
 func (t *SearchTool) Name() string { return "search_knowledge_base" }
+func (t *SearchTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassKnowledge
+}
+func (t *SearchTool) RequiresApproval() bool { return false }
 
 func (t *SearchTool) Description() string {
 	return "Search the documentation and knowledge base for answers."
 }
 
 func (t *SearchTool) ParametersSchema() string {
-	return `{"query": "string"}`
+	return `{"query":"string","limit":"number(optional 1-10)"}`
+}
+
+func (t *SearchTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Query string `json:"query"`
+		Limit int    `json:"limit"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	args.Query = strings.TrimSpace(args.Query)
+	if args.Query == "" {
+		return fmt.Errorf("query is required")
+	}
+	if len(args.Query) > 400 {
+		return fmt.Errorf("query is too long")
+	}
+	if args.Limit != 0 && (args.Limit < 1 || args.Limit > 10) {
+		return fmt.Errorf("limit must be between 1 and 10")
+	}
+	return nil
 }
 
 func (t *SearchTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 	var args struct {
 		Query string `json:"query"`
+		Limit int    `json:"limit"`
 	}
-	if err := json.Unmarshal(rawArgs, &args); err != nil {
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 	if strings.TrimSpace(args.Query) == "" {
 		return "Error: query cannot be empty", nil
 	}
-
-	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
-	if !ok {
-		return "", fmt.Errorf("internal error: context record missing from context")
+	limit := args.Limit
+	if limit < 1 {
+		limit = 5
 	}
 
-	results, err := t.retriever.Search(ctx, record.WorkspaceID, args.Query, 5)
+	record, _, err := readToolContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	results, err := t.retriever.Search(ctx, record.WorkspaceID, args.Query, limit)
 	if err != nil {
 		if errors.Is(err, qmd.ErrUnavailable) {
 			return "Search is currently unavailable.", nil
@@ -89,6 +145,10 @@ func NewCreateTaskTool(store Store, engine Engine) *CreateTaskTool {
 }
 
 func (t *CreateTaskTool) Name() string { return "create_task" }
+func (t *CreateTaskTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassTasking
+}
+func (t *CreateTaskTool) RequiresApproval() bool { return false }
 
 func (t *CreateTaskTool) Description() string {
 	return "Create a background task for complex jobs, investigations, or system changes."
@@ -98,23 +158,50 @@ func (t *CreateTaskTool) ParametersSchema() string {
 	return `{"title": "string", "description": "string", "priority": "p1|p2|p3"}`
 }
 
+func (t *CreateTaskTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Priority    string `json:"priority"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	args.Title = strings.TrimSpace(args.Title)
+	args.Description = strings.TrimSpace(args.Description)
+	if args.Title == "" {
+		return fmt.Errorf("title is required")
+	}
+	if len(args.Title) > 120 {
+		return fmt.Errorf("title is too long")
+	}
+	if args.Description == "" {
+		return fmt.Errorf("description is required")
+	}
+	if len(args.Description) > 4000 {
+		return fmt.Errorf("description is too long")
+	}
+	if strings.TrimSpace(args.Priority) != "" {
+		if _, ok := normalizeTriagePriority(args.Priority); !ok {
+			return fmt.Errorf("priority must be p1, p2, or p3")
+		}
+	}
+	return nil
+}
+
 func (t *CreateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 	var args struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
 		Priority    string `json:"priority"`
 	}
-	if err := json.Unmarshal(rawArgs, &args); err != nil {
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
-	if !ok {
-		return "", fmt.Errorf("internal error: context record missing from context")
-	}
-	input, ok := ctx.Value(contextKeyInput).(MessageInput)
-	if !ok {
-		return "", fmt.Errorf("internal error: message input missing from context")
+	record, input, err := readToolContext(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	priority := "p3"
@@ -155,4 +242,738 @@ func (t *CreateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	}
 
 	return fmt.Sprintf("Task created successfully (ID: %s).", task.ID), nil
+}
+
+// LearnSkillTool implements tools.Tool for persisting knowledge.
+type LearnSkillTool struct {
+	workspaceRoot string
+}
+
+func NewLearnSkillTool(workspaceRoot string) *LearnSkillTool {
+	return &LearnSkillTool{workspaceRoot: workspaceRoot}
+}
+
+func (t *LearnSkillTool) Name() string { return "learn_skill" }
+
+func (t *LearnSkillTool) Description() string {
+	return "Save a new fact, behavior, or operational procedure to your long-term knowledge base (skills)."
+}
+
+func (t *LearnSkillTool) ParametersSchema() string {
+	return `{"name": "string (snake_case)", "content": "string (markdown)"}`
+}
+
+func (t *LearnSkillTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	if !ok {
+		return "", fmt.Errorf("internal error: context record missing from context")
+	}
+
+	// We'll put it in context/skills/common for now, or a workspace-specific one
+	skillDir := filepath.Join(t.workspaceRoot, record.WorkspaceID, "context", "skills", "common")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return "", err
+	}
+
+	path := filepath.Join(skillDir, args.Name+".md")
+	if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("I've learned a new skill: %s", args.Name), nil
+}
+
+// RunActionTool implements tools.Tool for executing system actions.
+type RunActionTool struct {
+	executor ActionExecutor
+	store    Store
+}
+
+func NewRunActionTool(store Store, executor ActionExecutor) *RunActionTool {
+	return &RunActionTool{store: store, executor: executor}
+}
+
+func (t *RunActionTool) Name() string { return "run_action" }
+
+func (t *RunActionTool) Description() string {
+	return "Execute a system action like 'run_command' (curl, etc.), 'send_email', or 'webhook'. Use this for external integration."
+}
+
+func (t *RunActionTool) ParametersSchema() string {
+	return `{"type": "run_command|send_email|webhook", "target": "string", "summary": "brief summary", "payload": {}}`
+}
+
+func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Type    string         `json:"type"`
+		Target  string         `json:"target"`
+		Summary string         `json:"summary"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	if !ok {
+		return "", fmt.Errorf("internal error: context record missing from context")
+	}
+	input, ok := ctx.Value(contextKeyInput).(MessageInput)
+	if !ok {
+		return "", fmt.Errorf("internal error: message input missing from context")
+	}
+
+	// 1. Create the approval record (even if it might be auto-approved in future, 
+	// for now we follow the system's human-in-the-loop design).
+	approval, err := t.store.CreateActionApproval(ctx, store.CreateActionApprovalInput{
+		WorkspaceID:     record.WorkspaceID,
+		ContextID:       record.ID,
+		Connector:       input.Connector,
+		ExternalID:      input.ExternalID,
+		RequesterUserID: input.FromUserID,
+		ActionType:      args.Type,
+		ActionTarget:    args.Target,
+		ActionSummary:   args.Summary,
+		Payload:         args.Payload,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// 2. Return the approval notice. 
+	// NOTE: In an autonomous loop, if the tool requires approval, 
+	// the loop should probably stop here and wait for the human.
+	return fmt.Sprintf("Action request created: %s. I need an admin to approve this before I can continue.", approval.ID), nil
+}
+
+type ModerationTriageTool struct{}
+
+func NewModerationTriageTool() *ModerationTriageTool {
+	return &ModerationTriageTool{}
+}
+
+func (t *ModerationTriageTool) Name() string { return "moderation_triage" }
+func (t *ModerationTriageTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassModeration
+}
+func (t *ModerationTriageTool) RequiresApproval() bool { return false }
+
+func (t *ModerationTriageTool) Description() string {
+	return "Classify moderation risk and suggest safe next steps for community messages."
+}
+
+func (t *ModerationTriageTool) ParametersSchema() string {
+	return `{"message":"string","reporter_user_id":"string(optional)","channel":"string(optional)"}`
+}
+
+func (t *ModerationTriageTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Message        string `json:"message"`
+		ReporterUserID string `json:"reporter_user_id"`
+		Channel        string `json:"channel"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.Message) == "" {
+		return fmt.Errorf("message is required")
+	}
+	if len(strings.TrimSpace(args.Message)) > 5000 {
+		return fmt.Errorf("message is too long")
+	}
+	return nil
+}
+
+func (t *ModerationTriageTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Message        string `json:"message"`
+		ReporterUserID string `json:"reporter_user_id"`
+		Channel        string `json:"channel"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	text := strings.ToLower(strings.TrimSpace(args.Message))
+	labels := []string{}
+	severity := "low"
+	action := "monitor and keep conversation civil."
+
+	if containsAnyKeyword(text, "kill", "dox", "swat", "suicide", "self-harm", "bomb", "shoot") {
+		severity = "critical"
+		labels = append(labels, "threat")
+		action = "escalate to moderators immediately, preserve evidence, and consider emergency protocol."
+	} else if containsAnyKeyword(text, "hate", "slur", "harass", "stalk", "abuse") {
+		severity = "high"
+		labels = append(labels, "harassment")
+		action = "escalate quickly, remove harmful content, and warn or mute according to policy."
+	} else if containsAnyKeyword(text, "spam", "airdrops", "dm me", "crypto signal", "free nitro") {
+		severity = "medium"
+		labels = append(labels, "spam")
+		action = "remove spam, apply anti-spam controls, and monitor repeat behavior."
+	} else {
+		labels = append(labels, "general")
+	}
+
+	lines := []string{
+		fmt.Sprintf("Severity: %s", severity),
+		fmt.Sprintf("Labels: %s", strings.Join(labels, ", ")),
+		fmt.Sprintf("Suggested action: %s", action),
+	}
+	if userID := strings.TrimSpace(args.ReporterUserID); userID != "" {
+		lines = append(lines, fmt.Sprintf("Reporter: %s", userID))
+	}
+	if channel := strings.TrimSpace(args.Channel); channel != "" {
+		lines = append(lines, fmt.Sprintf("Channel: %s", channel))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+type DraftEscalationTool struct{}
+
+func NewDraftEscalationTool() *DraftEscalationTool {
+	return &DraftEscalationTool{}
+}
+
+func (t *DraftEscalationTool) Name() string { return "draft_escalation" }
+func (t *DraftEscalationTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassDrafting
+}
+func (t *DraftEscalationTool) RequiresApproval() bool { return false }
+
+func (t *DraftEscalationTool) Description() string {
+	return "Draft an escalation note for moderators/admins from incident details."
+}
+
+func (t *DraftEscalationTool) ParametersSchema() string {
+	return `{"topic":"string","summary":"string","urgency":"low|medium|high|critical","evidence":["string"],"next_step":"string(optional)"}`
+}
+
+func (t *DraftEscalationTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Topic    string   `json:"topic"`
+		Summary  string   `json:"summary"`
+		Urgency  string   `json:"urgency"`
+		Evidence []string `json:"evidence"`
+		NextStep string   `json:"next_step"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.Topic) == "" {
+		return fmt.Errorf("topic is required")
+	}
+	if strings.TrimSpace(args.Summary) == "" {
+		return fmt.Errorf("summary is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(args.Urgency)) {
+	case "low", "medium", "high", "critical":
+	default:
+		return fmt.Errorf("urgency must be low, medium, high, or critical")
+	}
+	return nil
+}
+
+func (t *DraftEscalationTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Topic    string   `json:"topic"`
+		Summary  string   `json:"summary"`
+		Urgency  string   `json:"urgency"`
+		Evidence []string `json:"evidence"`
+		NextStep string   `json:"next_step"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	urgency := strings.ToUpper(strings.TrimSpace(args.Urgency))
+	lines := []string{
+		fmt.Sprintf("Escalation: %s", strings.TrimSpace(args.Topic)),
+		fmt.Sprintf("Urgency: %s", urgency),
+		fmt.Sprintf("Summary: %s", strings.TrimSpace(args.Summary)),
+	}
+	if len(args.Evidence) > 0 {
+		lines = append(lines, "Evidence:")
+		for _, item := range args.Evidence {
+			clean := strings.TrimSpace(item)
+			if clean == "" {
+				continue
+			}
+			lines = append(lines, "- "+clean)
+		}
+	}
+	nextStep := strings.TrimSpace(args.NextStep)
+	if nextStep == "" {
+		nextStep = "Assign an on-call moderator and post an update in the admin channel."
+	}
+	lines = append(lines, "Recommended next step: "+nextStep)
+	return strings.Join(lines, "\n"), nil
+}
+
+type DraftFAQAnswerTool struct{}
+
+func NewDraftFAQAnswerTool() *DraftFAQAnswerTool {
+	return &DraftFAQAnswerTool{}
+}
+
+func (t *DraftFAQAnswerTool) Name() string { return "draft_faq_answer" }
+func (t *DraftFAQAnswerTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassDrafting
+}
+func (t *DraftFAQAnswerTool) RequiresApproval() bool { return false }
+
+func (t *DraftFAQAnswerTool) Description() string {
+	return "Draft a concise FAQ-style community answer from key points."
+}
+
+func (t *DraftFAQAnswerTool) ParametersSchema() string {
+	return `{"question":"string","key_points":["string"],"tone":"neutral|friendly|strict(optional)","include_follow_up":"boolean(optional)"}`
+}
+
+func (t *DraftFAQAnswerTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Question        string   `json:"question"`
+		KeyPoints       []string `json:"key_points"`
+		Tone            string   `json:"tone"`
+		IncludeFollowUp bool     `json:"include_follow_up"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.Question) == "" {
+		return fmt.Errorf("question is required")
+	}
+	if len(args.KeyPoints) == 0 {
+		return fmt.Errorf("key_points must contain at least one item")
+	}
+	if tone := strings.ToLower(strings.TrimSpace(args.Tone)); tone != "" {
+		switch tone {
+		case "neutral", "friendly", "strict":
+		default:
+			return fmt.Errorf("tone must be neutral, friendly, or strict")
+		}
+	}
+	return nil
+}
+
+func (t *DraftFAQAnswerTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Question        string   `json:"question"`
+		KeyPoints       []string `json:"key_points"`
+		Tone            string   `json:"tone"`
+		IncludeFollowUp bool     `json:"include_follow_up"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	tonePrefix := ""
+	switch strings.ToLower(strings.TrimSpace(args.Tone)) {
+	case "friendly":
+		tonePrefix = "Thanks for asking. "
+	case "strict":
+		tonePrefix = "Please follow the policy: "
+	default:
+		tonePrefix = ""
+	}
+
+	points := make([]string, 0, len(args.KeyPoints))
+	for _, item := range args.KeyPoints {
+		clean := strings.TrimSpace(item)
+		if clean == "" {
+			continue
+		}
+		points = append(points, clean)
+	}
+	answer := tonePrefix + strings.Join(points, " ")
+	if args.IncludeFollowUp {
+		answer += " If you need more detail, share your exact case and I can help further."
+	}
+	return strings.TrimSpace(answer), nil
+}
+
+type CreateObjectiveTool struct {
+	store Store
+}
+
+func NewCreateObjectiveTool(store Store) *CreateObjectiveTool {
+	return &CreateObjectiveTool{store: store}
+}
+
+func (t *CreateObjectiveTool) Name() string { return "create_objective" }
+func (t *CreateObjectiveTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassObjective
+}
+func (t *CreateObjectiveTool) RequiresApproval() bool { return true }
+
+func (t *CreateObjectiveTool) Description() string {
+	return "Create a proactive monitoring objective for recurring community checks."
+}
+
+func (t *CreateObjectiveTool) ParametersSchema() string {
+	return `{"title":"string","prompt":"string","interval_seconds":"number(optional >=60)","active":"boolean(optional)"}`
+}
+
+func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Title           string `json:"title"`
+		Prompt          string `json:"prompt"`
+		IntervalSeconds int    `json:"interval_seconds"`
+		Active          *bool  `json:"active"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.Title) == "" {
+		return fmt.Errorf("title is required")
+	}
+	if strings.TrimSpace(args.Prompt) == "" {
+		return fmt.Errorf("prompt is required")
+	}
+	if args.IntervalSeconds != 0 && args.IntervalSeconds < 60 {
+		return fmt.Errorf("interval_seconds must be >= 60")
+	}
+	return nil
+}
+
+func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Title           string `json:"title"`
+		Prompt          string `json:"prompt"`
+		IntervalSeconds int    `json:"interval_seconds"`
+		Active          *bool  `json:"active"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	record, _, err := readToolContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	intervalSeconds := args.IntervalSeconds
+	if intervalSeconds < 1 {
+		intervalSeconds = int((6 * time.Hour).Seconds())
+	}
+	active := true
+	if args.Active != nil {
+		active = *args.Active
+	}
+	obj, err := t.store.CreateObjective(ctx, store.CreateObjectiveInput{
+		WorkspaceID:     record.WorkspaceID,
+		ContextID:       record.ID,
+		Title:           strings.TrimSpace(args.Title),
+		Prompt:          strings.TrimSpace(args.Prompt),
+		TriggerType:     store.ObjectiveTriggerSchedule,
+		IntervalSeconds: intervalSeconds,
+		Active:          active,
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Objective created successfully (ID: %s).", obj.ID), nil
+}
+
+type UpdateObjectiveTool struct {
+	store Store
+}
+
+func NewUpdateObjectiveTool(store Store) *UpdateObjectiveTool {
+	return &UpdateObjectiveTool{store: store}
+}
+
+func (t *UpdateObjectiveTool) Name() string { return "update_objective" }
+func (t *UpdateObjectiveTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassObjective
+}
+func (t *UpdateObjectiveTool) RequiresApproval() bool { return true }
+
+func (t *UpdateObjectiveTool) Description() string {
+	return "Update objective settings such as title, prompt, schedule, trigger type, or active state."
+}
+
+func (t *UpdateObjectiveTool) ParametersSchema() string {
+	return `{"objective_id":"string","title":"string(optional)","prompt":"string(optional)","trigger_type":"schedule|event(optional)","event_key":"string(optional)","interval_seconds":"number(optional >=60)","active":"boolean(optional)"}`
+}
+
+func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		ObjectiveID     string `json:"objective_id"`
+		Title           string `json:"title"`
+		Prompt          string `json:"prompt"`
+		TriggerType     string `json:"trigger_type"`
+		EventKey        string `json:"event_key"`
+		IntervalSeconds int    `json:"interval_seconds"`
+		Active          *bool  `json:"active"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.ObjectiveID) == "" {
+		return fmt.Errorf("objective_id is required")
+	}
+	if args.IntervalSeconds != 0 && args.IntervalSeconds < 60 {
+		return fmt.Errorf("interval_seconds must be >= 60")
+	}
+	if trigger := strings.ToLower(strings.TrimSpace(args.TriggerType)); trigger != "" {
+		if trigger != string(store.ObjectiveTriggerSchedule) && trigger != string(store.ObjectiveTriggerEvent) {
+			return fmt.Errorf("trigger_type must be schedule or event")
+		}
+		if trigger == string(store.ObjectiveTriggerEvent) && strings.TrimSpace(args.EventKey) == "" {
+			return fmt.Errorf("event_key is required when trigger_type is event")
+		}
+	}
+	if strings.TrimSpace(args.Title) == "" &&
+		strings.TrimSpace(args.Prompt) == "" &&
+		strings.TrimSpace(args.TriggerType) == "" &&
+		strings.TrimSpace(args.EventKey) == "" &&
+		args.IntervalSeconds == 0 &&
+		args.Active == nil {
+		return fmt.Errorf("at least one field must be provided")
+	}
+	return nil
+}
+
+func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		ObjectiveID     string `json:"objective_id"`
+		Title           string `json:"title"`
+		Prompt          string `json:"prompt"`
+		TriggerType     string `json:"trigger_type"`
+		EventKey        string `json:"event_key"`
+		IntervalSeconds int    `json:"interval_seconds"`
+		Active          *bool  `json:"active"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+
+	update := store.UpdateObjectiveInput{
+		ID: strings.TrimSpace(args.ObjectiveID),
+	}
+	if title := strings.TrimSpace(args.Title); title != "" {
+		update.Title = &title
+	}
+	if prompt := strings.TrimSpace(args.Prompt); prompt != "" {
+		update.Prompt = &prompt
+	}
+	if trigger := strings.ToLower(strings.TrimSpace(args.TriggerType)); trigger != "" {
+		triggerType := store.ObjectiveTriggerType(trigger)
+		update.TriggerType = &triggerType
+	}
+	if eventKey := strings.TrimSpace(args.EventKey); eventKey != "" {
+		update.EventKey = &eventKey
+	}
+	if args.IntervalSeconds > 0 {
+		interval := args.IntervalSeconds
+		update.IntervalSeconds = &interval
+	}
+	if args.Active != nil {
+		update.Active = args.Active
+	}
+	obj, err := t.store.UpdateObjective(ctx, update)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Objective updated successfully (ID: %s, active=%t).", obj.ID, obj.Active), nil
+}
+
+type UpdateTaskTool struct {
+	store Store
+}
+
+func NewUpdateTaskTool(store Store) *UpdateTaskTool {
+	return &UpdateTaskTool{store: store}
+}
+
+func (t *UpdateTaskTool) Name() string { return "update_task" }
+func (t *UpdateTaskTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassTasking
+}
+func (t *UpdateTaskTool) RequiresApproval() bool { return true }
+
+func (t *UpdateTaskTool) Description() string {
+	return "Update task routing metadata or close a task with a completion summary."
+}
+
+func (t *UpdateTaskTool) ParametersSchema() string {
+	return `{"task_id":"string","status":"open|closed(optional)","route_class":"question|issue|task|moderation|noise(optional)","priority":"p1|p2|p3(optional)","lane":"string(optional)","due_in":"duration like 2h or 1d(optional)","summary":"string(optional)"}`
+}
+
+func (t *UpdateTaskTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		TaskID     string `json:"task_id"`
+		Status     string `json:"status"`
+		RouteClass string `json:"route_class"`
+		Priority   string `json:"priority"`
+		Lane       string `json:"lane"`
+		DueIn      string `json:"due_in"`
+		Summary    string `json:"summary"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(args.TaskID) == "" {
+		return fmt.Errorf("task_id is required")
+	}
+	if status := strings.ToLower(strings.TrimSpace(args.Status)); status != "" {
+		if status != "open" && status != "closed" {
+			return fmt.Errorf("status must be open or closed")
+		}
+	}
+	if cls := strings.TrimSpace(args.RouteClass); cls != "" {
+		if _, ok := normalizeTriageClass(cls); !ok {
+			return fmt.Errorf("invalid route_class")
+		}
+	}
+	if pr := strings.TrimSpace(args.Priority); pr != "" {
+		if _, ok := normalizeTriagePriority(pr); !ok {
+			return fmt.Errorf("invalid priority")
+		}
+	}
+	if due := strings.TrimSpace(args.DueIn); due != "" {
+		if _, err := parseDueWindow(due); err != nil {
+			return fmt.Errorf("invalid due_in: %w", err)
+		}
+	}
+	if strings.TrimSpace(args.Status) == "" &&
+		strings.TrimSpace(args.RouteClass) == "" &&
+		strings.TrimSpace(args.Priority) == "" &&
+		strings.TrimSpace(args.Lane) == "" &&
+		strings.TrimSpace(args.DueIn) == "" &&
+		strings.TrimSpace(args.Summary) == "" {
+		return fmt.Errorf("at least one update field must be provided")
+	}
+	return nil
+}
+
+func (t *UpdateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		TaskID     string `json:"task_id"`
+		Status     string `json:"status"`
+		RouteClass string `json:"route_class"`
+		Priority   string `json:"priority"`
+		Lane       string `json:"lane"`
+		DueIn      string `json:"due_in"`
+		Summary    string `json:"summary"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	taskID := strings.TrimSpace(args.TaskID)
+	status := strings.ToLower(strings.TrimSpace(args.Status))
+	if status == "closed" {
+		summary := strings.TrimSpace(args.Summary)
+		if summary == "" {
+			summary = "Closed by assistant."
+		}
+		if err := t.store.MarkTaskCompleted(ctx, taskID, time.Now().UTC(), summary, ""); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Task closed successfully (ID: %s).", taskID), nil
+	}
+
+	record, err := t.store.LookupTask(ctx, taskID)
+	if err != nil {
+		return "", err
+	}
+	class := TriageTask
+	if cls := strings.TrimSpace(record.RouteClass); cls != "" {
+		if normalized, ok := normalizeTriageClass(cls); ok {
+			class = normalized
+		}
+	}
+	if cls := strings.TrimSpace(args.RouteClass); cls != "" {
+		normalized, _ := normalizeTriageClass(cls)
+		class = normalized
+	}
+
+	priority := TriagePriorityP3
+	if p := strings.TrimSpace(record.Priority); p != "" {
+		if normalized, ok := normalizeTriagePriority(p); ok {
+			priority = normalized
+		}
+	}
+	if p := strings.TrimSpace(args.Priority); p != "" {
+		normalized, _ := normalizeTriagePriority(p)
+		priority = normalized
+	}
+
+	dueAt := record.DueAt
+	if dueAt.IsZero() {
+		dueAt = time.Now().UTC().Add(24 * time.Hour)
+	}
+	if due := strings.TrimSpace(args.DueIn); due != "" {
+		window, err := parseDueWindow(due)
+		if err != nil {
+			return "", err
+		}
+		dueAt = time.Now().UTC().Add(window)
+	}
+
+	lane := strings.TrimSpace(record.AssignedLane)
+	if lane == "" {
+		_, _, lane = routingDefaults(class)
+	}
+	if updatedLane := strings.TrimSpace(args.Lane); updatedLane != "" {
+		lane = updatedLane
+	}
+	if status == "open" && strings.TrimSpace(args.Summary) != "" {
+		// Summary is accepted for compatibility but open status does not mutate completion fields.
+	}
+
+	if _, err := t.store.UpdateTaskRouting(ctx, store.UpdateTaskRoutingInput{
+		ID:           taskID,
+		RouteClass:   string(class),
+		Priority:     string(priority),
+		DueAt:        dueAt,
+		AssignedLane: lane,
+	}); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Task updated successfully (ID: %s).", taskID), nil
+}
+
+func readToolContext(ctx context.Context) (store.ContextRecord, MessageInput, error) {
+	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	if !ok {
+		return store.ContextRecord{}, MessageInput{}, fmt.Errorf("internal error: context record missing from context")
+	}
+	input, ok := ctx.Value(contextKeyInput).(MessageInput)
+	if !ok {
+		return store.ContextRecord{}, MessageInput{}, fmt.Errorf("internal error: message input missing from context")
+	}
+	return record, input, nil
+}
+
+func strictDecodeArgs(raw json.RawMessage, target any) error {
+	payload := bytes.TrimSpace(raw)
+	if len(payload) == 0 {
+		payload = []byte(`{}`)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("unexpected trailing json")
+	}
+	return nil
+}
+
+func containsAnyKeyword(haystack string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
 }

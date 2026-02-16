@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/llm"
 )
 
 // Policy controls autonomous behavior limits for a single agent turn.
@@ -20,6 +20,8 @@ type Policy struct {
 	MaxToolCallsPerTurn int
 	// AllowedTools restricts which tools can be executed. Empty means all registered tools.
 	AllowedTools []string
+	// AllowedToolClasses restricts tool classes that can be executed. Empty means all classes.
+	AllowedToolClasses []string
 	// MaxAutonomousTasksPerHour limits create_task tool invocations per context key per hour.
 	MaxAutonomousTasksPerHour int
 	// MaxAutonomousTasksPerDay limits create_task tool invocations per context key per day.
@@ -34,8 +36,8 @@ type PolicyResolver func(ctx context.Context, input llm.MessageInput) Policy
 
 func defaultPolicy() Policy {
 	return Policy{
-		MaxLoopSteps:               4,
-		MaxTurnDuration:           30 * time.Second,
+		MaxLoopSteps:              4,
+		MaxTurnDuration:           120 * time.Second,
 		MaxInputChars:             12000,
 		MaxToolCallsPerTurn:       3,
 		MaxAutonomousTasksPerHour: 5,
@@ -60,6 +62,9 @@ func mergePolicy(base, override Policy) Policy {
 	}
 	if len(override.AllowedTools) > 0 {
 		policy.AllowedTools = cleanToolList(override.AllowedTools)
+	}
+	if len(override.AllowedToolClasses) > 0 {
+		policy.AllowedToolClasses = cleanToolList(override.AllowedToolClasses)
 	}
 	if override.MaxAutonomousTasksPerHour > 0 {
 		policy.MaxAutonomousTasksPerHour = override.MaxAutonomousTasksPerHour

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions"
-	actionexecutor "github.com/carlos/spinner/internal/actions/executor"
-	"github.com/carlos/spinner/internal/llm"
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/qmd"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/actions"
+	actionexecutor "github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/qmd"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 const (

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/carlos/spinner/internal/orchestrator"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/orchestrator"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 func TestWorkspaceIDFromPath(t *testing.T) {
@@ -33,7 +33,7 @@ func TestShouldQueueQMDForPath(t *testing.T) {
 	if shouldQueueQMDForPath(root, "/data/workspaces/ws-1/logs/chats/discord/123.md") {
 		t.Fatal("expected chat log markdown path to skip qmd indexing")
 	}
-	if shouldQueueQMDForPath(root, "/data/workspaces/ws-1/.qmd/spinner/index.md") {
+	if shouldQueueQMDForPath(root, "/data/workspaces/ws-1/.qmd/agent-runtime/index.md") {
 		t.Fatal("expected qmd internal path to skip qmd indexing")
 	}
 	if shouldQueueQMDForPath(root, "/tmp/outside.md") {

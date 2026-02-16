@@ -17,16 +17,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/carlos/spinner/internal/actions"
-	"github.com/carlos/spinner/internal/connectors/contextack"
-	"github.com/carlos/spinner/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/actions"
+	"github.com/dwizi/agent-runtime/internal/connectors/contextack"
+	"github.com/dwizi/agent-runtime/internal/heartbeat"
 	"github.com/gorilla/websocket"
 
-	"github.com/carlos/spinner/internal/gateway"
-	"github.com/carlos/spinner/internal/llm"
-	llmsafety "github.com/carlos/spinner/internal/llm/safety"
-	"github.com/carlos/spinner/internal/memorylog"
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/gateway"
+	"github.com/dwizi/agent-runtime/internal/llm"
+	llmsafety "github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/memorylog"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 const (
@@ -354,8 +354,8 @@ func (c *Connector) sendIdentify(conn *websocket.Conn, writeMu *sync.Mutex) erro
 				discordIntentMessageContents,
 			"properties": map[string]string{
 				"os":      "linux",
-				"browser": "spinner",
-				"device":  "spinner",
+				"browser": "agent-runtime",
+				"device":  "agent-runtime",
 			},
 		},
 	}
@@ -422,7 +422,7 @@ func (c *Connector) handleMessageCreate(ctx context.Context, message discordMess
 			return err
 		}
 		reply := fmt.Sprintf(
-			"Pairing token: `%s`\nOpen Spinner TUI and approve this token.\nThis token expires at %s UTC.",
+			"Pairing token: `%s`\nOpen Agent Runtime TUI and approve this token.\nThis token expires at %s UTC.",
 			pairing.Token,
 			pairing.ExpiresAt.Format("2006-01-02 15:04:05"),
 		)
@@ -440,27 +440,54 @@ func (c *Connector) handleMessageCreate(ctx context.Context, message discordMess
 	if err != nil {
 		return err
 	}
-	if !output.Handled || strings.TrimSpace(output.Reply) == "" {
+	trimmedGatewayReply := strings.TrimSpace(output.Reply)
+	if !output.Handled || trimmedGatewayReply == "" {
+		c.logger.Info(
+			"discord gateway produced no direct reply",
+			"channel_id", message.ChannelID,
+			"message_id", message.ID,
+			"handled", output.Handled,
+			"reply_len", len(trimmedGatewayReply),
+		)
 		replyToSend := attachmentReply
 		shouldReply, isMention := c.shouldAutoReply(message, text)
 		if shouldReply {
 			llmReply, notice, llmErr := c.generateReply(ctx, contextRecord, message, text, isMention)
-			if llmErr == nil && strings.TrimSpace(notice) != "" {
-				if replyToSend != "" {
-					replyToSend = strings.TrimSpace(notice) + "\n\n" + replyToSend
-				} else {
-					replyToSend = strings.TrimSpace(notice)
+			if llmErr != nil {
+				c.logger.Error(
+					"discord llm reply generation failed",
+					"error", llmErr,
+					"channel_id", message.ChannelID,
+					"message_id", message.ID,
+					"is_mention", isMention,
+				)
+				if replyToSend == "" {
+					replyToSend = "I started working on that but ran into an internal error. Please try again in a moment."
 				}
-			}
-			if llmErr == nil && strings.TrimSpace(llmReply) != "" {
-				if replyToSend != "" {
-					replyToSend = strings.TrimSpace(llmReply) + "\n\n" + replyToSend
-				} else {
-					replyToSend = strings.TrimSpace(llmReply)
+			} else {
+				if strings.TrimSpace(notice) != "" {
+					if replyToSend != "" {
+						replyToSend = strings.TrimSpace(notice) + "\n\n" + replyToSend
+					} else {
+						replyToSend = strings.TrimSpace(notice)
+					}
+				}
+				if strings.TrimSpace(llmReply) != "" {
+					if replyToSend != "" {
+						replyToSend = strings.TrimSpace(llmReply) + "\n\n" + replyToSend
+					} else {
+						replyToSend = strings.TrimSpace(llmReply)
+					}
 				}
 			}
 		}
 		if replyToSend == "" {
+			c.logger.Info(
+				"discord message produced no outbound reply",
+				"channel_id", message.ChannelID,
+				"message_id", message.ID,
+				"reason", "no_gateway_reply_and_no_fallback_reply",
+			)
 			return nil
 		}
 		c.logOutbound(contextRecord, message, replyToSend)
@@ -470,6 +497,12 @@ func (c *Connector) handleMessageCreate(ctx context.Context, message discordMess
 		output.Reply = strings.TrimSpace(output.Reply) + "\n\n" + attachmentReply
 	}
 	if strings.TrimSpace(output.Reply) == "" {
+		c.logger.Info(
+			"discord message produced no outbound reply",
+			"channel_id", message.ChannelID,
+			"message_id", message.ID,
+			"reason", "gateway_reply_empty_after_attachment_merge",
+		)
 		return nil
 	}
 	c.logOutbound(contextRecord, message, output.Reply)
@@ -687,7 +720,7 @@ func (c *Connector) sendChannelMessage(ctx context.Context, channelID, content s
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bot "+c.token)
-	req.Header.Set("User-Agent", "spinner/0.1")
+	req.Header.Set("User-Agent", "agent-runtime/0.1")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -740,7 +773,7 @@ func (c *Connector) fetchApplicationID(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bot "+c.token)
-	req.Header.Set("User-Agent", "spinner/0.1")
+	req.Header.Set("User-Agent", "agent-runtime/0.1")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -786,7 +819,7 @@ func (c *Connector) putCommands(ctx context.Context, url string, payload []map[s
 	}
 	req.Header.Set("Authorization", "Bot "+c.token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "spinner/0.1")
+	req.Header.Set("User-Agent", "agent-runtime/0.1")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -830,7 +863,7 @@ func buildDiscordCommandPayload(commands []gateway.SlashCommand) []map[string]an
 func discordCommandDescription(description string) string {
 	trimmed := strings.TrimSpace(description)
 	if trimmed == "" {
-		return "Spinner command"
+		return "Agent Runtime command"
 	}
 	if len(trimmed) > 100 {
 		return strings.TrimSpace(trimmed[:100])
@@ -907,7 +940,7 @@ func (c *Connector) sendInteractionResponse(ctx context.Context, interactionID, 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "spinner/0.1")
+	req.Header.Set("User-Agent", "agent-runtime/0.1")
 
 	res, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1131,7 +1164,7 @@ func (c *Connector) logOutbound(contextRecord store.ContextRecord, message disco
 		Connector:     "discord",
 		ExternalID:    message.ChannelID,
 		Direction:     "outbound",
-		ActorID:       "spinner",
+		ActorID:       "agent-runtime",
 		DisplayName:   displayName,
 		Text:          logText,
 		Timestamp:     time.Now().UTC(),

@@ -16,9 +16,9 @@ BotFather returns an HTTP API token after creation.
 ## 2. Set token and poll settings in `.env`
 
 ```env
-SPINNER_TELEGRAM_TOKEN=your_telegram_bot_token
-SPINNER_TELEGRAM_POLL_SECONDS=25
-SPINNER_COMMAND_SYNC_ENABLED=true
+AGENT_RUNTIME_TELEGRAM_TOKEN=your_telegram_bot_token
+AGENT_RUNTIME_TELEGRAM_POLL_SECONDS=25
+AGENT_RUNTIME_COMMAND_SYNC_ENABLED=true
 ```
 
 ## 3. Optional environment overrides
@@ -26,22 +26,22 @@ SPINNER_COMMAND_SYNC_ENABLED=true
 Defaults are usually correct:
 
 ```env
-SPINNER_TELEGRAM_API_BASE=https://api.telegram.org
-SPINNER_TELEGRAM_POLL_SECONDS=25
+AGENT_RUNTIME_TELEGRAM_API_BASE=https://api.telegram.org
+AGENT_RUNTIME_TELEGRAM_POLL_SECONDS=25
 ```
 
 Startup behavior:
-- Spinner calls Telegram `setMyCommands` when the connector starts.
-- Telegram menu commands are generated from Spinner's shared command catalog.
+- Agent Runtime calls Telegram `setMyCommands` when the connector starts.
+- Telegram menu commands are generated from Agent Runtime's shared command catalog.
 - command naming follows Telegram constraints (for example `admin-channel` appears as `admin_channel`).
 
-## 4. Start Spinner and bootstrap admin pairing
+## 4. Start Agent Runtime and bootstrap admin pairing
 
-1. Start Spinner:
+1. Start Agent Runtime:
    - `make run`
 2. Open DM with your bot and send:
    - `pair`
-3. Spinner should reply with a one-time pairing token.
+3. Agent Runtime should reply with a one-time pairing token.
 4. Open:
    - `make tui`
 5. Paste token, then approve with `a`.
@@ -67,18 +67,18 @@ If commands fail:
 
 If Telegram command menu does not refresh:
 
-- Restart Spinner to run command sync at connector bootstrap.
-- Ensure `SPINNER_COMMAND_SYNC_ENABLED=true`.
+- Restart Agent Runtime to run command sync at connector bootstrap.
+- Ensure `AGENT_RUNTIME_COMMAND_SYNC_ENABLED=true`.
 
 ## Production hardening
 
 1. Keep tokens out of git
    - Never commit `.env`.
-   - Store `SPINNER_TELEGRAM_TOKEN` in a secret manager (for example: cloud secret store, Vault, or CI/CD secrets).
+   - Store `AGENT_RUNTIME_TELEGRAM_TOKEN` in a secret manager (for example: cloud secret store, Vault, or CI/CD secrets).
 
 2. Rotate tokens regularly
    - Use `@BotFather` to revoke/refresh token on a schedule.
-   - Update runtime secret and redeploy Spinner immediately.
+   - Update runtime secret and redeploy Agent Runtime immediately.
 
 3. Use least privilege in chats
    - Add bot only to chats/channels where automation is required.

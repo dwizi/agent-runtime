@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/carlos/spinner/internal/store"
+	"github.com/dwizi/agent-runtime/internal/store"
 )
 
 func TestPluginExecuteSendsEmail(t *testing.T) {
 	plugin := New(Config{
 		Host: "smtp.example.com",
 		Port: 2525,
-		From: "Spinner Bot <bot@example.com>",
+		From: "Agent Runtime Bot <bot@example.com>",
 	})
 
 	var called bool
@@ -67,7 +67,7 @@ func TestPluginExecuteWithPayloadToAndHTML(t *testing.T) {
 		Port:     587,
 		Username: "bot@example.com",
 		Password: "secret",
-		From:     "Spinner Bot <bot@example.com>",
+		From:     "Agent Runtime Bot <bot@example.com>",
 	})
 
 	plugin.sendMail = func(addr string, auth gosmtp.Auth, from string, to []string, msg []byte) error {
@@ -106,7 +106,7 @@ func TestPluginExecuteWithPayloadToAndHTML(t *testing.T) {
 func TestPluginExecuteReturnsValidationError(t *testing.T) {
 	plugin := New(Config{
 		Host: "smtp.example.com",
-		From: "Spinner Bot <bot@example.com>",
+		From: "Agent Runtime Bot <bot@example.com>",
 	})
 	_, err := plugin.Execute(context.Background(), store.ActionApproval{
 		ActionType:   "send_email",
