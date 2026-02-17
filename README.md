@@ -18,7 +18,8 @@ retrieval.
 - Human approval gates for sensitive actions
 - Objective scheduler for recurring/event-driven proactivity
 - Workspace-scoped markdown retrieval with qmd
-- Admin TUI and HTTP API for operations
+- Fullscreen admin TUI (`Overview`, `Pairings`, `Objectives`, `Tasks`, `Activity`)
+- Admin HTTP API for operations
 
 ## Architecture
 
@@ -63,6 +64,9 @@ curl -fsS http://localhost:8080/readyz
 ```bash
 make tui
 ```
+
+The TUI runs in fullscreen with a sidebar/workbench/inspector layout and
+hybrid auto/manual refresh for operations.
 
 5. Optional: run Compose stack:
 
