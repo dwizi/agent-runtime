@@ -19,9 +19,9 @@ Create a one-shot bootstrap for a Cline session identity. Use a unique `external
 SESSION_ID="cline-$(date +%H%M%S)"
 echo "$SESSION_ID"
 
-AGENT_RUNTIME_ADMIN_TLS_CA_FILE="/Users/carlos/spinner/ops/caddy/pki/clients-ca.crt" \
-AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.crt" \
-AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.key" \
+AGENT_RUNTIME_ADMIN_TLS_CA_FILE="$PWD/ops/caddy/pki/clients-ca.crt" \
+AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="$PWD/ops/caddy/pki/admin-client.crt" \
+AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="$PWD/ops/caddy/pki/admin-client.key" \
 go run ./cmd/agent-runtime chat pairing pair-admin \
   --connector codex \
   --external-id "$SESSION_ID" \
@@ -38,9 +38,9 @@ Send a single message to the agent runtime:
 ```bash
 SESSION_ID="cline-133543"
 
-AGENT_RUNTIME_ADMIN_TLS_CA_FILE="/Users/carlos/spinner/ops/caddy/pki/clients-ca.crt" \
-AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.crt" \
-AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.key" \
+AGENT_RUNTIME_ADMIN_TLS_CA_FILE="$PWD/ops/caddy/pki/clients-ca.crt" \
+AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="$PWD/ops/caddy/pki/admin-client.crt" \
+AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="$PWD/ops/caddy/pki/admin-client.key" \
 go run ./cmd/agent-runtime chat \
   --connector codex \
   --external-id "$SESSION_ID" \
@@ -54,9 +54,9 @@ Interactive mode (send multiple messages):
 ```bash
 SESSION_ID="cline-133543"
 
-AGENT_RUNTIME_ADMIN_TLS_CA_FILE="/Users/carlos/spinner/ops/caddy/pki/clients-ca.crt" \
-AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.crt" \
-AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="/Users/carlos/spinner/ops/caddy/pki/admin-client.key" \
+AGENT_RUNTIME_ADMIN_TLS_CA_FILE="$PWD/ops/caddy/pki/clients-ca.crt" \
+AGENT_RUNTIME_ADMIN_TLS_CERT_FILE="$PWD/ops/caddy/pki/admin-client.crt" \
+AGENT_RUNTIME_ADMIN_TLS_KEY_FILE="$PWD/ops/caddy/pki/admin-client.key" \
 go run ./cmd/agent-runtime chat \
   --connector codex \
   --external-id "$SESSION_ID" \

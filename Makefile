@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: build test run tui compose-up compose-dev-up compose-up-qmd compose-down compose-dev-down compose-down-qmd sync-env
+.PHONY: build test run tui compose-up compose-dev-up compose-up-qmd compose-down compose-dev-down compose-down-qmd sync-env docs-check
 
 build:
 	$(GO) build ./cmd/agent-runtime
@@ -40,3 +40,6 @@ compose-down-qmd:
 
 sync-env:
 	sh ./scripts/local-sync-pki-env.sh
+
+docs-check:
+	./scripts/docs-check.sh

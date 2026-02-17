@@ -1,0 +1,12 @@
+exclude = [
+  "^http://localhost",
+  "^https://localhost",
+  "^http://127\\.0\\.0\\.1",
+  "^https://127\\.0\\.0\\.1",
+  "^https://example\\.com",
+  "^<repo-url>$"
+]
+exclude_mail = true
+accept = [200, 201, 202, 204, 206, 301, 302, 307, 308, 401, 403, 405, 429]
+max_retries = 2
+retry_wait_time = 2
