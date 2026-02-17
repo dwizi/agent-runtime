@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -163,6 +164,64 @@ func TestAgent_Execute_ToolCall(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(res.ToolCalls[0].ToolOutput), "success") {
 		t.Fatalf("expected tool output in call record, got %q", res.ToolCalls[0].ToolOutput)
+	}
+}
+
+func TestAgent_Execute_ContinuesAfterToolFailure(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name: "fail_tool",
+		exec: func(input json.RawMessage) (string, error) {
+			return "", fmt.Errorf("boom")
+		},
+	})
+	reg.Register(&mockTool{
+		name: "ok_tool",
+		exec: func(input json.RawMessage) (string, error) {
+			return "recovered", nil
+		},
+	})
+
+	callCount := 0
+	secondCallInput := ""
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return `{"tool":"fail_tool","args":{}}`, nil
+			case 2:
+				secondCallInput = input.Text
+				return `{"tool":"ok_tool","args":{}}`, nil
+			default:
+				return `{"final":"Recovered after retry","confidence":0.9}`, nil
+			}
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "solve it"})
+
+	if res.Error != nil {
+		t.Fatalf("expected agent to recover from tool failure, got %v", res.Error)
+	}
+	if res.Blocked {
+		t.Fatalf("expected run to stay unblocked, got %s", res.BlockReason)
+	}
+	if !strings.Contains(strings.ToLower(res.Reply), "recovered") {
+		t.Fatalf("expected recovery final reply, got %q", res.Reply)
+	}
+	if len(res.ToolCalls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d", len(res.ToolCalls))
+	}
+	if res.ToolCalls[0].Status != "failed" {
+		t.Fatalf("expected first tool call to fail, got %s", res.ToolCalls[0].Status)
+	}
+	if res.ToolCalls[1].Status != "succeeded" {
+		t.Fatalf("expected second tool call to succeed, got %s", res.ToolCalls[1].Status)
+	}
+	if !strings.Contains(secondCallInput, "error=boom") {
+		t.Fatalf("expected failure to be reflected in next loop input, got %q", secondCallInput)
 	}
 }
 

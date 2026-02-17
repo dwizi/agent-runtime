@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -250,6 +251,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.SandboxAllowedCommandsCSV == "" {
 		t.Fatal("expected default sandbox allowlist")
+	}
+	if !strings.Contains(","+cfg.SandboxAllowedCommandsCSV+",", ",rg,") {
+		t.Fatalf("expected default sandbox allowlist to include rg, got %s", cfg.SandboxAllowedCommandsCSV)
 	}
 	if cfg.SandboxRunnerCommand != "" {
 		t.Fatalf("expected default sandbox runner command empty, got %s", cfg.SandboxRunnerCommand)

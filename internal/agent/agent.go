@@ -110,7 +110,9 @@ func (a *Agent) SetGroundingPolicy(firstStep, everyStep bool) {
 type loopToolStep struct {
 	ToolName   string
 	ToolArgs   string
+	ToolStatus string
 	ToolOutput string
+	ToolError  string
 }
 
 type parsedDecision struct {
@@ -316,20 +318,33 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		}
 
 		output, err := a.registry.ExecuteTool(ctx, toolName, toolArgs)
-		if err != nil {
-			appendTrace("tool.error", err.Error())
-			result.ActionTaken = true
-			result.ToolName = toolName
-			result.Error = fmt.Errorf("tool execution failed: %w", err)
-			result.Reply = fmt.Sprintf("I tried to use `%s` but it failed: %v", toolName, err)
-			result.ToolCalls[toolCallIndex].Status = "failed"
-			result.ToolCalls[toolCallIndex].Error = compactLoopText(err.Error(), 800)
-			return result
-		}
-
 		toolCalls++
 		result.ActionTaken = true
 		result.ToolName = toolName
+		if err != nil {
+			appendTrace("tool.error", err.Error())
+			errText := compactLoopText(err.Error(), 1000)
+			if isApprovalRequiredToolError(err) {
+				result.Blocked = true
+				result.BlockReason = compactLoopText(err.Error(), 240)
+				result.Reply = "I need explicit approval before running that sensitive action."
+				result.ToolCalls[toolCallIndex].Status = "blocked"
+				result.ToolCalls[toolCallIndex].Error = compactLoopText(err.Error(), 800)
+				appendTrace("audit.approval_required", fmt.Sprintf("blocked tool=%s class=%s connector=%s workspace=%s context=%s external=%s user=%s", toolName, toolClass, strings.TrimSpace(input.Connector), strings.TrimSpace(input.WorkspaceID), strings.TrimSpace(input.ContextID), strings.TrimSpace(input.ExternalID), strings.TrimSpace(input.FromUserID)))
+				appendTrace("policy.blocked", result.BlockReason)
+				return result
+			}
+			result.ToolCalls[toolCallIndex].Status = "failed"
+			result.ToolCalls[toolCallIndex].Error = compactLoopText(err.Error(), 800)
+			toolSteps = append(toolSteps, loopToolStep{
+				ToolName:   toolName,
+				ToolArgs:   compactLoopText(string(toolArgs), 500),
+				ToolStatus: "failed",
+				ToolError:  errText,
+			})
+			continue
+		}
+
 		result.ToolOutput = output
 		result.ToolCalls[toolCallIndex].Status = "succeeded"
 		result.ToolCalls[toolCallIndex].ToolOutput = compactLoopText(output, 1200)
@@ -338,6 +353,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		toolSteps = append(toolSteps, loopToolStep{
 			ToolName:   toolName,
 			ToolArgs:   compactLoopText(string(toolArgs), 500),
+			ToolStatus: "succeeded",
 			ToolOutput: compactLoopText(output, 1000),
 		})
 	}
@@ -345,7 +361,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 	result.Blocked = true
 	result.BlockReason = "max loop steps reached"
 	if len(toolSteps) > 0 {
-		result.Reply = "I ran some tools but could not finalize confidently in time. Please review and I can continue."
+		result.Reply = "I ran several checks but could not finalize in time. Ask me to continue and I will keep iterating from here."
 	} else {
 		result.Reply = "I could not complete this safely in one autonomous turn."
 	}
@@ -361,10 +377,20 @@ func buildLoopInput(userText string, toolSteps []loopToolStep, step, maxSteps in
 	if len(toolSteps) > 0 {
 		builder.WriteString("WORK LOG:\n")
 		for idx, record := range toolSteps {
-			builder.WriteString(fmt.Sprintf("%d. tool=%s args=%s\n", idx+1, record.ToolName, record.ToolArgs))
-			builder.WriteString(fmt.Sprintf("   result=%s\n", record.ToolOutput))
+			status := strings.TrimSpace(record.ToolStatus)
+			if status == "" {
+				status = "unknown"
+			}
+			builder.WriteString(fmt.Sprintf("%d. tool=%s status=%s args=%s\n", idx+1, record.ToolName, status, record.ToolArgs))
+			if strings.TrimSpace(record.ToolError) != "" {
+				builder.WriteString(fmt.Sprintf("   error=%s\n", record.ToolError))
+			}
+			if strings.TrimSpace(record.ToolOutput) != "" {
+				builder.WriteString(fmt.Sprintf("   result=%s\n", record.ToolOutput))
+			}
 		}
 		builder.WriteString("\n")
+		builder.WriteString("If a tool failed, diagnose the error and try a different concrete approach. Avoid repeating the same failed call unchanged.\n\n")
 	}
 	builder.WriteString(fmt.Sprintf("STEP %d OF %d.\n", step, maxSteps))
 	builder.WriteString("Decide the best next action: call one tool, or return the final answer.")
@@ -591,6 +617,19 @@ func compactLoopText(input string, maxLen int) string {
 		return clean
 	}
 	return strings.TrimSpace(clean[:maxLen]) + "..."
+}
+
+func isApprovalRequiredToolError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "approval required") ||
+		strings.Contains(lower, "admin role required") ||
+		strings.Contains(lower, "explicit approval")
 }
 
 func (a *Agent) resolvePolicy(ctx context.Context, input llm.MessageInput) Policy {

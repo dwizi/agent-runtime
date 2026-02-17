@@ -18,6 +18,7 @@ type MockStore struct {
 	CreateTaskFunc      func(ctx context.Context, input store.CreateTaskInput) error
 	CreateObjectiveFunc func(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error)
 	UpdateObjectiveFunc func(ctx context.Context, input store.UpdateObjectiveInput) (store.Objective, error)
+	LookupIdentityFunc  func(ctx context.Context, connector, connectorUserID string) (store.UserIdentity, error)
 	LookupTaskFunc      func(ctx context.Context, id string) (store.TaskRecord, error)
 	UpdateTaskRoutingFn func(ctx context.Context, input store.UpdateTaskRoutingInput) (store.TaskRecord, error)
 	MarkTaskCompletedFn func(ctx context.Context, id string, finishedAt time.Time, summary, resultPath string) error
@@ -42,6 +43,13 @@ func (m *MockStore) UpdateObjective(ctx context.Context, input store.UpdateObjec
 		return m.UpdateObjectiveFunc(ctx, input)
 	}
 	return store.Objective{ID: input.ID, Active: true}, nil
+}
+
+func (m *MockStore) LookupUserIdentity(ctx context.Context, connector, connectorUserID string) (store.UserIdentity, error) {
+	if m.LookupIdentityFunc != nil {
+		return m.LookupIdentityFunc(ctx, connector, connectorUserID)
+	}
+	return store.UserIdentity{UserID: "u-admin", Role: "admin"}, nil
 }
 
 func (m *MockStore) LookupTask(ctx context.Context, id string) (store.TaskRecord, error) {
@@ -292,5 +300,24 @@ func TestUpdateTaskTool_Close(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(out), "task closed") {
 		t.Fatalf("unexpected output: %q", out)
+	}
+}
+
+func TestRunActionTool_ValidateArgsRejectsPlaceholderValues(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"run_command","target":"grep","summary":"extract headlines","payload":{"args":["-nE","<h1|<h2","PATH_AL_HTML"]}}`))
+	if err == nil {
+		t.Fatal("expected placeholder args validation error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "placeholder") {
+		t.Fatalf("expected placeholder validation message, got %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsAcceptsConcreteCommand(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"run_command","target":"grep","summary":"extract headlines","payload":{"args":["-nE","<h1|<h2","logs/input.html"]}}`))
+	if err != nil {
+		t.Fatalf("expected concrete args to validate, got %v", err)
 	}
 }

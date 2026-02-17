@@ -47,6 +47,7 @@ var _ tools.ArgumentValidator = (*DraftFAQAnswerTool)(nil)
 var _ tools.ArgumentValidator = (*CreateObjectiveTool)(nil)
 var _ tools.ArgumentValidator = (*UpdateObjectiveTool)(nil)
 var _ tools.ArgumentValidator = (*UpdateTaskTool)(nil)
+var _ tools.ArgumentValidator = (*RunActionTool)(nil)
 
 type contextKey string
 
@@ -289,7 +290,7 @@ func (t *CreateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Check approval if not system/admin
 	// CreateTaskTool previously had RequiresApproval() = false,
 	// but the Agent loop was blocking sensitive tools if they required approval.
@@ -306,7 +307,7 @@ func (t *CreateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	// And `RunActionTool` (legacy) requires approval.
 	// I should update `RunActionTool` to also support auto-approval for Admin!
 	// This is the missing piece. I updated specialized tools, but RunActionTool (the generic one used by legacy/chat agent) still blocks.
-	
+
 	priority := "p3"
 	if p, ok := normalizeTriagePriority(args.Priority); ok {
 		priority = string(p)
@@ -414,6 +415,54 @@ func (t *RunActionTool) ParametersSchema() string {
 	return `{"type": "run_command|send_email|webhook", "target": "string", "summary": "brief summary", "payload": {}}`
 }
 
+func (t *RunActionTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Type    string         `json:"type"`
+		Target  string         `json:"target"`
+		Summary string         `json:"summary"`
+		Payload map[string]any `json:"payload"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+
+	actionType := strings.ToLower(strings.TrimSpace(args.Type))
+	switch actionType {
+	case "run_command", "send_email", "webhook":
+	default:
+		return fmt.Errorf("type must be run_command, send_email, or webhook")
+	}
+
+	if actionType == "run_command" {
+		target := strings.TrimSpace(args.Target)
+		if target == "" {
+			return fmt.Errorf("target is required for run_command")
+		}
+		if looksLikePlaceholderValue(target) {
+			return fmt.Errorf("target contains a placeholder value; use a concrete command")
+		}
+		if command := strings.TrimSpace(runActionPayloadString(args.Payload, "command")); command != "" && looksLikePlaceholderValue(command) {
+			return fmt.Errorf("payload.command contains a placeholder value; use a concrete command")
+		}
+		if rawArgs, ok := runActionPayloadValue(args.Payload, "args"); ok {
+			parsedArgs, err := runActionParseArgs(rawArgs)
+			if err != nil {
+				return fmt.Errorf("payload.args is invalid: %w", err)
+			}
+			for _, value := range parsedArgs {
+				if looksLikePlaceholderValue(value) {
+					return fmt.Errorf("payload.args contains placeholder value %q; use a concrete path or argument", value)
+				}
+			}
+		}
+	}
+
+	if actionType == "webhook" && strings.TrimSpace(args.Target) == "" {
+		return fmt.Errorf("target is required for webhook")
+	}
+	return nil
+}
+
 func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 	var args struct {
 		Type    string         `json:"type"`
@@ -421,7 +470,7 @@ func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (s
 		Summary string         `json:"summary"`
 		Payload map[string]any `json:"payload"`
 	}
-	if err := json.Unmarshal(rawArgs, &args); err != nil {
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
@@ -477,7 +526,7 @@ func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (s
 
 	// 4. Execute
 	result, err := t.executor.Execute(ctx, approved)
-	
+
 	status := "succeeded"
 	msg := result.Message
 	if err != nil {
@@ -801,7 +850,7 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Check approval if not system/admin
 	if err := checkAutoApproval(ctx, t.store); err != nil {
 		// For objective creation, we don't have a specific ActionApproval flow wired up for 'create_objective' tool class yet?
@@ -910,7 +959,7 @@ func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	
+
 	if err := checkAutoApproval(ctx, t.store); err != nil {
 		return "", fmt.Errorf("approval required: %w", err)
 	}
@@ -1027,7 +1076,7 @@ func (t *UpdateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
-	
+
 	if err := checkAutoApproval(ctx, t.store); err != nil {
 		return "", fmt.Errorf("approval required: %w", err)
 	}
@@ -1160,4 +1209,107 @@ func checkAutoApproval(ctx context.Context, store Store) error {
 		return nil
 	}
 	return fmt.Errorf("admin role required")
+}
+
+func looksLikePlaceholderValue(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	normalized := strings.ToUpper(strings.Trim(trimmed, `"'`))
+
+	// Generic template markers such as <path>, <file>, ${VAR}, etc.
+	if (strings.Contains(normalized, "<") && strings.Contains(normalized, ">")) ||
+		(strings.Contains(normalized, "${") && strings.Contains(normalized, "}")) {
+		return true
+	}
+	for _, keyword := range []string{"PLACEHOLDER", "REPLACE_ME", "TO_BE_FILLED", "FILL_ME", "EXAMPLE_VALUE"} {
+		if strings.Contains(normalized, keyword) {
+			return true
+		}
+	}
+
+	// All-caps symbolic tokens like FILE_PATH, TARGET_URL, INPUT_FILE, etc.
+	if isLikelySymbolicToken(normalized) && containsAnyKeyword(normalized,
+		"PATH", "FILE", "URL", "URI", "HOST", "ENDPOINT", "TARGET", "INPUT", "OUTPUT", "DIR", "FOLDER", "ROUTE", "RUTA",
+	) {
+		return true
+	}
+	return false
+}
+
+func isLikelySymbolicToken(value string) bool {
+	if len(value) < 5 {
+		return false
+	}
+	if strings.ContainsAny(value, "/\\.:") {
+		return false
+	}
+	hasLetter := false
+	hasUnderscore := false
+	for _, ch := range value {
+		switch {
+		case ch >= 'A' && ch <= 'Z':
+			hasLetter = true
+		case ch >= '0' && ch <= '9':
+		case ch == '_':
+			hasUnderscore = true
+		default:
+			return false
+		}
+	}
+	return hasLetter && hasUnderscore
+}
+
+func runActionPayloadString(payload map[string]any, key string) string {
+	value, ok := runActionPayloadValue(payload, key)
+	if !ok || value == nil {
+		return ""
+	}
+	switch casted := value.(type) {
+	case string:
+		return strings.TrimSpace(casted)
+	default:
+		return strings.TrimSpace(fmt.Sprintf("%v", value))
+	}
+}
+
+func runActionPayloadValue(payload map[string]any, key string) (any, bool) {
+	if payload == nil {
+		return nil, false
+	}
+	if value, ok := payload[key]; ok {
+		return value, true
+	}
+	nestedRaw, ok := payload["payload"]
+	if !ok || nestedRaw == nil {
+		return nil, false
+	}
+	nested, ok := nestedRaw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	value, ok := nested[key]
+	return value, ok
+}
+
+func runActionParseArgs(value any) ([]string, error) {
+	switch casted := value.(type) {
+	case []string:
+		return casted, nil
+	case []any:
+		args := make([]string, 0, len(casted))
+		for _, raw := range casted {
+			args = append(args, strings.TrimSpace(fmt.Sprintf("%v", raw)))
+		}
+		return args, nil
+	case string:
+		trimmed := strings.TrimSpace(casted)
+		if trimmed == "" {
+			return nil, nil
+		}
+		return strings.Fields(trimmed), nil
+	default:
+		return nil, fmt.Errorf("unsupported args payload")
+	}
 }

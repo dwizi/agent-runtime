@@ -36,10 +36,10 @@ type PolicyResolver func(ctx context.Context, input llm.MessageInput) Policy
 
 func defaultPolicy() Policy {
 	return Policy{
-		MaxLoopSteps:              4,
+		MaxLoopSteps:              6,
 		MaxTurnDuration:           120 * time.Second,
 		MaxInputChars:             12000,
-		MaxToolCallsPerTurn:       3,
+		MaxToolCallsPerTurn:       6,
 		MaxAutonomousTasksPerHour: 5,
 		MaxAutonomousTasksPerDay:  25,
 		MinFinalConfidence:        0.35,
