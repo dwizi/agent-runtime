@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -11,14 +12,14 @@ func TestCreateAndListScheduleObjective(t *testing.T) {
 	ctx := context.Background()
 	nextRun := time.Now().UTC().Add(30 * time.Second)
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
-		WorkspaceID:     "ws-1",
-		ContextID:       "ctx-1",
-		Title:           "Daily digest review",
-		Prompt:          "Review recent events and post digest",
-		TriggerType:     ObjectiveTriggerSchedule,
-		IntervalSeconds: 300,
-		NextRunAt:       nextRun,
-		Active:          true,
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Title:       "Daily digest review",
+		Prompt:      "Review recent events and post digest",
+		TriggerType: ObjectiveTriggerSchedule,
+		CronExpr:    "*/5 * * * *",
+		NextRunAt:   nextRun,
+		Active:      true,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -28,6 +29,9 @@ func TestCreateAndListScheduleObjective(t *testing.T) {
 	}
 	if created.TriggerType != ObjectiveTriggerSchedule {
 		t.Fatalf("unexpected trigger type: %s", created.TriggerType)
+	}
+	if created.CronExpr != "*/5 * * * *" {
+		t.Fatalf("unexpected cron expression: %s", created.CronExpr)
 	}
 
 	listed, err := sqlStore.ListObjectives(ctx, ListObjectivesInput{
@@ -48,14 +52,14 @@ func TestListDueAndUpdateObjectiveRun(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
-		WorkspaceID:     "ws-2",
-		ContextID:       "ctx-2",
-		Title:           "Ops heartbeat",
-		Prompt:          "Send heartbeat status",
-		TriggerType:     ObjectiveTriggerSchedule,
-		IntervalSeconds: 60,
-		NextRunAt:       now.Add(-10 * time.Second),
-		Active:          true,
+		WorkspaceID: "ws-2",
+		ContextID:   "ctx-2",
+		Title:       "Ops heartbeat",
+		Prompt:      "Send heartbeat status",
+		TriggerType: ObjectiveTriggerSchedule,
+		CronExpr:    "* * * * *",
+		NextRunAt:   now.Add(-10 * time.Second),
+		Active:      true,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -119,13 +123,13 @@ func TestUpdatePauseAndDeleteObjective(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
-		WorkspaceID:     "ws-4",
-		ContextID:       "ctx-4",
-		Title:           "Draft summary",
-		Prompt:          "Draft a summary",
-		TriggerType:     ObjectiveTriggerSchedule,
-		IntervalSeconds: 120,
-		Active:          true,
+		WorkspaceID: "ws-4",
+		ContextID:   "ctx-4",
+		Title:       "Draft summary",
+		Prompt:      "Draft a summary",
+		TriggerType: ObjectiveTriggerSchedule,
+		CronExpr:    "*/15 * * * *",
+		Active:      true,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -163,5 +167,21 @@ func TestUpdatePauseAndDeleteObjective(t *testing.T) {
 	}
 	if _, err := sqlStore.LookupObjective(ctx, created.ID); err == nil {
 		t.Fatal("expected lookup to fail after delete")
+	}
+}
+
+func TestCreateScheduleObjectiveRequiresCronExpr(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+	_, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
+		WorkspaceID: "ws-5",
+		ContextID:   "ctx-5",
+		Title:       "Missing schedule",
+		Prompt:      "This should fail",
+		TriggerType: ObjectiveTriggerSchedule,
+		Active:      true,
+	})
+	if !errors.Is(err, ErrObjectiveInvalid) {
+		t.Fatalf("expected ErrObjectiveInvalid, got %v", err)
 	}
 }

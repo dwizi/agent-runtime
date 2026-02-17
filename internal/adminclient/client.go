@@ -34,6 +34,17 @@ type Pairing struct {
 	DeniedReason    string `json:"denied_reason"`
 }
 
+type StartPairingResponse struct {
+	ID              string `json:"id"`
+	Token           string `json:"token"`
+	TokenHint       string `json:"token_hint"`
+	Connector       string `json:"connector"`
+	ConnectorUserID string `json:"connector_user_id"`
+	DisplayName     string `json:"display_name"`
+	Status          string `json:"status"`
+	ExpiresAtUnix   int64  `json:"expires_at_unix"`
+}
+
 type ApprovePairingResponse struct {
 	ID              string `json:"id"`
 	Status          string `json:"status"`
@@ -45,18 +56,18 @@ type ApprovePairingResponse struct {
 }
 
 type Objective struct {
-	ID              string `json:"id"`
-	WorkspaceID     string `json:"workspace_id"`
-	ContextID       string `json:"context_id"`
-	Title           string `json:"title"`
-	Prompt          string `json:"prompt"`
-	TriggerType     string `json:"trigger_type"`
-	EventKey        string `json:"event_key"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	Active          bool   `json:"active"`
-	NextRunUnix     int64  `json:"next_run_unix"`
-	LastRunUnix     int64  `json:"last_run_unix"`
-	LastError       string `json:"last_error"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	ContextID   string `json:"context_id"`
+	Title       string `json:"title"`
+	Prompt      string `json:"prompt"`
+	TriggerType string `json:"trigger_type"`
+	EventKey    string `json:"event_key"`
+	CronExpr    string `json:"cron_expr"`
+	Active      bool   `json:"active"`
+	NextRunUnix int64  `json:"next_run_unix"`
+	LastRunUnix int64  `json:"last_run_unix"`
+	LastError   string `json:"last_error"`
 }
 
 type ListObjectivesResponse struct {
@@ -137,15 +148,38 @@ func New(cfg config.Config) (*Client, error) {
 		tlsConfig.Certificates = []tls.Certificate{clientCert}
 	}
 
+	timeout := time.Duration(cfg.AdminHTTPTimeoutSec) * time.Second
+	if timeout < time.Second {
+		timeout = 120 * time.Second
+	}
+
 	return &Client{
 		baseURL: strings.TrimRight(cfg.AdminAPIURL, "/"),
 		http: &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: tlsConfig,
 			},
-			Timeout: 15 * time.Second,
+			Timeout: timeout,
 		},
 	}, nil
+}
+
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	if c == nil {
+		return nil
+	}
+	if timeout < time.Second {
+		return c
+	}
+	clone := *c
+	if c.http == nil {
+		clone.http = &http.Client{Timeout: timeout}
+		return &clone
+	}
+	httpClone := *c.http
+	httpClone.Timeout = timeout
+	clone.http = &httpClone
+	return &clone
 }
 
 func (c *Client) LookupPairing(ctx context.Context, token string) (Pairing, error) {
@@ -158,6 +192,32 @@ func (c *Client) LookupPairing(ctx context.Context, token string) (Pairing, erro
 		return Pairing{}, err
 	}
 	return pairing, nil
+}
+
+func (c *Client) StartPairing(ctx context.Context, connector, connectorUserID, displayName string, expiresInSec int) (StartPairingResponse, error) {
+	payload := map[string]any{
+		"connector":         strings.TrimSpace(connector),
+		"connector_user_id": strings.TrimSpace(connectorUserID),
+		"display_name":      strings.TrimSpace(displayName),
+	}
+	if expiresInSec > 0 {
+		payload["expires_in_sec"] = expiresInSec
+	}
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		return StartPairingResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/pairings/start", bytes.NewReader(requestBody))
+	if err != nil {
+		return StartPairingResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	var response StartPairingResponse
+	if err := c.doJSON(req, &response); err != nil {
+		return StartPairingResponse{}, err
+	}
+	return response, nil
 }
 
 func (c *Client) ApprovePairing(ctx context.Context, token, approverUserID, role, targetUserID string) (ApprovePairingResponse, error) {

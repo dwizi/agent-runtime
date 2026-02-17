@@ -142,6 +142,67 @@ func TestTaskCompletionNotificationAppendsOutboundChatLog(t *testing.T) {
 	}
 }
 
+func TestTaskCompletionNotificationToCodexContextAppendsOutboundChatLog(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "codex", "codex-session-1", "Codex Test")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+	if _, err := sqlStore.SetContextAdminByExternal(ctx, "codex", "codex-session-1", true); err != nil {
+		t.Fatalf("set admin context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:          "task-codex-1",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        "objective",
+		Title:       "Codex objective",
+		Prompt:      "summarize run",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	notifier := newTaskCompletionNotifier(
+		workspaceRoot,
+		sqlStore,
+		map[string]connectors.Publisher{"codex": newCodexPublisher()},
+		"both",
+		"",
+		"",
+		&mockAgentService{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-codex-1",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindObjective,
+		Title:       "Codex objective",
+		Prompt:      "summarize run",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{Summary: "objective run complete"})
+
+	logPath := filepath.Join(workspaceRoot, contextRecord.WorkspaceID, "logs", "chats", "codex", "codex-session-1.md")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read codex log: %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "`OUTBOUND`") {
+		t.Fatalf("expected outbound codex log entry, got %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "objective run complete") {
+		t.Fatalf("expected codex objective summary in log, got %s", text)
+	}
+}
+
 func TestRoutedTaskSuccessNotificationUsesNaturalReply(t *testing.T) {
 	sqlStore := openAppTestStore(t)
 	ctx := context.Background()

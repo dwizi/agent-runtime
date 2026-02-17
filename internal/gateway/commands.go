@@ -90,6 +90,13 @@ func SlashCommands() []SlashCommand {
 			ArgumentDescription: "Action ID and optional reason",
 			ArgumentRequired:    true,
 		},
+		{
+			Name:                "route",
+			Description:         "Override triage routing for a task",
+			ArgumentName:        "override",
+			ArgumentDescription: "task-id class [p1|p2|p3] [due-window]",
+			ArgumentRequired:    true,
+		},
 	}
 }
 

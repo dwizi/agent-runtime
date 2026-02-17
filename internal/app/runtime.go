@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -223,7 +224,11 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		func(ctx context.Context, path string) {
 			workspaceID := workspaceIDFromPath(cfg.WorkspaceRoot, path)
 			if workspaceID != "" {
-				schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
+				if shouldTriggerObjectiveEventForPath(cfg.WorkspaceRoot, path) {
+					schedulerService.HandleMarkdownUpdate(ctx, workspaceID, path)
+				} else {
+					logger.Debug("skipping objective event trigger for ignored markdown path", "workspace_id", workspaceID, "path", path)
+				}
 				if shouldQueueQMDForPath(cfg.WorkspaceRoot, path) {
 					qmdService.QueueWorkspaceIndexForPath(workspaceID, path)
 				} else {
@@ -356,6 +361,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}
 		publishers[strings.ToLower(strings.TrimSpace(connector.Name()))] = publisher
 	}
+	if _, exists := publishers["codex"]; !exists {
+		publishers["codex"] = newCodexPublisherFromConfig(cfg, logger.With("connector", "codex"))
+	}
 	commandGateway.SetRoutingNotifier(newRoutingNotifier(
 		cfg.WorkspaceRoot,
 		sqlStore,
@@ -433,6 +441,10 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return r.engine.Start(runCtx)
 		})
 	})
+	recoveryStaleAfter := time.Duration(r.cfg.TaskRecoveryRunningStaleSec) * time.Second
+	if err := recoverPendingTasks(groupCtx, r.store, r.engine, recoveryStaleAfter, r.logger.With("component", "task-recovery")); err != nil {
+		r.logger.Error("startup task recovery failed", "error", err)
+	}
 	group.Go(func() error {
 		return runMonitored(groupCtx, r.heartbeat, "watcher", 0, func(runCtx context.Context) error {
 			return r.watcher.Start(runCtx)
@@ -511,25 +523,8 @@ func workspaceIDFromPath(workspaceRoot, changedPath string) string {
 }
 
 func shouldQueueQMDForPath(workspaceRoot, changedPath string) bool {
-	root := filepath.Clean(strings.TrimSpace(workspaceRoot))
-	path := filepath.Clean(strings.TrimSpace(changedPath))
-	if root == "" || path == "" {
-		return false
-	}
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	if strings.HasPrefix(relative, "..") || relative == "." {
-		return false
-	}
-	relative = filepath.ToSlash(relative)
-	separator := strings.Index(relative, "/")
-	if separator < 0 || separator+1 >= len(relative) {
-		return false
-	}
-	workspaceRelative := strings.ToLower(strings.TrimSpace(relative[separator+1:]))
-	if workspaceRelative == "" {
+	workspaceRelative, ok := workspaceRelativeMarkdownPath(workspaceRoot, changedPath)
+	if !ok {
 		return false
 	}
 	if strings.HasPrefix(workspaceRelative, ".qmd/") {
@@ -542,6 +537,54 @@ func shouldQueueQMDForPath(workspaceRoot, changedPath string) bool {
 		return false
 	}
 	return true
+}
+
+func shouldTriggerObjectiveEventForPath(workspaceRoot, changedPath string) bool {
+	workspaceRelative, ok := workspaceRelativeMarkdownPath(workspaceRoot, changedPath)
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(workspaceRelative, ".qmd/") {
+		return false
+	}
+	if workspaceRelative == "logs" || strings.HasPrefix(workspaceRelative, "logs/") {
+		return false
+	}
+	if workspaceRelative == "tasks" || strings.HasPrefix(workspaceRelative, "tasks/") {
+		return false
+	}
+	if workspaceRelative == "ops" || strings.HasPrefix(workspaceRelative, "ops/") {
+		return false
+	}
+	return true
+}
+
+func workspaceRelativeMarkdownPath(workspaceRoot, changedPath string) (string, bool) {
+	root := filepath.Clean(strings.TrimSpace(workspaceRoot))
+	path := filepath.Clean(strings.TrimSpace(changedPath))
+	if root == "" || path == "" {
+		return "", false
+	}
+	if strings.ToLower(filepath.Ext(path)) != ".md" {
+		return "", false
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	if strings.HasPrefix(relative, "..") || relative == "." {
+		return "", false
+	}
+	relative = filepath.ToSlash(relative)
+	separator := strings.Index(relative, "/")
+	if separator < 0 || separator+1 >= len(relative) {
+		return "", false
+	}
+	workspaceRelative := strings.ToLower(strings.TrimSpace(relative[separator+1:]))
+	if workspaceRelative == "" {
+		return "", false
+	}
+	return workspaceRelative, true
 }
 
 func hasPendingReindexTask(ctx context.Context, sqlStore *store.Store, workspaceID string) (bool, error) {
@@ -575,6 +618,118 @@ func hasPendingReindexTask(ctx context.Context, sqlStore *store.Store, workspace
 		return false, err
 	}
 	return len(running) > 0, nil
+}
+
+type taskRecoveryStore interface {
+	ListTasks(ctx context.Context, input store.ListTasksInput) ([]store.TaskRecord, error)
+	RequeueTask(ctx context.Context, id string) error
+}
+
+type taskRecoveryEngine interface {
+	Enqueue(task orchestrator.Task) (orchestrator.Task, error)
+}
+
+func recoverPendingTasks(
+	ctx context.Context,
+	sqlStore taskRecoveryStore,
+	engine taskRecoveryEngine,
+	staleRunningAfter time.Duration,
+	logger *slog.Logger,
+) error {
+	if sqlStore == nil || engine == nil {
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if staleRunningAfter <= 0 {
+		staleRunningAfter = 10 * time.Minute
+	}
+	now := time.Now().UTC()
+	queued, err := sqlStore.ListTasks(ctx, store.ListTasksInput{
+		Status: "queued",
+		Limit:  500,
+	})
+	if err != nil {
+		return fmt.Errorf("list queued tasks for recovery: %w", err)
+	}
+	running, err := sqlStore.ListTasks(ctx, store.ListTasksInput{
+		Status: "running",
+		Limit:  500,
+	})
+	if err != nil {
+		return fmt.Errorf("list running tasks for recovery: %w", err)
+	}
+	candidates := make([]store.TaskRecord, 0, len(queued)+len(running))
+	seen := map[string]struct{}{}
+	for _, item := range queued {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		if _, exists := seen[item.ID]; exists {
+			continue
+		}
+		seen[item.ID] = struct{}{}
+		candidates = append(candidates, item)
+	}
+	staleRequeued := 0
+	for _, item := range running {
+		taskID := strings.TrimSpace(item.ID)
+		if taskID == "" {
+			continue
+		}
+		startedAt := item.StartedAt.UTC()
+		isStale := startedAt.IsZero() || now.Sub(startedAt) >= staleRunningAfter
+		if !isStale {
+			continue
+		}
+		if err := sqlStore.RequeueTask(ctx, taskID); err != nil {
+			logger.Error("failed to requeue stale running task during startup recovery", "task_id", taskID, "error", err)
+			continue
+		}
+		item.Status = "queued"
+		item.WorkerID = 0
+		item.StartedAt = time.Time{}
+		item.FinishedAt = time.Time{}
+		item.ErrorMessage = ""
+		if _, exists := seen[taskID]; exists {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		candidates = append(candidates, item)
+		staleRequeued++
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left := candidates[i].CreatedAt.UTC()
+		right := candidates[j].CreatedAt.UTC()
+		if left.Equal(right) {
+			return candidates[i].ID < candidates[j].ID
+		}
+		return left.Before(right)
+	})
+	recovered := 0
+	for _, item := range candidates {
+		_, enqueueErr := engine.Enqueue(orchestrator.Task{
+			ID:          item.ID,
+			WorkspaceID: item.WorkspaceID,
+			ContextID:   item.ContextID,
+			Kind:        orchestrator.TaskKind(strings.TrimSpace(item.Kind)),
+			Title:       item.Title,
+			Prompt:      item.Prompt,
+		})
+		if enqueueErr != nil {
+			logger.Error("failed to enqueue recovered task", "task_id", item.ID, "error", enqueueErr)
+			continue
+		}
+		recovered++
+	}
+	logger.Info(
+		"startup task recovery completed",
+		"queued_candidates", len(queued),
+		"stale_running_requeued", staleRequeued,
+		"recovered_enqueued", recovered,
+	)
+	return nil
 }
 
 func runMonitored(

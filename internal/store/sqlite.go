@@ -21,6 +21,7 @@ type CreateTaskInput struct {
 	Kind             string
 	Title            string
 	Prompt           string
+	RunKey           string
 	Status           string
 	RouteClass       string
 	Priority         string
@@ -85,15 +86,16 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			workspace_id TEXT NOT NULL,
-			context_id TEXT NOT NULL,
-			kind TEXT NOT NULL,
-			title TEXT NOT NULL,
-			prompt TEXT NOT NULL,
-			status TEXT NOT NULL,
-			route_class TEXT,
-			priority TEXT,
+				id TEXT PRIMARY KEY,
+				workspace_id TEXT NOT NULL,
+				context_id TEXT NOT NULL,
+				kind TEXT NOT NULL,
+				title TEXT NOT NULL,
+				prompt TEXT NOT NULL,
+				run_key TEXT,
+				status TEXT NOT NULL,
+				route_class TEXT,
+				priority TEXT,
 			due_at_unix INTEGER,
 			assigned_lane TEXT,
 			source_connector TEXT,
@@ -154,7 +156,7 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			prompt TEXT NOT NULL,
 			trigger_type TEXT NOT NULL,
 			event_key TEXT,
-			interval_seconds INTEGER,
+			cron_expr TEXT,
 			active INTEGER NOT NULL DEFAULT 1,
 			next_run_unix INTEGER,
 			last_run_unix INTEGER,
@@ -210,6 +212,7 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 		`ALTER TABLE tasks ADD COLUMN result_path TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN error_message TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN updated_at_unix INTEGER;`,
+		`ALTER TABLE tasks ADD COLUMN run_key TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN route_class TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN priority TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN due_at_unix INTEGER;`,
@@ -218,6 +221,7 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 		`ALTER TABLE tasks ADD COLUMN source_external_id TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN source_user_id TEXT;`,
 		`ALTER TABLE tasks ADD COLUMN source_text TEXT;`,
+		`ALTER TABLE objectives ADD COLUMN cron_expr TEXT;`,
 	}
 	for _, query := range alterQueries {
 		if _, err := s.db.ExecContext(ctx, query); err != nil {
@@ -227,6 +231,9 @@ func (s *Store) AutoMigrate(ctx context.Context) error {
 			}
 			return fmt.Errorf("run migration alter: %w", err)
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_run_key ON tasks(run_key) WHERE run_key IS NOT NULL`); err != nil {
+		return fmt.Errorf("run migration index: %w", err)
 	}
 	return nil
 }
@@ -240,17 +247,18 @@ func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
 	_, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO tasks (
-			id, workspace_id, context_id, kind, title, prompt, status,
+			id, workspace_id, context_id, kind, title, prompt, run_key, status,
 			route_class, priority, due_at_unix, assigned_lane,
 			source_connector, source_external_id, source_user_id, source_text,
 			updated_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		input.ID,
 		input.WorkspaceID,
 		input.ContextID,
 		input.Kind,
 		input.Title,
 		input.Prompt,
+		nullIfEmpty(strings.TrimSpace(input.RunKey)),
 		input.Status,
 		nullIfEmpty(strings.TrimSpace(input.RouteClass)),
 		nullIfEmpty(strings.TrimSpace(input.Priority)),
@@ -263,6 +271,10 @@ func (s *Store) CreateTask(ctx context.Context, input CreateTaskInput) error {
 		nowUnix,
 	)
 	if err != nil {
+		message := strings.ToLower(err.Error())
+		if strings.Contains(message, "unique constraint failed") && strings.Contains(message, "tasks.run_key") {
+			return fmt.Errorf("insert task: %w", ErrTaskRunAlreadyExists)
+		}
 		return fmt.Errorf("insert task: %w", err)
 	}
 	return nil

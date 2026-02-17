@@ -154,14 +154,20 @@ func TestSyncCommandsRegistersGuildCommands(t *testing.T) {
 		t.Fatal("expected command payload")
 	}
 	seenTask := false
+	seenRoute := false
 	for _, command := range commandPayload {
 		if command["name"] == "task" {
 			seenTask = true
-			break
+		}
+		if command["name"] == "route" {
+			seenRoute = true
 		}
 	}
 	if !seenTask {
 		t.Fatal("expected task command in payload")
+	}
+	if !seenRoute {
+		t.Fatal("expected route command in payload")
 	}
 }
 

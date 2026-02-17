@@ -2,7 +2,10 @@ package sandbox
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -220,5 +223,183 @@ func TestSummarizeCommandOutcomeCurlWithLocationDoesNotWarn(t *testing.T) {
 	}
 	if !strings.Contains(message, "Output:") {
 		t.Fatalf("expected output summary, got %s", message)
+	}
+}
+
+func TestTranslateRGToGrep(t *testing.T) {
+	args, ok := translateRGToGrep([]string{"-n", "monitor", "/tmp/ws"})
+	if !ok {
+		t.Fatal("expected rg fallback translation")
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "-R -n -- monitor /tmp/ws") {
+		t.Fatalf("unexpected grep args: %s", got)
+	}
+}
+
+func TestTranslateCurlToWget(t *testing.T) {
+	args, ok := translateCurlToWget([]string{"-fsSL", "https://example.com"})
+	if !ok {
+		t.Fatal("expected curl fallback translation")
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "-q -O - https://example.com") {
+		t.Fatalf("unexpected wget args: %s", got)
+	}
+}
+
+func TestExecuteFallbackToGrepWhenRGMissing(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "notes.md"), []byte("monitor objective\n"), 0o644); err != nil {
+		t.Fatalf("write notes: %v", err)
+	}
+	grepPath, err := exec.LookPath("grep")
+	if err != nil {
+		t.Skip("grep not available on host")
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.Symlink(grepPath, filepath.Join(binDir, "grep")); err != nil {
+		t.Fatalf("symlink grep: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"rg"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "rg",
+		Payload: map[string]any{
+			"args": []any{"-n", "monitor", "."},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(result.Message), "fallback: rg -> grep") {
+		t.Fatalf("expected fallback hint, got %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "notes.md") {
+		t.Fatalf("expected grep output to include notes.md, got %s", result.Message)
+	}
+}
+
+func TestExecuteFallbackToWgetWhenCurlMissing(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	wgetPath, err := exec.LookPath("wget")
+	if err != nil {
+		t.Skip("wget not available on host")
+	}
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.Symlink(wgetPath, filepath.Join(binDir, "wget")); err != nil {
+		t.Fatalf("symlink wget: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello from test server"))
+	}))
+	defer server.Close()
+
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"curl"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "curl",
+		Payload: map[string]any{
+			"args": []any{"-fsSL", server.URL},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(result.Message), "fallback: curl -> wget") {
+		t.Fatalf("expected fallback hint, got %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "hello from test server") {
+		t.Fatalf("expected wget output body, got %s", result.Message)
+	}
+}
+
+func TestRetryGitDiffNoIndexDetectsOutsideRepoFailure(t *testing.T) {
+	retryArgs, fallback, ok := retryGitDiffNoIndex(
+		"git",
+		[]string{"diff", "old.md", "new.md"},
+		&exec.ExitError{},
+		"warning: Not a git repository. Use --no-index to compare two paths outside a working tree",
+	)
+	if !ok {
+		t.Fatal("expected git diff retry to be enabled")
+	}
+	if fallback != "git diff -> git diff --no-index" {
+		t.Fatalf("unexpected fallback hint: %s", fallback)
+	}
+	got := strings.Join(retryArgs, " ")
+	if got != "diff --no-index old.md new.md" {
+		t.Fatalf("unexpected retry args: %s", got)
+	}
+}
+
+func TestExecuteGitDiffTreatsExitCodeOneAsSuccess(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available on host")
+	}
+
+	oldPath := filepath.Join(workspaceDir, "old.md")
+	newPath := filepath.Join(workspaceDir, "new.md")
+	if err := os.WriteFile(oldPath, []byte("line one\nline two\n"), 0o644); err != nil {
+		t.Fatalf("write old markdown: %v", err)
+	}
+	if err := os.WriteFile(newPath, []byte("line one\nline changed\n"), 0o644); err != nil {
+		t.Fatalf("write new markdown: %v", err)
+	}
+
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"git"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "git",
+		Payload: map[string]any{
+			"args": []any{"diff", "old.md", "new.md"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "-line two") || !strings.Contains(result.Message, "+line changed") {
+		t.Fatalf("expected git diff output, got %s", result.Message)
 	}
 }

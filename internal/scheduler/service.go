@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -10,9 +11,12 @@ import (
 	"github.com/dwizi/agent-runtime/internal/heartbeat"
 	"github.com/dwizi/agent-runtime/internal/orchestrator"
 	"github.com/dwizi/agent-runtime/internal/store"
+	"github.com/google/uuid"
 )
 
 const markdownUpdatedEventKey = "markdown.updated"
+
+var errObjectiveRunAlreadyQueued = errors.New("objective run already queued")
 
 type Store interface {
 	ListDueObjectives(ctx context.Context, now time.Time, limit int) ([]store.Objective, error)
@@ -113,7 +117,7 @@ func (s *Service) HandleMarkdownUpdate(ctx context.Context, workspaceID, changed
 		if strings.TrimSpace(changedPath) != "" {
 			prompt += "\n\nChanged markdown file: `" + strings.TrimSpace(changedPath) + "`."
 		}
-		s.enqueueObjectiveTask(ctx, objective, prompt)
+		_, _ = s.enqueueObjectiveTask(ctx, objective, prompt, false, time.Time{})
 	}
 }
 
@@ -131,22 +135,32 @@ func (s *Service) processDue(ctx context.Context) error {
 
 func (s *Service) runScheduledObjective(ctx context.Context, objective store.Objective, now time.Time) {
 	prompt := strings.TrimSpace(objective.Prompt)
+	nextRun, nextErr := store.ComputeScheduleNextRun(objective.CronExpr, now)
+	if nextErr != nil {
+		_, _ = s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
+			ID:        objective.ID,
+			LastRunAt: now,
+			NextRunAt: time.Time{},
+			LastError: nextErr.Error(),
+		})
+		return
+	}
 	if prompt == "" {
 		_, _ = s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
 			ID:        objective.ID,
 			LastRunAt: now,
-			NextRunAt: now.Add(time.Duration(objective.IntervalSeconds) * time.Second),
+			NextRunAt: nextRun,
 			LastError: "objective prompt is empty",
 		})
 		return
 	}
-	task, err := s.enqueueObjectiveTask(ctx, objective, prompt)
-	nextRun := now.Add(time.Duration(objective.IntervalSeconds) * time.Second)
-	if objective.IntervalSeconds < 1 {
-		nextRun = time.Time{}
-	}
+	task, err := s.enqueueObjectiveTask(ctx, objective, prompt, true, objective.NextRunAt)
 	lastError := ""
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, errObjectiveRunAlreadyQueued):
+		lastError = ""
+	default:
 		lastError = err.Error()
 	}
 	_, updateErr := s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
@@ -158,13 +172,17 @@ func (s *Service) runScheduledObjective(ctx context.Context, objective store.Obj
 	if updateErr != nil {
 		s.logger.Error("update objective run failed", "error", updateErr, "objective_id", objective.ID)
 	}
-	if err != nil {
+	if err != nil && !errors.Is(err, errObjectiveRunAlreadyQueued) {
+		return
+	}
+	if errors.Is(err, errObjectiveRunAlreadyQueued) {
+		s.logger.Info("scheduled objective already queued", "objective_id", objective.ID, "workspace_id", objective.WorkspaceID)
 		return
 	}
 	s.logger.Info("scheduled objective queued", "objective_id", objective.ID, "task_id", task.ID, "workspace_id", objective.WorkspaceID)
 }
 
-func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Objective, prompt string) (orchestrator.Task, error) {
+func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Objective, prompt string, scheduled bool, scheduledFor time.Time) (orchestrator.Task, error) {
 	title := strings.TrimSpace(objective.Title)
 	if title == "" {
 		title = "Objective task"
@@ -172,15 +190,17 @@ func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Obje
 	if len(title) > 72 {
 		title = title[:72]
 	}
-	task, err := s.engine.Enqueue(orchestrator.Task{
+	runKey := ""
+	if scheduled {
+		runKey = objectiveScheduleRunKey(objective.ID, scheduledFor)
+	}
+	task := orchestrator.Task{
+		ID:          "task-" + uuid.NewString(),
 		WorkspaceID: objective.WorkspaceID,
 		ContextID:   objective.ContextID,
 		Kind:        orchestrator.TaskKindObjective,
 		Title:       title,
 		Prompt:      prompt,
-	})
-	if err != nil {
-		return orchestrator.Task{}, err
 	}
 	if err := s.store.CreateTask(ctx, store.CreateTaskInput{
 		ID:          task.ID,
@@ -189,9 +209,29 @@ func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Obje
 		Kind:        string(task.Kind),
 		Title:       task.Title,
 		Prompt:      task.Prompt,
+		RunKey:      runKey,
 		Status:      "queued",
 	}); err != nil {
+		if errors.Is(err, store.ErrTaskRunAlreadyExists) {
+			return orchestrator.Task{}, errObjectiveRunAlreadyQueued
+		}
 		return orchestrator.Task{}, fmt.Errorf("persist objective task: %w", err)
 	}
-	return task, nil
+	queuedTask, err := s.engine.Enqueue(task)
+	if err != nil {
+		// Keep the persisted queued task for startup recovery.
+		return orchestrator.Task{}, fmt.Errorf("enqueue objective task: %w", err)
+	}
+	return queuedTask, nil
+}
+
+func objectiveScheduleRunKey(objectiveID string, scheduledFor time.Time) string {
+	id := strings.TrimSpace(objectiveID)
+	if id == "" {
+		id = "objective"
+	}
+	if scheduledFor.IsZero() {
+		scheduledFor = time.Now().UTC()
+	}
+	return fmt.Sprintf("objective:%s:%d", id, scheduledFor.UTC().Unix())
 }

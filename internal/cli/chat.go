@@ -17,7 +17,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dwizi/agent-runtime/internal/adminclient"
-	"github.com/dwizi/agent-runtime/internal/config"
 )
 
 var chatSectionPattern = regexp.MustCompile(`^##\s+(\S+)\s+` + "`" + `([^` + "`" + `]+)` + "`" + `\s*$`)
@@ -89,8 +88,7 @@ func newChatCommand(logger *slog.Logger) *cobra.Command {
 		Short: "Talk to agent-runtime over admin API",
 		Long:  "Interactive channel to message agent-runtime in real time, plus replay/eval utilities.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := config.FromEnv()
-			client, err := adminclient.New(cfg)
+			client, err := newAdminClientFromEnv(timeoutSec)
 			if err != nil {
 				return err
 			}
@@ -136,6 +134,7 @@ func newChatCommand(logger *slog.Logger) *cobra.Command {
 
 	cmd.AddCommand(newChatReplayCommand(logger))
 	cmd.AddCommand(newChatEvalCommand(logger))
+	cmd.AddCommand(newChatPairingCommand(logger))
 	return cmd
 }
 
@@ -250,8 +249,7 @@ func newChatReplayCommand(logger *slog.Logger) *cobra.Command {
 				return nil
 			}
 
-			cfg := config.FromEnv()
-			client, err := adminclient.New(cfg)
+			client, err := newAdminClientFromEnv(timeoutSec)
 			if err != nil {
 				return err
 			}

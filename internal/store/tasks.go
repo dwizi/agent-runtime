@@ -10,6 +10,7 @@ import (
 )
 
 var ErrTaskNotFound = errors.New("task not found")
+var ErrTaskRunAlreadyExists = errors.New("task run already exists")
 
 type TaskRecord struct {
 	ID               string
@@ -74,6 +75,36 @@ func (s *Store) MarkTaskRunning(ctx context.Context, id string, workerID int, st
 	)
 	if err != nil {
 		return fmt.Errorf("mark task running: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected == 0 {
+		return ErrTaskNotFound
+	}
+	return nil
+}
+
+func (s *Store) RequeueTask(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrTaskNotFound
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET status = 'queued',
+		     worker_id = NULL,
+		     started_at_unix = NULL,
+		     finished_at_unix = NULL,
+		     result_summary = NULL,
+		     result_path = NULL,
+		     error_message = NULL,
+		     updated_at_unix = ?
+		 WHERE id = ?`,
+		time.Now().UTC().Unix(),
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("requeue task: %w", err)
 	}
 	rowsAffected, err := result.RowsAffected()
 	if err == nil && rowsAffected == 0 {

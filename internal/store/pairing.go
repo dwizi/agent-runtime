@@ -427,7 +427,7 @@ func normalizeRole(input string) (string, error) {
 func normalizeConnector(input string) (string, error) {
 	connector := strings.ToLower(strings.TrimSpace(input))
 	switch connector {
-	case "telegram", "discord":
+	case "telegram", "discord", "codex":
 		return connector, nil
 	default:
 		return "", fmt.Errorf("%w: unsupported connector", ErrPairingInvalidInput)

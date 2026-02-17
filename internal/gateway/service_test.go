@@ -252,14 +252,14 @@ func (f *fakeStore) CreateObjective(ctx context.Context, input store.CreateObjec
 	f.objectiveInvoked = true
 	f.lastObjective = input
 	return store.Objective{
-		ID:              "obj-1",
-		WorkspaceID:     input.WorkspaceID,
-		ContextID:       input.ContextID,
-		Title:           input.Title,
-		Prompt:          input.Prompt,
-		TriggerType:     input.TriggerType,
-		IntervalSeconds: input.IntervalSeconds,
-		Active:          input.Active,
+		ID:          "obj-1",
+		WorkspaceID: input.WorkspaceID,
+		ContextID:   input.ContextID,
+		Title:       input.Title,
+		Prompt:      input.Prompt,
+		TriggerType: input.TriggerType,
+		CronExpr:    input.CronExpr,
+		Active:      input.Active,
 	}, nil
 }
 
@@ -280,9 +280,9 @@ func (f *fakeStore) UpdateObjective(ctx context.Context, input store.UpdateObjec
 	if input.Active != nil {
 		active = *input.Active
 	}
-	interval := 3600
-	if input.IntervalSeconds != nil {
-		interval = *input.IntervalSeconds
+	cronExpr := defaultObjectiveCronExpr
+	if input.CronExpr != nil {
+		cronExpr = strings.TrimSpace(*input.CronExpr)
 	}
 	trigger := store.ObjectiveTriggerSchedule
 	if input.TriggerType != nil {
@@ -292,16 +292,19 @@ func (f *fakeStore) UpdateObjective(ctx context.Context, input store.UpdateObjec
 	if input.EventKey != nil {
 		eventKey = strings.TrimSpace(*input.EventKey)
 	}
+	if trigger == store.ObjectiveTriggerEvent {
+		cronExpr = ""
+	}
 	return store.Objective{
-		ID:              id,
-		WorkspaceID:     "ws-1",
-		ContextID:       "ctx-1",
-		Title:           title,
-		Prompt:          prompt,
-		TriggerType:     trigger,
-		EventKey:        eventKey,
-		IntervalSeconds: interval,
-		Active:          active,
+		ID:          id,
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Title:       title,
+		Prompt:      prompt,
+		TriggerType: trigger,
+		EventKey:    eventKey,
+		CronExpr:    cronExpr,
+		Active:      active,
 	}, nil
 }
 
@@ -1375,8 +1378,8 @@ func TestHandleMonitorNaturalLanguageIntentCreatesObjective(t *testing.T) {
 	if fStore.lastObjective.TriggerType != store.ObjectiveTriggerSchedule {
 		t.Fatalf("expected schedule trigger, got %s", fStore.lastObjective.TriggerType)
 	}
-	if fStore.lastObjective.IntervalSeconds != int((6 * time.Hour).Seconds()) {
-		t.Fatalf("expected 6h objective interval, got %d", fStore.lastObjective.IntervalSeconds)
+	if fStore.lastObjective.CronExpr != defaultObjectiveCronExpr {
+		t.Fatalf("expected default objective cron expression %q, got %q", defaultObjectiveCronExpr, fStore.lastObjective.CronExpr)
 	}
 }
 
@@ -1401,6 +1404,57 @@ func TestHandleMonitorNaturalLanguageObjectivePhraseCreatesObjective(t *testing.
 	}
 	if !strings.Contains(strings.ToLower(fStore.lastObjective.Prompt), "openai api status") {
 		t.Fatalf("expected objective prompt to include cleaned monitor target, got %q", fStore.lastObjective.Prompt)
+	}
+}
+
+func TestHandleMonitorNaturalLanguageIntentCreatesObjectiveForCodexConnector(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "codex",
+		ExternalID:  "session-1",
+		DisplayName: "Codex CLI",
+		FromUserID:  "codex-cli",
+		Text:        "monitor this repository for release notes changes",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected codex monitor intent to be handled")
+	}
+	if !fStore.objectiveInvoked {
+		t.Fatal("expected objective creation to be invoked for codex connector")
+	}
+	if fStore.lastObjective.TriggerType != store.ObjectiveTriggerSchedule {
+		t.Fatalf("expected schedule trigger, got %s", fStore.lastObjective.TriggerType)
+	}
+	if fStore.lastObjective.CronExpr != defaultObjectiveCronExpr {
+		t.Fatalf("expected default objective cron expression %q, got %q", defaultObjectiveCronExpr, fStore.lastObjective.CronExpr)
+	}
+}
+
+func TestHandleMonitorCommandCreatesObjectiveForCodexConnector(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "codex",
+		ExternalID:  "session-2",
+		DisplayName: "Codex CLI",
+		FromUserID:  "codex-cli",
+		Text:        "/monitor OpenAI API status page",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected codex /monitor command to be handled")
+	}
+	if !fStore.objectiveInvoked {
+		t.Fatal("expected objective creation to be invoked for /monitor")
+	}
+	if fStore.lastObjective.CronExpr != defaultObjectiveCronExpr {
+		t.Fatalf("expected default objective cron expression %q, got %q", defaultObjectiveCronExpr, fStore.lastObjective.CronExpr)
 	}
 }
 
@@ -1494,6 +1548,123 @@ func TestHandleApprovalCommandHelpReturnsExactApproveActionWhenUnlinked(t *testi
 	}
 	if !strings.Contains(strings.ToLower(output.Reply), "pair") {
 		t.Fatalf("expected identity-linking next step, got %q", output.Reply)
+	}
+}
+
+func TestHandlePendingApprovalHowToGuidanceWithoutIdentity(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identityErr: store.ErrIdentityNotFound,
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+		"",
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "codex",
+		ExternalID: "session-1",
+		FromUserID: "u1",
+		Text:       "Without using slash commands, explain how I can ask for pending approvals in plain language.",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected pending-approval guidance to be handled")
+	}
+	if strings.Contains(strings.ToLower(output.Reply), "access denied") {
+		t.Fatalf("expected guidance without access denial, got %q", output.Reply)
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "show me pending approvals") {
+		t.Fatalf("expected plain-language guidance phrase, got %q", output.Reply)
+	}
+}
+
+func TestHandlePendingApprovalPrioritizationGuidanceWithoutIdentity(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identityErr: store.ErrIdentityNotFound,
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+		"",
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "codex",
+		ExternalID: "session-1",
+		FromUserID: "u1",
+		Text:       "If there are many pending approvals, what should I do first and why?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected pending-approval prioritization guidance to be handled")
+	}
+	if strings.Contains(strings.ToLower(output.Reply), "access denied") {
+		t.Fatalf("expected guidance without access denial, got %q", output.Reply)
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "prioritize") {
+		t.Fatalf("expected prioritization guidance, got %q", output.Reply)
+	}
+}
+
+func TestHandleApproveMostRecentPendingNaturalLanguage(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identity: store.UserIdentity{UserID: "admin-1", Role: "admin"},
+			actionApprovals: []store.ActionApproval{
+				{ID: "act_aaaa1111", Connector: "telegram", ExternalID: "42", ActionType: "run_command", Status: "pending"},
+				{ID: "act_bbbb2222", Connector: "telegram", ExternalID: "42", ActionType: "run_command", Status: "pending"},
+			},
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+		"",
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "Please approve the most recent pending action and continue.",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected most-recent approve intent to be handled")
+	}
+	if !strings.Contains(output.Reply, "act_bbbb2222") {
+		t.Fatalf("expected latest pending action to be approved, got %q", output.Reply)
+	}
+}
+
+func TestHandleTaskCreationIntentTurnThatIntoTaskCreatesTask(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "codex",
+		ExternalID: "session-1",
+		FromUserID: "u1",
+		Text:       "Turn that into an actionable task in this workspace and tell me the task id.",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected task-creation intent to be handled")
+	}
+	if fStore.lastTask.ID == "" {
+		t.Fatal("expected task to be created")
+	}
+	if !strings.Contains(output.Reply, fStore.lastTask.ID) {
+		t.Fatalf("expected reply to include created task id, got %q", output.Reply)
 	}
 }
 

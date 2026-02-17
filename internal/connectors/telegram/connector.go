@@ -472,10 +472,7 @@ func (c *Connector) generateReply(ctx context.Context, contextRecord store.Conte
 		return strings.TrimSpace(cleanReply), "", nil
 	}
 	notice := actions.FormatApprovalRequestNotice(approval.ID)
-	if strings.TrimSpace(cleanReply) == "" {
-		return "", notice, nil
-	}
-	return strings.TrimSpace(cleanReply), notice, nil
+	return "", notice, nil
 }
 
 func (c *Connector) ingestMarkdownDocument(ctx context.Context, message telegramMessage, document telegramDocument) (string, error) {

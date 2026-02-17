@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -83,25 +84,300 @@ func (p *Plugin) Execute(ctx context.Context, approval store.ActionApproval) (ex
 	if !p.isAllowed(command) {
 		return executor.Result{}, fmt.Errorf("%w: command %q", agenterr.ErrToolNotAllowed, command)
 	}
+	execCommand, execArgs, fallbackUsed := p.resolveExecutionCommand(command, args)
 	workdir, err := p.resolveWorkingDir(approval)
 	if err != nil {
 		return executor.Result{}, fmt.Errorf("%w: %v", agenterr.ErrToolPreflight, err)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
-	execName, execArgs := p.executionSpec(command, args)
-	cmd := exec.CommandContext(runCtx, execName, execArgs...)
+	execName, execSpecArgs := p.executionSpec(execCommand, execArgs)
+	cmd := exec.CommandContext(runCtx, execName, execSpecArgs...)
 	cmd.Dir = workdir
 	combinedOutput := &limitedBuffer{MaxBytes: p.maxOutputBytes}
 	cmd.Stdout = combinedOutput
 	cmd.Stderr = combinedOutput
 	if err := cmd.Run(); err != nil {
+		if retryArgs, retryFallback, ok := retryGitDiffNoIndex(execCommand, execArgs, err, combinedOutput.String()); ok {
+			runCtxRetry, cancelRetry := context.WithTimeout(ctx, p.timeout)
+			defer cancelRetry()
+			execNameRetry, execSpecArgsRetry := p.executionSpec(execCommand, retryArgs)
+			retryCmd := exec.CommandContext(runCtxRetry, execNameRetry, execSpecArgsRetry...)
+			retryCmd.Dir = workdir
+			retryOutput := &limitedBuffer{MaxBytes: p.maxOutputBytes}
+			retryCmd.Stdout = retryOutput
+			retryCmd.Stderr = retryOutput
+			if retryErr := retryCmd.Run(); retryErr == nil || isExpectedNonZeroExit(execCommand, retryArgs, retryErr) {
+				message := summarizeCommandOutcome(command, args, retryOutput.String(), retryOutput.Truncated)
+				fallbackUsed = mergeFallbackHint(fallbackUsed, retryFallback)
+				if strings.TrimSpace(fallbackUsed) != "" {
+					message = message + " (fallback: " + fallbackUsed + ")"
+				}
+				return executor.Result{
+					Plugin:  p.PluginKey(),
+					Message: message,
+				}, nil
+			}
+		}
+		if isExpectedNonZeroExit(execCommand, execArgs, err) {
+			message := summarizeCommandOutcome(command, args, combinedOutput.String(), combinedOutput.Truncated)
+			if strings.TrimSpace(fallbackUsed) != "" {
+				message = message + " (fallback: " + fallbackUsed + ")"
+			}
+			return executor.Result{
+				Plugin:  p.PluginKey(),
+				Message: message,
+			}, nil
+		}
 		return executor.Result{}, fmt.Errorf("command failed: %w; output=%s", err, compactOutput(combinedOutput.String(), combinedOutput.Truncated))
+	}
+	message := summarizeCommandOutcome(command, args, combinedOutput.String(), combinedOutput.Truncated)
+	if strings.TrimSpace(fallbackUsed) != "" {
+		message = message + " (fallback: " + fallbackUsed + ")"
 	}
 	return executor.Result{
 		Plugin:  p.PluginKey(),
-		Message: summarizeCommandOutcome(command, args, combinedOutput.String(), combinedOutput.Truncated),
+		Message: message,
 	}, nil
+}
+
+func (p *Plugin) resolveExecutionCommand(command string, args []string) (string, []string, string) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return command, args, ""
+	}
+	if strings.TrimSpace(p.runnerCommand) != "" {
+		return command, args, ""
+	}
+	if _, err := exec.LookPath(command); err == nil {
+		return command, args, ""
+	}
+	fallbackCommand, fallbackArgs, ok := commandFallback(command, args)
+	if !ok {
+		return command, args, ""
+	}
+	if _, err := exec.LookPath(fallbackCommand); err != nil {
+		return command, args, ""
+	}
+	return fallbackCommand, fallbackArgs, command + " -> " + fallbackCommand
+}
+
+func commandFallback(command string, args []string) (string, []string, bool) {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "rg":
+		fallbackArgs, ok := translateRGToGrep(args)
+		if !ok {
+			return "", nil, false
+		}
+		return "grep", fallbackArgs, true
+	case "curl":
+		fallbackArgs, ok := translateCurlToWget(args)
+		if !ok {
+			return "", nil, false
+		}
+		return "wget", fallbackArgs, true
+	default:
+		return "", nil, false
+	}
+}
+
+func mergeFallbackHint(base, extra string) string {
+	base = strings.TrimSpace(base)
+	extra = strings.TrimSpace(extra)
+	if base == "" {
+		return extra
+	}
+	if extra == "" {
+		return base
+	}
+	return base + "; " + extra
+}
+
+func retryGitDiffNoIndex(command string, args []string, runErr error, output string) ([]string, string, bool) {
+	if !strings.EqualFold(strings.TrimSpace(command), "git") {
+		return nil, "", false
+	}
+	diffIndex, ok := gitDiffSubcommandIndex(args)
+	if !ok {
+		return nil, "", false
+	}
+	if hasGitNoIndex(args) {
+		return nil, "", false
+	}
+	if !isGitNotRepositoryFailure(runErr, output) {
+		return nil, "", false
+	}
+	retryArgs := append([]string{}, args[:diffIndex+1]...)
+	retryArgs = append(retryArgs, "--no-index")
+	retryArgs = append(retryArgs, args[diffIndex+1:]...)
+	return retryArgs, "git diff -> git diff --no-index", true
+}
+
+func gitDiffSubcommandIndex(args []string) (int, bool) {
+	for index, arg := range args {
+		trimmed := strings.TrimSpace(arg)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+		return index, strings.EqualFold(trimmed, "diff")
+	}
+	return 0, false
+}
+
+func hasGitNoIndex(args []string) bool {
+	for _, arg := range args {
+		if strings.EqualFold(strings.TrimSpace(arg), "--no-index") {
+			return true
+		}
+	}
+	return false
+}
+
+func isGitNotRepositoryFailure(runErr error, output string) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(output))
+	if strings.Contains(lower, "not a git repository") {
+		return true
+	}
+	if strings.Contains(lower, "use --no-index") {
+		return true
+	}
+	return strings.Contains(lower, "git diff --no-index")
+}
+
+func isExpectedNonZeroExit(command string, args []string, runErr error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(command), "git") {
+		return false
+	}
+	_, isDiff := gitDiffSubcommandIndex(args)
+	if !isDiff {
+		return false
+	}
+	return exitErr.ExitCode() == 1
+}
+
+func translateRGToGrep(args []string) ([]string, bool) {
+	pattern := ""
+	searchPath := "."
+	grepFlags := []string{"-R", "-n"}
+
+	for index := 0; index < len(args); index++ {
+		arg := strings.TrimSpace(args[index])
+		if arg == "" {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			switch arg {
+			case "-n", "--line-number":
+			case "-i", "--ignore-case":
+				grepFlags = append(grepFlags, "-i")
+			case "-F", "--fixed-strings":
+				grepFlags = append(grepFlags, "-F")
+			case "-w", "--word-regexp":
+				grepFlags = append(grepFlags, "-w")
+			case "-v", "--invert-match":
+				grepFlags = append(grepFlags, "-v")
+			case "-m", "--max-count":
+				if index+1 >= len(args) {
+					return nil, false
+				}
+				grepFlags = append(grepFlags, "-m", strings.TrimSpace(args[index+1]))
+				index++
+			default:
+				return nil, false
+			}
+			continue
+		}
+		if pattern == "" {
+			pattern = arg
+			continue
+		}
+		if searchPath == "." {
+			searchPath = arg
+			continue
+		}
+		return nil, false
+	}
+
+	if pattern == "" {
+		return nil, false
+	}
+	fallbackArgs := append([]string{}, grepFlags...)
+	fallbackArgs = append(fallbackArgs, "--", pattern, searchPath)
+	return fallbackArgs, true
+}
+
+func translateCurlToWget(args []string) ([]string, bool) {
+	url := ""
+	output := "-"
+	insecure := false
+	headers := make([]string, 0, 2)
+
+	for index := 0; index < len(args); index++ {
+		arg := strings.TrimSpace(args[index])
+		if arg == "" {
+			continue
+		}
+		switch arg {
+		case "-s", "-S", "-sS", "-Ss", "-f", "-L", "--location", "--location-trusted", "-fsSL", "-fsS", "-fsL", "-sSL", "-sL":
+			continue
+		case "-k", "--insecure":
+			insecure = true
+			continue
+		case "-o", "--output":
+			if index+1 >= len(args) {
+				return nil, false
+			}
+			output = strings.TrimSpace(args[index+1])
+			index++
+			continue
+		case "-H", "--header":
+			if index+1 >= len(args) {
+				return nil, false
+			}
+			headers = append(headers, strings.TrimSpace(args[index+1]))
+			index++
+			continue
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			return nil, false
+		}
+		if url != "" {
+			return nil, false
+		}
+		url = arg
+	}
+
+	if url == "" {
+		return nil, false
+	}
+
+	fallbackArgs := []string{"-q"}
+	if insecure {
+		fallbackArgs = append(fallbackArgs, "--no-check-certificate")
+	}
+	for _, header := range headers {
+		if header == "" {
+			continue
+		}
+		fallbackArgs = append(fallbackArgs, "--header", header)
+	}
+	if strings.TrimSpace(output) == "" {
+		output = "-"
+	}
+	fallbackArgs = append(fallbackArgs, "-O", output, url)
+	return fallbackArgs, true
 }
 
 func (p *Plugin) isAllowed(command string) bool {

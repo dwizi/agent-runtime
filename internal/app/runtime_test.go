@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"testing"
 	"time"
@@ -38,6 +40,29 @@ func TestShouldQueueQMDForPath(t *testing.T) {
 	}
 	if shouldQueueQMDForPath(root, "/tmp/outside.md") {
 		t.Fatal("expected out-of-root path to skip qmd indexing")
+	}
+}
+
+func TestShouldTriggerObjectiveEventForPath(t *testing.T) {
+	root := "/data/workspaces"
+
+	if !shouldTriggerObjectiveEventForPath(root, "/data/workspaces/ws-1/docs/notes.md") {
+		t.Fatal("expected docs markdown path to trigger objective events")
+	}
+	if shouldTriggerObjectiveEventForPath(root, "/data/workspaces/ws-1/logs/chats/codex/session.md") {
+		t.Fatal("expected chat log markdown path to skip objective event trigger")
+	}
+	if shouldTriggerObjectiveEventForPath(root, "/data/workspaces/ws-1/tasks/2026/02/17/task.md") {
+		t.Fatal("expected task artifact markdown path to skip objective event trigger")
+	}
+	if shouldTriggerObjectiveEventForPath(root, "/data/workspaces/ws-1/ops/heartbeat.md") {
+		t.Fatal("expected ops markdown path to skip objective event trigger")
+	}
+	if shouldTriggerObjectiveEventForPath(root, "/data/workspaces/ws-1/.qmd/cache/index.md") {
+		t.Fatal("expected qmd internal markdown path to skip objective event trigger")
+	}
+	if shouldTriggerObjectiveEventForPath(root, "/tmp/outside.md") {
+		t.Fatal("expected out-of-root path to skip objective event trigger")
 	}
 }
 
@@ -170,6 +195,77 @@ func TestHasPendingReindexTask(t *testing.T) {
 	}
 	if pending {
 		t.Fatal("expected no pending reindex tasks after completion")
+	}
+}
+
+type recoveryEngineStub struct {
+	tasks []orchestrator.Task
+}
+
+func (s *recoveryEngineStub) Enqueue(task orchestrator.Task) (orchestrator.Task, error) {
+	s.tasks = append(s.tasks, task)
+	return task, nil
+}
+
+func TestRecoverPendingTasksEnqueuesQueuedAndStaleRunning(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "runtime_recovery_test.sqlite")
+	sqlStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlStore.Close() })
+	if err := sqlStore.AutoMigrate(ctx); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	insertTask := func(id, status string) {
+		t.Helper()
+		if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+			ID:          id,
+			WorkspaceID: "ws-1",
+			ContextID:   "ctx-1",
+			Kind:        string(orchestrator.TaskKindGeneral),
+			Title:       id,
+			Prompt:      "run",
+			Status:      status,
+		}); err != nil {
+			t.Fatalf("create task %s: %v", id, err)
+		}
+	}
+	insertTask("task-queued", "queued")
+	insertTask("task-running-stale", "queued")
+	insertTask("task-running-fresh", "queued")
+	if err := sqlStore.MarkTaskRunning(ctx, "task-running-stale", 1, now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("mark stale running: %v", err)
+	}
+	if err := sqlStore.MarkTaskRunning(ctx, "task-running-fresh", 1, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("mark fresh running: %v", err)
+	}
+
+	engine := &recoveryEngineStub{}
+	if err := recoverPendingTasks(ctx, sqlStore, engine, 10*time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
+		t.Fatalf("recover pending tasks: %v", err)
+	}
+	if len(engine.tasks) != 2 {
+		t.Fatalf("expected 2 recovered tasks enqueued, got %d", len(engine.tasks))
+	}
+
+	stale, err := sqlStore.LookupTask(ctx, "task-running-stale")
+	if err != nil {
+		t.Fatalf("lookup stale task: %v", err)
+	}
+	if stale.Status != "queued" {
+		t.Fatalf("expected stale running task to be requeued, got %s", stale.Status)
+	}
+
+	fresh, err := sqlStore.LookupTask(ctx, "task-running-fresh")
+	if err != nil {
+		t.Fatalf("lookup fresh task: %v", err)
+	}
+	if fresh.Status != "running" {
+		t.Fatalf("expected fresh running task to remain running, got %s", fresh.Status)
 	}
 }
 

@@ -95,6 +95,7 @@ type MessageOutput struct {
 }
 
 const latestPendingActionAlias = "__latest_pending__"
+const mostRecentPendingActionAlias = "__most_recent_pending__"
 const allPendingActionsAlias = "__all_pending__"
 
 func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor, workspaceRoot string, logger *slog.Logger) *Service {
@@ -278,6 +279,12 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 
 func (s *Service) handleCommandGuidance(ctx context.Context, input MessageInput, text string) (MessageOutput, bool, error) {
 	lower := strings.ToLower(strings.TrimSpace(text))
+	if reply, ok := pendingApprovalGuidanceReply(lower); ok {
+		return MessageOutput{
+			Handled: true,
+			Reply:   reply,
+		}, true, nil
+	}
 	if !looksLikeCommandGuidanceQuestion(lower) {
 		return MessageOutput{}, false, nil
 	}
@@ -324,6 +331,28 @@ func looksLikeCommandGuidanceQuestion(lower string) bool {
 		}
 	}
 	return strings.Contains(lower, "if approval is needed")
+}
+
+func pendingApprovalGuidanceReply(lower string) (string, bool) {
+	if lower == "" {
+		return "", false
+	}
+	mentionsPendingApprovals := strings.Contains(lower, "pending approval") || strings.Contains(lower, "pending action")
+	if !mentionsPendingApprovals {
+		return "", false
+	}
+	if strings.Contains(lower, "without using slash") ||
+		strings.Contains(lower, "plain language") ||
+		strings.Contains(lower, "how can i ask") ||
+		strings.Contains(lower, "how do i ask") ||
+		strings.HasPrefix(lower, "how ") {
+		return "Use plain language like: \"show me pending approvals\" or \"what approvals are waiting right now?\". If you need to approve one, say: \"approve action <id>\" or \"approve the most recent pending action\".", true
+	}
+	if strings.Contains(lower, "many pending") ||
+		(strings.Contains(lower, "what should i do first") && mentionsPendingApprovals) {
+		return "First, list pending approvals and prioritize by risk and urgency: security-impacting actions first, then oldest blocked user requests. Approve one action at a time, confirm outcome, then move to the next.", true
+	}
+	return "", false
 }
 
 func (s *Service) buildApprovalNextCommandGuidance(ctx context.Context, input MessageInput) (string, error) {
@@ -422,6 +451,7 @@ func (s *Service) handlePendingActions(ctx context.Context, input MessageInput) 
 func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
 	actionID := normalizeActionCommandID(arg)
 	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
+	resolveMostRecent := strings.EqualFold(actionID, mostRecentPendingActionAlias)
 	resolveAll := strings.EqualFold(actionID, allPendingActionsAlias)
 
 	if actionID == "" {
@@ -514,6 +544,13 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 
 	if resolveLatest {
 		resolved, reply := s.resolveSinglePendingActionID(ctx, input)
+		if strings.TrimSpace(reply) != "" {
+			return MessageOutput{Handled: true, Reply: reply}, nil
+		}
+		actionID = resolved
+	}
+	if resolveMostRecent {
+		resolved, reply := s.resolveMostRecentPendingActionID(ctx, input)
 		if strings.TrimSpace(reply) != "" {
 			return MessageOutput{Handled: true, Reply: reply}, nil
 		}
@@ -945,13 +982,13 @@ func (s *Service) handleMonitorObjective(ctx context.Context, input MessageInput
 	}
 	objectivePrompt := strings.TrimSpace("Monitor this target for updates and report only concrete changes:\n" + goal)
 	_, err = s.store.CreateObjective(ctx, store.CreateObjectiveInput{
-		WorkspaceID:     contextRecord.WorkspaceID,
-		ContextID:       contextRecord.ID,
-		Title:           title,
-		Prompt:          objectivePrompt,
-		TriggerType:     store.ObjectiveTriggerSchedule,
-		IntervalSeconds: int((6 * time.Hour).Seconds()),
-		Active:          true,
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Title:       title,
+		Prompt:      objectivePrompt,
+		TriggerType: store.ObjectiveTriggerSchedule,
+		CronExpr:    defaultObjectiveCronExpr,
+		Active:      true,
 	})
 	if err != nil {
 		return MessageOutput{}, err
@@ -1665,6 +1702,9 @@ func parseApproveCommandAsActionArg(arg string) (string, bool) {
 		return latestPendingActionAlias, true
 	}
 	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "most recent") || strings.Contains(lower, "latest pending") || lower == "latest" || lower == "newest" {
+		return mostRecentPendingActionAlias, true
+	}
 	if lower == "all" || lower == "everything" {
 		return allPendingActionsAlias, true
 	}
@@ -1725,6 +1765,9 @@ func parseNaturalLanguageCommand(text string) (command, arg string, ok bool) {
 	}
 	lower := strings.ToLower(trimmed)
 
+	if actionArg, found := parseIntentApproveMostRecentPendingAction(trimmed, lower); found {
+		return "approve-action", actionArg, true
+	}
 	if actionID, found := parseIntentApproveAction(trimmed); found {
 		return "approve-action", actionID, true
 	}
@@ -1767,10 +1810,33 @@ func parseNaturalLanguageCommand(text string) (command, arg string, ok bool) {
 	if goal, found := parseMonitorIntent(trimmed, lower); found {
 		return "monitor", goal, true
 	}
+	if taskPrompt, found := parseTaskCreationIntent(trimmed, lower); found {
+		return "task", taskPrompt, true
+	}
 	if prompt, found := parseIntentTask(trimmed); found {
 		return "task", prompt, true
 	}
 	return "", "", false
+}
+
+func parseIntentApproveMostRecentPendingAction(trimmed, lower string) (string, bool) {
+	if !strings.Contains(lower, "approve") {
+		return "", false
+	}
+	if strings.Contains(lower, "pair") || strings.Contains(lower, "token") {
+		return "", false
+	}
+	if !(strings.Contains(lower, "most recent") ||
+		strings.Contains(lower, "latest") ||
+		strings.Contains(lower, "newest") ||
+		strings.Contains(lower, "last pending")) {
+		return "", false
+	}
+	if !(strings.Contains(lower, "pending action") || strings.Contains(lower, "pending approval")) {
+		return "", false
+	}
+	_ = trimmed
+	return mostRecentPendingActionAlias, true
 }
 
 func isImplicitApproveActionIntent(lower string) bool {
@@ -1963,6 +2029,54 @@ func parseMonitorIntent(trimmed, lower string) (string, bool) {
 	return "", false
 }
 
+func parseTaskCreationIntent(trimmed, lower string) (string, bool) {
+	prefixes := []string{
+		"turn that into an actionable task",
+		"turn this into an actionable task",
+		"turn that into a task",
+		"turn this into a task",
+		"create one actionable task",
+		"please create one actionable task",
+		"create an actionable task",
+		"make this a task",
+		"create a task from this",
+	}
+	for _, prefix := range prefixes {
+		index := strings.Index(lower, prefix)
+		if index < 0 {
+			continue
+		}
+		after := strings.TrimSpace(trimmed[index+len(prefix):])
+		afterLower := strings.ToLower(after)
+		for _, marker := range []string{
+			" and tell me the task id",
+			", and tell me the task id",
+			" and return only the task id",
+			", return only the task id",
+		} {
+			markerIndex := strings.Index(afterLower, marker)
+			if markerIndex < 0 {
+				continue
+			}
+			after = strings.TrimSpace(after[:markerIndex])
+			afterLower = strings.ToLower(after)
+		}
+		after = strings.TrimSpace(strings.Trim(after, " .,:;!?"))
+		if strings.HasPrefix(strings.ToLower(after), "in this workspace") {
+			after = strings.TrimSpace(after[len("in this workspace"):])
+		}
+		after = strings.TrimSpace(strings.Trim(after, " .,:;!?"))
+		if after != "" {
+			return "Create one actionable task: " + after, true
+		}
+		if strings.Contains(lower, "rollout plan") {
+			return "Create one actionable task from the rollout plan discussed in this conversation.", true
+		}
+		return "Create one actionable task from the latest plan discussed in this conversation.", true
+	}
+	return "", false
+}
+
 func cleanMonitorGoal(value string) string {
 	goal := strings.TrimSpace(value)
 	if goal == "" {
@@ -2111,6 +2225,28 @@ func (s *Service) resolveSinglePendingActionID(ctx context.Context, input Messag
 		return "", "Multiple pending actions found across contexts. Use `/pending-actions` and approve by id."
 	}
 	return strings.TrimSpace(items[0].ID), ""
+}
+
+func (s *Service) resolveMostRecentPendingActionID(ctx context.Context, input MessageInput) (string, string) {
+	items, err := s.store.ListPendingActionApprovals(ctx, input.Connector, input.ExternalID, 50)
+	if err != nil {
+		return "", "Unable to load pending actions right now."
+	}
+	if len(items) == 0 {
+		items, err = s.store.ListPendingActionApprovalsGlobal(ctx, 50)
+		if err != nil {
+			return "", "Unable to load pending actions right now."
+		}
+	}
+	if len(items) == 0 {
+		return "", "No pending actions."
+	}
+	latest := items[len(items)-1]
+	actionID := strings.TrimSpace(latest.ID)
+	if actionID == "" {
+		return "", "Unable to determine the latest pending action id."
+	}
+	return actionID, ""
 }
 
 func normalizeActionCommandID(value string) string {

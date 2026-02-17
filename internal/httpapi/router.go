@@ -650,26 +650,26 @@ func (r *router) handlePairingsDeny(w http.ResponseWriter, req *http.Request) {
 }
 
 type objectiveRequest struct {
-	WorkspaceID     string `json:"workspace_id"`
-	ContextID       string `json:"context_id"`
-	Title           string `json:"title"`
-	Prompt          string `json:"prompt"`
-	TriggerType     string `json:"trigger_type"`
-	EventKey        string `json:"event_key"`
-	IntervalSeconds int    `json:"interval_seconds"`
-	NextRunUnix     int64  `json:"next_run_unix"`
-	Active          *bool  `json:"active"`
+	WorkspaceID string `json:"workspace_id"`
+	ContextID   string `json:"context_id"`
+	Title       string `json:"title"`
+	Prompt      string `json:"prompt"`
+	TriggerType string `json:"trigger_type"`
+	EventKey    string `json:"event_key"`
+	CronExpr    string `json:"cron_expr"`
+	NextRunUnix int64  `json:"next_run_unix"`
+	Active      *bool  `json:"active"`
 }
 
 type objectiveUpdateRequest struct {
-	ID              string  `json:"id"`
-	Title           *string `json:"title"`
-	Prompt          *string `json:"prompt"`
-	TriggerType     *string `json:"trigger_type"`
-	EventKey        *string `json:"event_key"`
-	IntervalSeconds *int    `json:"interval_seconds"`
-	NextRunUnix     *int64  `json:"next_run_unix"`
-	Active          *bool   `json:"active"`
+	ID          string  `json:"id"`
+	Title       *string `json:"title"`
+	Prompt      *string `json:"prompt"`
+	TriggerType *string `json:"trigger_type"`
+	EventKey    *string `json:"event_key"`
+	CronExpr    *string `json:"cron_expr"`
+	NextRunUnix *int64  `json:"next_run_unix"`
+	Active      *bool   `json:"active"`
 }
 
 type objectiveActiveRequest struct {
@@ -708,15 +708,15 @@ func (r *router) handleObjectivesCreate(w http.ResponseWriter, req *http.Request
 		active = *payload.Active
 	}
 	objective, err := r.deps.Store.CreateObjective(req.Context(), store.CreateObjectiveInput{
-		WorkspaceID:     strings.TrimSpace(payload.WorkspaceID),
-		ContextID:       strings.TrimSpace(payload.ContextID),
-		Title:           strings.TrimSpace(payload.Title),
-		Prompt:          strings.TrimSpace(payload.Prompt),
-		TriggerType:     triggerType,
-		EventKey:        strings.TrimSpace(payload.EventKey),
-		IntervalSeconds: payload.IntervalSeconds,
-		NextRunAt:       nextRun,
-		Active:          active,
+		WorkspaceID: strings.TrimSpace(payload.WorkspaceID),
+		ContextID:   strings.TrimSpace(payload.ContextID),
+		Title:       strings.TrimSpace(payload.Title),
+		Prompt:      strings.TrimSpace(payload.Prompt),
+		TriggerType: triggerType,
+		EventKey:    strings.TrimSpace(payload.EventKey),
+		CronExpr:    strings.TrimSpace(payload.CronExpr),
+		NextRunAt:   nextRun,
+		Active:      active,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -772,12 +772,12 @@ func (r *router) handleObjectivesUpdate(w http.ResponseWriter, req *http.Request
 		return
 	}
 	input := store.UpdateObjectiveInput{
-		ID:              strings.TrimSpace(payload.ID),
-		Title:           payload.Title,
-		Prompt:          payload.Prompt,
-		EventKey:        payload.EventKey,
-		IntervalSeconds: payload.IntervalSeconds,
-		Active:          payload.Active,
+		ID:       strings.TrimSpace(payload.ID),
+		Title:    payload.Title,
+		Prompt:   payload.Prompt,
+		EventKey: payload.EventKey,
+		CronExpr: payload.CronExpr,
+		Active:   payload.Active,
 	}
 	if payload.TriggerType != nil {
 		normalized := store.ObjectiveTriggerType(strings.ToLower(strings.TrimSpace(*payload.TriggerType)))
@@ -838,18 +838,18 @@ func (r *router) handleObjectivesDelete(w http.ResponseWriter, req *http.Request
 
 func objectiveToMap(item store.Objective) map[string]any {
 	return map[string]any{
-		"id":               item.ID,
-		"workspace_id":     item.WorkspaceID,
-		"context_id":       item.ContextID,
-		"title":            item.Title,
-		"prompt":           item.Prompt,
-		"trigger_type":     item.TriggerType,
-		"event_key":        item.EventKey,
-		"interval_seconds": item.IntervalSeconds,
-		"active":           item.Active,
-		"next_run_unix":    item.NextRunAt.Unix(),
-		"last_run_unix":    item.LastRunAt.Unix(),
-		"last_error":       item.LastError,
+		"id":            item.ID,
+		"workspace_id":  item.WorkspaceID,
+		"context_id":    item.ContextID,
+		"title":         item.Title,
+		"prompt":        item.Prompt,
+		"trigger_type":  item.TriggerType,
+		"event_key":     item.EventKey,
+		"cron_expr":     item.CronExpr,
+		"active":        item.Active,
+		"next_run_unix": item.NextRunAt.Unix(),
+		"last_run_unix": item.LastRunAt.Unix(),
+		"last_error":    item.LastError,
 	}
 }
 

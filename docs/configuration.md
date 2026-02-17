@@ -55,6 +55,16 @@ Discord startup behavior:
 - if `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS` is set, commands are registered per guild for faster visibility
 - if `AGENT_RUNTIME_DISCORD_APPLICATION_ID` is empty, Agent Runtime resolves app id using Discord API
 
+### Codex (optional proactive callback)
+- `AGENT_RUNTIME_CODEX_PUBLISH_URL`
+- `AGENT_RUNTIME_CODEX_PUBLISH_BEARER_TOKEN` (optional)
+- `AGENT_RUNTIME_CODEX_PUBLISH_TIMEOUT_SECONDS` (default: `8`)
+
+Codex behavior:
+- when publish URL is set, outbound notifications for Codex contexts are POSTed as JSON:
+  - `{"connector":"codex","external_id":"<session-id>","text":"<message>"}`
+- when publish URL is empty, Codex publish remains log-only (no outbound callback request)
+
 ## LLM Provider and Policy
 
 - `AGENT_RUNTIME_LLM_PROVIDER` (default: `openai`)

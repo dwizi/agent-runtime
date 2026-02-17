@@ -1,10 +1,19 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
+
+	"github.com/dwizi/agent-runtime/internal/adminclient"
+	"github.com/dwizi/agent-runtime/internal/config"
 )
 
 func TestParseChatLogContent(t *testing.T) {
@@ -137,5 +146,164 @@ func TestEvaluateChatLogFiles(t *testing.T) {
 	}
 	if len(report.Recommendations) == 0 {
 		t.Fatal("expected recommendations")
+	}
+}
+
+func TestResolveChatIdentityDefaultsToCodexCLI(t *testing.T) {
+	connector, externalID, fromUserID, displayName := resolveChatIdentity(" ", " ", " ", " ")
+	if connector != "codex" {
+		t.Fatalf("expected default connector codex, got %q", connector)
+	}
+	if externalID != "codex-cli" {
+		t.Fatalf("expected default external id codex-cli, got %q", externalID)
+	}
+	if fromUserID != "codex-cli" {
+		t.Fatalf("expected default from user id codex-cli, got %q", fromUserID)
+	}
+	if displayName != "codex-cli" {
+		t.Fatalf("expected default display name codex-cli, got %q", displayName)
+	}
+}
+
+func TestResolveChatIdentityNormalizesConnectorAndDefaultsFromUser(t *testing.T) {
+	connector, externalID, fromUserID, displayName := resolveChatIdentity(" CoDeX ", " session-99 ", "", " Codex CLI ")
+	if connector != "codex" {
+		t.Fatalf("expected normalized connector codex, got %q", connector)
+	}
+	if externalID != "session-99" {
+		t.Fatalf("expected trimmed external id session-99, got %q", externalID)
+	}
+	if fromUserID != "session-99" {
+		t.Fatalf("expected from user id to default to external id, got %q", fromUserID)
+	}
+	if displayName != "Codex CLI" {
+		t.Fatalf("expected display name Codex CLI, got %q", displayName)
+	}
+}
+
+func TestReplayTurnsSendsCodexChatRequestsAndPrintsReplies(t *testing.T) {
+	var received []adminclient.ChatRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/api/v1/chat" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var payload adminclient.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		received = append(received, payload)
+		_ = json.NewEncoder(w).Encode(adminclient.ChatResponse{
+			Handled: true,
+			Reply:   "ack: " + strings.TrimSpace(payload.Text),
+		})
+	}))
+	defer server.Close()
+
+	client, err := adminclient.New(config.Config{
+		AdminAPIURL:         server.URL,
+		AdminHTTPTimeoutSec: 10,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+
+	turns := []parsedChatTurn{
+		{
+			Inbound:   parsedChatEntry{Text: "monitor release notes"},
+			Outbounds: []parsedChatEntry{{Text: "legacy reply one"}},
+		},
+		{
+			Inbound:   parsedChatEntry{Text: "/pending-actions"},
+			Outbounds: []parsedChatEntry{{Text: "legacy reply two"}},
+		},
+	}
+	req := replayRequest{
+		Connector:    "codex",
+		ExternalID:   "codex-cli",
+		FromUserID:   "codex-cli",
+		DisplayName:  "Codex CLI",
+		ShowExpected: true,
+		TimeoutSec:   10,
+	}
+
+	cmd := &cobra.Command{}
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+
+	result := replayTurns(cmd, client, turns, req)
+	if result.TotalTurns != 2 || result.SentTurns != 2 || result.Failures != 0 {
+		t.Fatalf("unexpected replay result: %+v", result)
+	}
+	if len(received) != 2 {
+		t.Fatalf("expected 2 chat requests, got %d", len(received))
+	}
+	if received[0].Connector != "codex" || received[0].ExternalID != "codex-cli" || received[0].FromUserID != "codex-cli" {
+		t.Fatalf("unexpected first request identity: %+v", received[0])
+	}
+	if received[1].Text != "/pending-actions" {
+		t.Fatalf("unexpected second request text: %q", received[1].Text)
+	}
+	rendered := output.String()
+	if !strings.Contains(rendered, "[1] user: monitor release notes") {
+		t.Fatalf("expected first user line in output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "agent: ack: monitor release notes") {
+		t.Fatalf("expected first agent line in output, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "prev:  legacy reply one") {
+		t.Fatalf("expected first historical comparison line in output, got %q", rendered)
+	}
+}
+
+func TestReplayTurnsCountsFailuresAndContinues(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "boom"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(adminclient.ChatResponse{Handled: true, Reply: "ok"})
+	}))
+	defer server.Close()
+
+	client, err := adminclient.New(config.Config{
+		AdminAPIURL:         server.URL,
+		AdminHTTPTimeoutSec: 10,
+	})
+	if err != nil {
+		t.Fatalf("new admin client: %v", err)
+	}
+
+	turns := []parsedChatTurn{
+		{Inbound: parsedChatEntry{Text: "first"}},
+		{Inbound: parsedChatEntry{Text: "second"}},
+	}
+
+	cmd := &cobra.Command{}
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+
+	result := replayTurns(cmd, client, turns, replayRequest{
+		Connector:   "codex",
+		ExternalID:  "codex-cli",
+		FromUserID:  "codex-cli",
+		DisplayName: "Codex CLI",
+		TimeoutSec:  10,
+	})
+	if result.Failures != 1 || result.SentTurns != 2 || result.TotalTurns != 2 {
+		t.Fatalf("unexpected replay result: %+v", result)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected replay to continue after failure, got %d requests", requestCount)
+	}
+	if !strings.Contains(output.String(), "error:") {
+		t.Fatalf("expected error output, got %q", output.String())
 	}
 }

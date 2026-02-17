@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -195,5 +196,30 @@ func TestTaskRoutingMetadataPersistAndUpdate(t *testing.T) {
 	}
 	if updated.AssignedLane != "moderation" {
 		t.Fatalf("expected moderation lane, got %s", updated.AssignedLane)
+	}
+}
+
+func TestCreateTaskRejectsDuplicateRunKey(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+	input := CreateTaskInput{
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Kind:        "objective",
+		Title:       "Objective task",
+		Prompt:      "run",
+		Status:      "queued",
+		RunKey:      "objective:obj-1:12345",
+	}
+	first := input
+	first.ID = "task-1"
+	if err := sqlStore.CreateTask(ctx, first); err != nil {
+		t.Fatalf("create first task: %v", err)
+	}
+	second := input
+	second.ID = "task-2"
+	err := sqlStore.CreateTask(ctx, second)
+	if !errors.Is(err, ErrTaskRunAlreadyExists) {
+		t.Fatalf("expected ErrTaskRunAlreadyExists, got %v", err)
 	}
 }

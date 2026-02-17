@@ -18,6 +18,7 @@ type fakeStore struct {
 	eventObjectives []store.Objective
 	lastTask        store.CreateTaskInput
 	lastRunUpdate   store.UpdateObjectiveRunInput
+	createTaskErr   error
 }
 
 func (f *fakeStore) ListDueObjectives(ctx context.Context, now time.Time, limit int) ([]store.Objective, error) {
@@ -39,6 +40,9 @@ func (f *fakeStore) UpdateObjectiveRun(ctx context.Context, input store.UpdateOb
 }
 
 func (f *fakeStore) CreateTask(ctx context.Context, input store.CreateTaskInput) error {
+	if f.createTaskErr != nil {
+		return f.createTaskErr
+	}
 	f.lastTask = input
 	return nil
 }
@@ -52,7 +56,9 @@ func (f *fakeEngine) Enqueue(task orchestrator.Task) (orchestrator.Task, error) 
 	if f.enqueueErr != nil {
 		return orchestrator.Task{}, f.enqueueErr
 	}
-	task.ID = "task-1"
+	if strings.TrimSpace(task.ID) == "" {
+		task.ID = "task-1"
+	}
 	f.lastTask = task
 	return task, nil
 }
@@ -61,12 +67,12 @@ func TestProcessDueQueuesObjectiveTask(t *testing.T) {
 	storeMock := &fakeStore{
 		dueObjectives: []store.Objective{
 			{
-				ID:              "obj-1",
-				WorkspaceID:     "ws-1",
-				ContextID:       "ctx-1",
-				Title:           "Daily Review",
-				Prompt:          "Review daily updates",
-				IntervalSeconds: 300,
+				ID:          "obj-1",
+				WorkspaceID: "ws-1",
+				ContextID:   "ctx-1",
+				Title:       "Daily Review",
+				Prompt:      "Review daily updates",
+				CronExpr:    "* * * * *",
 			},
 		},
 	}
@@ -78,8 +84,11 @@ func TestProcessDueQueuesObjectiveTask(t *testing.T) {
 	if engineMock.lastTask.Kind != orchestrator.TaskKindObjective {
 		t.Fatalf("expected objective task kind, got %s", engineMock.lastTask.Kind)
 	}
-	if storeMock.lastTask.ID != "task-1" {
-		t.Fatalf("expected persisted task id task-1, got %s", storeMock.lastTask.ID)
+	if strings.TrimSpace(storeMock.lastTask.ID) == "" {
+		t.Fatal("expected persisted task id")
+	}
+	if strings.TrimSpace(storeMock.lastTask.RunKey) == "" {
+		t.Fatal("expected objective schedule run key")
 	}
 	if strings.TrimSpace(storeMock.lastRunUpdate.ID) != "obj-1" {
 		t.Fatalf("expected run update for obj-1, got %s", storeMock.lastRunUpdate.ID)
@@ -90,12 +99,12 @@ func TestProcessDueWritesLastErrorOnEnqueueFailure(t *testing.T) {
 	storeMock := &fakeStore{
 		dueObjectives: []store.Objective{
 			{
-				ID:              "obj-2",
-				WorkspaceID:     "ws-1",
-				ContextID:       "ctx-1",
-				Title:           "Daily Review",
-				Prompt:          "Review daily updates",
-				IntervalSeconds: 300,
+				ID:          "obj-2",
+				WorkspaceID: "ws-1",
+				ContextID:   "ctx-1",
+				Title:       "Daily Review",
+				Prompt:      "Review daily updates",
+				CronExpr:    "* * * * *",
 			},
 		},
 	}
@@ -124,10 +133,38 @@ func TestHandleMarkdownUpdateQueuesEventObjectives(t *testing.T) {
 	engineMock := &fakeEngine{}
 	service := New(storeMock, engineMock, 30*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	service.HandleMarkdownUpdate(context.Background(), "ws-1", "memory/notes.md")
-	if engineMock.lastTask.ID != "task-1" {
-		t.Fatalf("expected enqueued event task id task-1, got %s", engineMock.lastTask.ID)
+	if strings.TrimSpace(engineMock.lastTask.ID) == "" {
+		t.Fatalf("expected enqueued event task id, got empty")
 	}
 	if !strings.Contains(engineMock.lastTask.Prompt, "memory/notes.md") {
 		t.Fatalf("expected changed path in prompt, got %s", engineMock.lastTask.Prompt)
+	}
+	if strings.TrimSpace(storeMock.lastTask.RunKey) != "" {
+		t.Fatalf("expected no run key for event objective task, got %s", storeMock.lastTask.RunKey)
+	}
+}
+
+func TestProcessDueTreatsDuplicateRunAsIdempotent(t *testing.T) {
+	storeMock := &fakeStore{
+		dueObjectives: []store.Objective{
+			{
+				ID:        "obj-dup",
+				CronExpr:  "* * * * *",
+				Prompt:    "run",
+				NextRunAt: time.Now().UTC().Add(-time.Minute),
+			},
+		},
+		createTaskErr: store.ErrTaskRunAlreadyExists,
+	}
+	engineMock := &fakeEngine{}
+	service := New(storeMock, engineMock, 30*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := service.processDue(context.Background()); err != nil {
+		t.Fatalf("processDue failed: %v", err)
+	}
+	if strings.TrimSpace(engineMock.lastTask.ID) != "" {
+		t.Fatalf("expected duplicate run to skip enqueue, got task id %s", engineMock.lastTask.ID)
+	}
+	if strings.TrimSpace(storeMock.lastRunUpdate.LastError) != "" {
+		t.Fatalf("expected duplicate run to leave last_error empty, got %q", storeMock.lastRunUpdate.LastError)
 	}
 }

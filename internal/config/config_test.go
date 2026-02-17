@@ -25,6 +25,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_QMD_QUERY_TIMEOUT_SECONDS", "")
 	t.Setenv("AGENT_RUNTIME_QMD_AUTO_EMBED", "")
 	t.Setenv("AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS", "")
+	t.Setenv("AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS", "")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_ENABLED", "")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_INTERVAL_SECONDS", "")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_STALE_SECONDS", "")
@@ -43,6 +44,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS", "")
 	t.Setenv("AGENT_RUNTIME_TELEGRAM_API_BASE", "")
 	t.Setenv("AGENT_RUNTIME_TELEGRAM_POLL_SECONDS", "")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_URL", "")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_BEARER_TOKEN", "")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_TIMEOUT_SECONDS", "")
 	t.Setenv("AGENT_RUNTIME_IMAP_HOST", "")
 	t.Setenv("AGENT_RUNTIME_IMAP_PORT", "")
 	t.Setenv("AGENT_RUNTIME_IMAP_USERNAME", "")
@@ -144,6 +148,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.ObjectivePollSec != 15 {
 		t.Fatalf("expected default objective poll seconds 15, got %d", cfg.ObjectivePollSec)
 	}
+	if cfg.TaskRecoveryRunningStaleSec != 600 {
+		t.Fatalf("expected default task recovery running stale seconds 600, got %d", cfg.TaskRecoveryRunningStaleSec)
+	}
 	if !cfg.HeartbeatEnabled {
 		t.Fatal("expected heartbeat enabled by default")
 	}
@@ -194,6 +201,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.TelegramPoll != 25 {
 		t.Fatalf("expected default telegram poll seconds 25, got %d", cfg.TelegramPoll)
+	}
+	if cfg.CodexPublishURL != "" {
+		t.Fatalf("expected default codex publish url empty, got %s", cfg.CodexPublishURL)
+	}
+	if cfg.CodexPublishBearerToken != "" {
+		t.Fatal("expected default codex publish bearer token empty")
+	}
+	if cfg.CodexPublishTimeoutSec != 8 {
+		t.Fatalf("expected default codex publish timeout 8, got %d", cfg.CodexPublishTimeoutSec)
 	}
 	if cfg.IMAPHost != "" {
 		t.Fatalf("expected default imap host empty, got %s", cfg.IMAPHost)
@@ -333,6 +349,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.AdminAPIURL != "https://admin.localhost" {
 		t.Fatalf("expected default admin api url, got %s", cfg.AdminAPIURL)
 	}
+	if cfg.AdminHTTPTimeoutSec != 120 {
+		t.Fatalf("expected default admin http timeout 120, got %d", cfg.AdminHTTPTimeoutSec)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -354,6 +373,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_QMD_QUERY_TIMEOUT_SECONDS", "44")
 	t.Setenv("AGENT_RUNTIME_QMD_AUTO_EMBED", "false")
 	t.Setenv("AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS", "11")
+	t.Setenv("AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS", "240")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_ENABLED", "true")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_INTERVAL_SECONDS", "20")
 	t.Setenv("AGENT_RUNTIME_HEARTBEAT_STALE_SECONDS", "75")
@@ -371,6 +391,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS", "111,222")
 	t.Setenv("AGENT_RUNTIME_TELEGRAM_API_BASE", "https://telegram.test")
 	t.Setenv("AGENT_RUNTIME_TELEGRAM_POLL_SECONDS", "12")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_URL", "https://codex.example.com/publish")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_BEARER_TOKEN", "codex-secret")
+	t.Setenv("AGENT_RUNTIME_CODEX_PUBLISH_TIMEOUT_SECONDS", "21")
 	t.Setenv("AGENT_RUNTIME_IMAP_HOST", "imap.example.com")
 	t.Setenv("AGENT_RUNTIME_IMAP_PORT", "1993")
 	t.Setenv("AGENT_RUNTIME_IMAP_USERNAME", "inbox@example.com")
@@ -419,6 +442,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("PUBLIC_HOST", "chat.example.com")
 	t.Setenv("ADMIN_HOST", "admin.example.com")
 	t.Setenv("AGENT_RUNTIME_ADMIN_API_URL", "https://admin.example.com")
+	t.Setenv("AGENT_RUNTIME_ADMIN_HTTP_TIMEOUT_SECONDS", "45")
 	t.Setenv("AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY", "false")
 	t.Setenv("AGENT_RUNTIME_TUI_APPROVER_USER_ID", "overlord-1")
 	t.Setenv("AGENT_RUNTIME_TUI_APPROVAL_ROLE", "overlord")
@@ -478,6 +502,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.ObjectivePollSec != 11 {
 		t.Fatalf("expected overridden objective poll seconds, got %d", cfg.ObjectivePollSec)
 	}
+	if cfg.TaskRecoveryRunningStaleSec != 240 {
+		t.Fatalf("expected overridden task recovery running stale seconds, got %d", cfg.TaskRecoveryRunningStaleSec)
+	}
 	if !cfg.HeartbeatEnabled {
 		t.Fatal("expected overridden heartbeat enabled true")
 	}
@@ -528,6 +555,15 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.TelegramPoll != 12 {
 		t.Fatalf("expected overridden telegram poll seconds, got %d", cfg.TelegramPoll)
+	}
+	if cfg.CodexPublishURL != "https://codex.example.com/publish" {
+		t.Fatalf("expected overridden codex publish url, got %s", cfg.CodexPublishURL)
+	}
+	if cfg.CodexPublishBearerToken != "codex-secret" {
+		t.Fatalf("expected overridden codex publish bearer token, got %s", cfg.CodexPublishBearerToken)
+	}
+	if cfg.CodexPublishTimeoutSec != 21 {
+		t.Fatalf("expected overridden codex publish timeout, got %d", cfg.CodexPublishTimeoutSec)
 	}
 	if cfg.IMAPHost != "imap.example.com" {
 		t.Fatalf("expected overridden imap host, got %s", cfg.IMAPHost)
@@ -672,6 +708,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.AdminAPIURL != "https://admin.example.com" {
 		t.Fatalf("expected overridden admin api url, got %s", cfg.AdminAPIURL)
+	}
+	if cfg.AdminHTTPTimeoutSec != 45 {
+		t.Fatalf("expected overridden admin http timeout 45, got %d", cfg.AdminHTTPTimeoutSec)
 	}
 	if cfg.AdminTLSSkipVerify {
 		t.Fatal("expected admin tls skip verify false")

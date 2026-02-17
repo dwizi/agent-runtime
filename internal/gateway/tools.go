@@ -54,8 +54,9 @@ var _ tools.ArgumentValidator = (*RunActionTool)(nil)
 type contextKey string
 
 const (
-	ContextKeyRecord contextKey = "context_record"
-	ContextKeyInput  contextKey = "message_input"
+	ContextKeyRecord         contextKey = "context_record"
+	ContextKeyInput          contextKey = "message_input"
+	defaultObjectiveCronExpr            = "0 */6 * * *"
 )
 
 // SearchTool implements tools.Tool for QMD search.
@@ -798,15 +799,15 @@ func (t *CreateObjectiveTool) Description() string {
 }
 
 func (t *CreateObjectiveTool) ParametersSchema() string {
-	return `{"title":"string","prompt":"string","interval_seconds":"number(optional >=60)","active":"boolean(optional)"}`
+	return `{"title":"string","prompt":"string","cron_expr":"string(optional, default: 0 */6 * * *)","active":"boolean(optional)"}`
 }
 
 func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 	var args struct {
-		Title           string `json:"title"`
-		Prompt          string `json:"prompt"`
-		IntervalSeconds int    `json:"interval_seconds"`
-		Active          *bool  `json:"active"`
+		Title    string `json:"title"`
+		Prompt   string `json:"prompt"`
+		CronExpr string `json:"cron_expr"`
+		Active   *bool  `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return err
@@ -817,18 +818,20 @@ func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 	if strings.TrimSpace(args.Prompt) == "" {
 		return fmt.Errorf("prompt is required")
 	}
-	if args.IntervalSeconds != 0 && args.IntervalSeconds < 60 {
-		return fmt.Errorf("interval_seconds must be >= 60")
+	if cronExpr := strings.TrimSpace(args.CronExpr); cronExpr != "" {
+		if _, err := store.ComputeScheduleNextRun(cronExpr, time.Now().UTC()); err != nil {
+			return fmt.Errorf("cron_expr is invalid")
+		}
 	}
 	return nil
 }
 
 func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 	var args struct {
-		Title           string `json:"title"`
-		Prompt          string `json:"prompt"`
-		IntervalSeconds int    `json:"interval_seconds"`
-		Active          *bool  `json:"active"`
+		Title    string `json:"title"`
+		Prompt   string `json:"prompt"`
+		CronExpr string `json:"cron_expr"`
+		Active   *bool  `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -850,22 +853,22 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 		return "", fmt.Errorf("approval required: %w", err)
 	}
 
-	intervalSeconds := args.IntervalSeconds
-	if intervalSeconds < 1 {
-		intervalSeconds = int((6 * time.Hour).Seconds())
+	cronExpr := strings.TrimSpace(args.CronExpr)
+	if cronExpr == "" {
+		cronExpr = defaultObjectiveCronExpr
 	}
 	active := true
 	if args.Active != nil {
 		active = *args.Active
 	}
 	obj, err := t.store.CreateObjective(ctx, store.CreateObjectiveInput{
-		WorkspaceID:     record.WorkspaceID,
-		ContextID:       record.ID,
-		Title:           strings.TrimSpace(args.Title),
-		Prompt:          strings.TrimSpace(args.Prompt),
-		TriggerType:     store.ObjectiveTriggerSchedule,
-		IntervalSeconds: intervalSeconds,
-		Active:          active,
+		WorkspaceID: record.WorkspaceID,
+		ContextID:   record.ID,
+		Title:       strings.TrimSpace(args.Title),
+		Prompt:      strings.TrimSpace(args.Prompt),
+		TriggerType: store.ObjectiveTriggerSchedule,
+		CronExpr:    cronExpr,
+		Active:      active,
 	})
 	if err != nil {
 		return "", err
@@ -892,18 +895,18 @@ func (t *UpdateObjectiveTool) Description() string {
 }
 
 func (t *UpdateObjectiveTool) ParametersSchema() string {
-	return `{"objective_id":"string","title":"string(optional)","prompt":"string(optional)","trigger_type":"schedule|event(optional)","event_key":"string(optional)","interval_seconds":"number(optional >=60)","active":"boolean(optional)"}`
+	return `{"objective_id":"string","title":"string(optional)","prompt":"string(optional)","trigger_type":"schedule|event(optional)","event_key":"string(optional)","cron_expr":"string(optional)","active":"boolean(optional)"}`
 }
 
 func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 	var args struct {
-		ObjectiveID     string `json:"objective_id"`
-		Title           string `json:"title"`
-		Prompt          string `json:"prompt"`
-		TriggerType     string `json:"trigger_type"`
-		EventKey        string `json:"event_key"`
-		IntervalSeconds int    `json:"interval_seconds"`
-		Active          *bool  `json:"active"`
+		ObjectiveID string  `json:"objective_id"`
+		Title       string  `json:"title"`
+		Prompt      string  `json:"prompt"`
+		TriggerType string  `json:"trigger_type"`
+		EventKey    string  `json:"event_key"`
+		CronExpr    *string `json:"cron_expr"`
+		Active      *bool   `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return err
@@ -911,10 +914,8 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 	if strings.TrimSpace(args.ObjectiveID) == "" {
 		return fmt.Errorf("objective_id is required")
 	}
-	if args.IntervalSeconds != 0 && args.IntervalSeconds < 60 {
-		return fmt.Errorf("interval_seconds must be >= 60")
-	}
-	if trigger := strings.ToLower(strings.TrimSpace(args.TriggerType)); trigger != "" {
+	trigger := strings.ToLower(strings.TrimSpace(args.TriggerType))
+	if trigger != "" {
 		if trigger != string(store.ObjectiveTriggerSchedule) && trigger != string(store.ObjectiveTriggerEvent) {
 			return fmt.Errorf("trigger_type must be schedule or event")
 		}
@@ -922,11 +923,21 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 			return fmt.Errorf("event_key is required when trigger_type is event")
 		}
 	}
+	if args.CronExpr != nil {
+		cronExpr := strings.TrimSpace(*args.CronExpr)
+		if cronExpr == "" {
+			if trigger != string(store.ObjectiveTriggerEvent) {
+				return fmt.Errorf("cron_expr cannot be empty for schedule objectives")
+			}
+		} else if _, err := store.ComputeScheduleNextRun(cronExpr, time.Now().UTC()); err != nil {
+			return fmt.Errorf("cron_expr is invalid")
+		}
+	}
 	if strings.TrimSpace(args.Title) == "" &&
 		strings.TrimSpace(args.Prompt) == "" &&
 		strings.TrimSpace(args.TriggerType) == "" &&
 		strings.TrimSpace(args.EventKey) == "" &&
-		args.IntervalSeconds == 0 &&
+		args.CronExpr == nil &&
 		args.Active == nil {
 		return fmt.Errorf("at least one field must be provided")
 	}
@@ -935,13 +946,13 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 
 func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
 	var args struct {
-		ObjectiveID     string `json:"objective_id"`
-		Title           string `json:"title"`
-		Prompt          string `json:"prompt"`
-		TriggerType     string `json:"trigger_type"`
-		EventKey        string `json:"event_key"`
-		IntervalSeconds int    `json:"interval_seconds"`
-		Active          *bool  `json:"active"`
+		ObjectiveID string  `json:"objective_id"`
+		Title       string  `json:"title"`
+		Prompt      string  `json:"prompt"`
+		TriggerType string  `json:"trigger_type"`
+		EventKey    string  `json:"event_key"`
+		CronExpr    *string `json:"cron_expr"`
+		Active      *bool   `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
@@ -967,9 +978,9 @@ func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if eventKey := strings.TrimSpace(args.EventKey); eventKey != "" {
 		update.EventKey = &eventKey
 	}
-	if args.IntervalSeconds > 0 {
-		interval := args.IntervalSeconds
-		update.IntervalSeconds = &interval
+	if args.CronExpr != nil {
+		cronExpr := strings.TrimSpace(*args.CronExpr)
+		update.CronExpr = &cronExpr
 	}
 	if args.Active != nil {
 		update.Active = args.Active

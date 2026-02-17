@@ -143,6 +143,7 @@ func TestSyncCommandsRegistersTelegramCommands(t *testing.T) {
 	}
 	seenTask := false
 	seenPair := false
+	seenRoute := false
 	for _, command := range payload.Commands {
 		if command.Command == "task" {
 			seenTask = true
@@ -150,12 +151,18 @@ func TestSyncCommandsRegistersTelegramCommands(t *testing.T) {
 		if command.Command == "pair" {
 			seenPair = true
 		}
+		if command.Command == "route" {
+			seenRoute = true
+		}
 	}
 	if !seenTask {
 		t.Fatal("expected task command in payload")
 	}
 	if !seenPair {
 		t.Fatal("expected pair command in payload")
+	}
+	if !seenRoute {
+		t.Fatal("expected route command in payload")
 	}
 }
 

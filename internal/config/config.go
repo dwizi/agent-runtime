@@ -28,6 +28,7 @@ type Config struct {
 	QMDQueryTimeoutSec               int
 	QMDAutoEmbed                     bool
 	ObjectivePollSec                 int
+	TaskRecoveryRunningStaleSec      int
 	HeartbeatEnabled                 bool
 	HeartbeatIntervalSec             int
 	HeartbeatStaleSec                int
@@ -48,6 +49,9 @@ type Config struct {
 	TelegramToken             string
 	TelegramAPI               string
 	TelegramPoll              int
+	CodexPublishURL           string
+	CodexPublishBearerToken   string
+	CodexPublishTimeoutSec    int
 	IMAPHost                  string
 	IMAPPort                  int
 	IMAPUsername              string
@@ -108,11 +112,12 @@ type Config struct {
 	PublicHost string
 	AdminHost  string
 
-	AdminAPIURL        string
-	AdminTLSSkipVerify bool
-	AdminTLSCAFile     string
-	AdminTLSCertFile   string
-	AdminTLSKeyFile    string
+	AdminAPIURL         string
+	AdminHTTPTimeoutSec int
+	AdminTLSSkipVerify  bool
+	AdminTLSCAFile      string
+	AdminTLSCertFile    string
+	AdminTLSKeyFile     string
 
 	TUIApproverUserID string
 	TUIApprovalRole   string
@@ -144,6 +149,7 @@ func FromEnv() Config {
 		QMDQueryTimeoutSec:               intOrDefault("AGENT_RUNTIME_QMD_QUERY_TIMEOUT_SECONDS", 30),
 		QMDAutoEmbed:                     boolOrDefault("AGENT_RUNTIME_QMD_AUTO_EMBED", true),
 		ObjectivePollSec:                 intOrDefault("AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS", 15),
+		TaskRecoveryRunningStaleSec:      intOrDefault("AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS", 600),
 		HeartbeatEnabled:                 boolOrDefault("AGENT_RUNTIME_HEARTBEAT_ENABLED", true),
 		HeartbeatIntervalSec:             intOrDefault("AGENT_RUNTIME_HEARTBEAT_INTERVAL_SECONDS", 30),
 		HeartbeatStaleSec:                intOrDefault("AGENT_RUNTIME_HEARTBEAT_STALE_SECONDS", 120),
@@ -163,6 +169,9 @@ func FromEnv() Config {
 		TelegramToken:                    os.Getenv("AGENT_RUNTIME_TELEGRAM_TOKEN"),
 		TelegramAPI:                      stringOrDefault("AGENT_RUNTIME_TELEGRAM_API_BASE", "https://api.telegram.org"),
 		TelegramPoll:                     intOrDefault("AGENT_RUNTIME_TELEGRAM_POLL_SECONDS", 25),
+		CodexPublishURL:                  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_PUBLISH_URL")),
+		CodexPublishBearerToken:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_CODEX_PUBLISH_BEARER_TOKEN")),
+		CodexPublishTimeoutSec:           intOrDefault("AGENT_RUNTIME_CODEX_PUBLISH_TIMEOUT_SECONDS", 8),
 		IMAPHost:                         strings.TrimSpace(os.Getenv("AGENT_RUNTIME_IMAP_HOST")),
 		IMAPPort:                         intOrDefault("AGENT_RUNTIME_IMAP_PORT", 993),
 		IMAPUsername:                     strings.TrimSpace(os.Getenv("AGENT_RUNTIME_IMAP_USERNAME")),
@@ -183,7 +192,7 @@ func FromEnv() Config {
 		SMTPPassword:                       os.Getenv("AGENT_RUNTIME_SMTP_PASSWORD"),
 		SMTPFrom:                           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_FROM")),
 		SandboxEnabled:                     boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
-		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
+		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,wget,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
 		SandboxRunnerCommand:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),
 		SandboxRunnerArgs:                  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_ARGS")),
 		SandboxTimeoutSec:                  intOrDefault("AGENT_RUNTIME_SANDBOX_TIMEOUT_SECONDS", 20),
@@ -222,6 +231,7 @@ func FromEnv() Config {
 		PublicHost:                         stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                          stringOrDefault("ADMIN_HOST", "admin.localhost"),
 		AdminAPIURL:                        stringOrDefault("AGENT_RUNTIME_ADMIN_API_URL", "https://admin.localhost"),
+		AdminHTTPTimeoutSec:                intOrDefault("AGENT_RUNTIME_ADMIN_HTTP_TIMEOUT_SECONDS", 120),
 		AdminTLSSkipVerify:                 boolOrDefault("AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY", true),
 		AdminTLSCAFile:                     strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CA_FILE")),
 		AdminTLSCertFile:                   strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE")),

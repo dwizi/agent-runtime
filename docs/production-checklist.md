@@ -46,9 +46,11 @@ Use this as a go-live gate for Agent Runtime deployments.
 
 - [ ] LLM safety settings reviewed (`AGENT_RUNTIME_LLM_*`).
 - [ ] Objective polling configured (`AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS`).
+- [ ] Startup recovery threshold configured (`AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS`).
 - [ ] At least one objective tested:
   - [ ] schedule-triggered
   - [ ] markdown-update-triggered
+- [ ] Schedule idempotency verified (no duplicate objective task rows for the same run window).
 - [ ] Action approval flow tested:
   - [ ] `/pending-actions`
   - [ ] `/approve-action <id>`

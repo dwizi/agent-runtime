@@ -24,32 +24,32 @@ const (
 )
 
 type Objective struct {
-	ID              string
-	WorkspaceID     string
-	ContextID       string
-	Title           string
-	Prompt          string
-	TriggerType     ObjectiveTriggerType
-	EventKey        string
-	IntervalSeconds int
-	Active          bool
-	NextRunAt       time.Time
-	LastRunAt       time.Time
-	LastError       string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID          string
+	WorkspaceID string
+	ContextID   string
+	Title       string
+	Prompt      string
+	TriggerType ObjectiveTriggerType
+	EventKey    string
+	CronExpr    string
+	Active      bool
+	NextRunAt   time.Time
+	LastRunAt   time.Time
+	LastError   string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type CreateObjectiveInput struct {
-	WorkspaceID     string
-	ContextID       string
-	Title           string
-	Prompt          string
-	TriggerType     ObjectiveTriggerType
-	EventKey        string
-	IntervalSeconds int
-	NextRunAt       time.Time
-	Active          bool
+	WorkspaceID string
+	ContextID   string
+	Title       string
+	Prompt      string
+	TriggerType ObjectiveTriggerType
+	EventKey    string
+	CronExpr    string
+	NextRunAt   time.Time
+	Active      bool
 }
 
 type ListObjectivesInput struct {
@@ -66,31 +66,31 @@ type UpdateObjectiveRunInput struct {
 }
 
 type UpdateObjectiveInput struct {
-	ID              string
-	Title           *string
-	Prompt          *string
-	TriggerType     *ObjectiveTriggerType
-	EventKey        *string
-	IntervalSeconds *int
-	NextRunAt       *time.Time
-	Active          *bool
+	ID          string
+	Title       *string
+	Prompt      *string
+	TriggerType *ObjectiveTriggerType
+	EventKey    *string
+	CronExpr    *string
+	NextRunAt   *time.Time
+	Active      *bool
 }
 
 func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput) (Objective, error) {
 	now := time.Now().UTC()
 	record := Objective{
-		ID:              "obj_" + uuid.NewString(),
-		WorkspaceID:     strings.TrimSpace(input.WorkspaceID),
-		ContextID:       strings.TrimSpace(input.ContextID),
-		Title:           strings.TrimSpace(input.Title),
-		Prompt:          strings.TrimSpace(input.Prompt),
-		TriggerType:     input.TriggerType,
-		EventKey:        strings.TrimSpace(strings.ToLower(input.EventKey)),
-		IntervalSeconds: input.IntervalSeconds,
-		Active:          input.Active,
-		NextRunAt:       input.NextRunAt.UTC(),
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:          "obj_" + uuid.NewString(),
+		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
+		ContextID:   strings.TrimSpace(input.ContextID),
+		Title:       strings.TrimSpace(input.Title),
+		Prompt:      strings.TrimSpace(input.Prompt),
+		TriggerType: input.TriggerType,
+		EventKey:    strings.TrimSpace(strings.ToLower(input.EventKey)),
+		CronExpr:    normalizeCronExpr(input.CronExpr),
+		Active:      input.Active,
+		NextRunAt:   input.NextRunAt.UTC(),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if !record.Active {
 		record.Active = true
@@ -100,18 +100,25 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 	}
 	switch record.TriggerType {
 	case ObjectiveTriggerSchedule:
-		if record.IntervalSeconds < 1 {
+		if record.CronExpr == "" {
+			return Objective{}, ErrObjectiveInvalid
+		}
+		if _, err := ComputeScheduleNextRun(record.CronExpr, now); err != nil {
 			return Objective{}, ErrObjectiveInvalid
 		}
 		if record.NextRunAt.IsZero() {
-			record.NextRunAt = now.Add(time.Duration(record.IntervalSeconds) * time.Second)
+			nextRun, err := ComputeScheduleNextRun(record.CronExpr, now)
+			if err != nil {
+				return Objective{}, ErrObjectiveInvalid
+			}
+			record.NextRunAt = nextRun
 		}
 	case ObjectiveTriggerEvent:
 		if record.EventKey == "" {
 			return Objective{}, ErrObjectiveInvalid
 		}
 		record.NextRunAt = time.Time{}
-		record.IntervalSeconds = 0
+		record.CronExpr = ""
 	default:
 		return Objective{}, ErrObjectiveInvalid
 	}
@@ -119,7 +126,7 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO objectives (
-			id, workspace_id, context_id, title, prompt, trigger_type, event_key, interval_seconds, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+			id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.WorkspaceID,
@@ -128,7 +135,7 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 		record.Prompt,
 		string(record.TriggerType),
 		nullIfEmpty(record.EventKey),
-		nullIfZero(record.IntervalSeconds),
+		nullIfEmpty(record.CronExpr),
 		boolToInt(record.Active),
 		nullTimeUnix(record.NextRunAt),
 		nil,
@@ -155,7 +162,7 @@ func (s *Store) ListObjectives(ctx context.Context, input ListObjectivesInput) (
 	if input.ActiveOnly {
 		whereParts = append(whereParts, "active = 1")
 	}
-	query := `SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, interval_seconds, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+	query := `SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
 		FROM objectives
 		WHERE ` + strings.Join(whereParts, " AND ") + `
 		ORDER BY created_at_unix ASC
@@ -186,7 +193,7 @@ func (s *Store) ListDueObjectives(ctx context.Context, now time.Time, limit int)
 	current := now.UTC()
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, interval_seconds, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
 		 FROM objectives
 		 WHERE active = 1
 		   AND trigger_type = ?
@@ -224,7 +231,7 @@ func (s *Store) ListEventObjectives(ctx context.Context, workspaceID, eventKey s
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, interval_seconds, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
 		 FROM objectives
 		 WHERE active = 1
 		   AND workspace_id = ?
@@ -283,7 +290,7 @@ func (s *Store) UpdateObjectiveRun(ctx context.Context, input UpdateObjectiveRun
 func (s *Store) LookupObjective(ctx context.Context, id string) (Objective, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, interval_seconds, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
 		 FROM objectives
 		 WHERE id = ?`,
 		strings.TrimSpace(id),
@@ -315,8 +322,8 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 	if input.EventKey != nil {
 		record.EventKey = strings.TrimSpace(strings.ToLower(*input.EventKey))
 	}
-	if input.IntervalSeconds != nil {
-		record.IntervalSeconds = *input.IntervalSeconds
+	if input.CronExpr != nil {
+		record.CronExpr = normalizeCronExpr(*input.CronExpr)
 	}
 	if input.NextRunAt != nil {
 		record.NextRunAt = input.NextRunAt.UTC()
@@ -332,17 +339,24 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 	switch record.TriggerType {
 	case ObjectiveTriggerSchedule:
 		record.EventKey = ""
-		if record.IntervalSeconds < 1 {
+		if record.CronExpr == "" {
+			return Objective{}, ErrObjectiveInvalid
+		}
+		if _, err := ComputeScheduleNextRun(record.CronExpr, now); err != nil {
 			return Objective{}, ErrObjectiveInvalid
 		}
 		if record.Active && record.NextRunAt.IsZero() {
-			record.NextRunAt = now.Add(time.Duration(record.IntervalSeconds) * time.Second)
+			nextRun, err := ComputeScheduleNextRun(record.CronExpr, now)
+			if err != nil {
+				return Objective{}, ErrObjectiveInvalid
+			}
+			record.NextRunAt = nextRun
 		}
 	case ObjectiveTriggerEvent:
 		if strings.TrimSpace(record.EventKey) == "" {
 			return Objective{}, ErrObjectiveInvalid
 		}
-		record.IntervalSeconds = 0
+		record.CronExpr = ""
 		record.NextRunAt = time.Time{}
 	default:
 		return Objective{}, ErrObjectiveInvalid
@@ -352,13 +366,13 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 	if _, err := s.db.ExecContext(
 		ctx,
 		`UPDATE objectives
-		 SET title = ?, prompt = ?, trigger_type = ?, event_key = ?, interval_seconds = ?, active = ?, next_run_unix = ?, updated_at_unix = ?
+		 SET title = ?, prompt = ?, trigger_type = ?, event_key = ?, cron_expr = ?, active = ?, next_run_unix = ?, updated_at_unix = ?
 		 WHERE id = ?`,
 		record.Title,
 		record.Prompt,
 		string(record.TriggerType),
 		nullIfEmpty(record.EventKey),
-		nullIfZero(record.IntervalSeconds),
+		nullIfEmpty(record.CronExpr),
 		boolToInt(record.Active),
 		nullTimeUnix(record.NextRunAt),
 		record.UpdatedAt.Unix(),
@@ -403,7 +417,7 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 	var record Objective
 	var triggerType string
 	var eventKey sql.NullString
-	var intervalSeconds sql.NullInt64
+	var cronExpr sql.NullString
 	var active int
 	var nextRunUnix sql.NullInt64
 	var lastRunUnix sql.NullInt64
@@ -418,7 +432,7 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 		&record.Prompt,
 		&triggerType,
 		&eventKey,
-		&intervalSeconds,
+		&cronExpr,
 		&active,
 		&nextRunUnix,
 		&lastRunUnix,
@@ -430,7 +444,7 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 	}
 	record.TriggerType = ObjectiveTriggerType(strings.TrimSpace(triggerType))
 	record.EventKey = eventKey.String
-	record.IntervalSeconds = int(intervalSeconds.Int64)
+	record.CronExpr = normalizeCronExpr(cronExpr.String)
 	record.Active = active == 1
 	if nextRunUnix.Valid && nextRunUnix.Int64 > 0 {
 		record.NextRunAt = time.Unix(nextRunUnix.Int64, 0).UTC()
@@ -453,13 +467,6 @@ func boolToInt(value bool) int {
 
 func nullIfEmpty(value string) any {
 	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
-}
-
-func nullIfZero(value int) any {
-	if value <= 0 {
 		return nil
 	}
 	return value

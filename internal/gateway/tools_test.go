@@ -232,8 +232,8 @@ func TestCreateObjectiveTool_Execute(t *testing.T) {
 	mockStore := &MockStore{
 		CreateObjectiveFunc: func(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error) {
 			created = true
-			if input.IntervalSeconds < 60 {
-				t.Fatalf("expected sensible interval, got %d", input.IntervalSeconds)
+			if input.CronExpr != defaultObjectiveCronExpr {
+				t.Fatalf("expected default cron %q, got %q", defaultObjectiveCronExpr, input.CronExpr)
 			}
 			return store.Objective{ID: "obj-1", Active: input.Active}, nil
 		},

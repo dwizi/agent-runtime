@@ -93,6 +93,21 @@ Expected:
 
 Result: connector identity is linked and can issue admin commands.
 
+Alternative (Codex CLI channel):
+
+```bash
+set -a; source .env; set +a
+go run ./cmd/agent-runtime chat pairing pair-admin \
+  --connector codex \
+  --external-id codex-cli \
+  --from-user-id codex-cli \
+  --display-name "Codex CLI" \
+  --role admin \
+  --approver-user-id bootstrap-admin
+```
+
+Reference: `docs/channels/codex.md`
+
 ## 7. Set First Admin Channel
 
 In your admin chat/channel:

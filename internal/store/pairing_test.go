@@ -101,6 +101,46 @@ func TestPairingDeny(t *testing.T) {
 	}
 }
 
+func TestPairingLifecycleApproveCodexConnector(t *testing.T) {
+	sqlStore := newTestStore(t)
+
+	ctx := context.Background()
+	request, err := sqlStore.CreatePairingRequest(ctx, CreatePairingRequestInput{
+		Connector:       "codex",
+		ConnectorUserID: "codex-cli-user",
+		DisplayName:     "Codex CLI",
+	})
+	if err != nil {
+		t.Fatalf("create pairing request: %v", err)
+	}
+	if request.Token == "" {
+		t.Fatal("expected token in pairing response")
+	}
+
+	result, err := sqlStore.ApprovePairing(ctx, ApprovePairingInput{
+		Token:          request.Token,
+		ApproverUserID: "bootstrap-admin",
+		Role:           "admin",
+	})
+	if err != nil {
+		t.Fatalf("approve pairing request: %v", err)
+	}
+	if result.UserID == "" {
+		t.Fatal("expected approved user id")
+	}
+
+	lookup, err := sqlStore.LookupPairingByToken(ctx, request.Token)
+	if err != nil {
+		t.Fatalf("lookup pairing request: %v", err)
+	}
+	if lookup.Status != "approved" {
+		t.Fatalf("expected approved status, got %s", lookup.Status)
+	}
+	if lookup.Connector != "codex" {
+		t.Fatalf("expected codex connector, got %s", lookup.Connector)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "agent_runtime_test.sqlite")

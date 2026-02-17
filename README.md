@@ -62,6 +62,15 @@ Pairing flow (Telegram DM -> TUI approve):
    - `a` to approve and link identity with selected role
    - `d` to deny
 
+CLI pairing flow for Codex channel:
+- one-shot bootstrap admin pairing for the active CLI identity:
+  - `agent-runtime chat pairing pair-admin --connector codex --external-id codex-cli --from-user-id codex-cli --role admin`
+- manual lifecycle:
+  - `agent-runtime chat pairing start --connector codex --external-id codex-cli --from-user-id codex-cli`
+  - `agent-runtime chat pairing lookup <token>`
+  - `agent-runtime chat pairing approve <token> --approver-user-id <admin-user-id> --role admin`
+  - `agent-runtime chat pairing deny <token> --approver-user-id <admin-user-id> --reason "<reason>"`
+
 Telegram command gateway:
 - `/task <prompt>` creates a queued task in the current chat context
 - `/search <query>` runs workspace-scoped qmd search
@@ -135,11 +144,11 @@ Command surface matrix:
 | `approve-action` | yes (`/approve_action`) | yes (`/approve-action`) | yes |
 | `deny-action` | yes (`/deny_action`) | yes (`/deny-action`) | yes |
 | `pair` | yes (`/pair`, DM flow) | no | yes (DM flow) |
-| `route` | no | no | yes (admin text command) |
+| `route` | yes (`/route`) | yes (`/route`) | yes (admin text command) |
 
 Notes:
 - Telegram command names use underscores due to Telegram command naming rules.
-- Discord slash registration currently covers the shared command catalog above; `route` remains text-only.
+- Discord slash registration covers the shared command catalog above.
 - Natural-language intents (for example, `please create a task ...`) are text parsing features, not slash/menu commands.
 
 LLM runtime env:
@@ -166,6 +175,11 @@ Command sync runtime env:
 - `AGENT_RUNTIME_DISCORD_APPLICATION_ID` (optional explicit app id for command registration)
 - `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS` (optional CSV guild list for fast guild-scoped command propagation)
 
+Codex proactive publish runtime env:
+- `AGENT_RUNTIME_CODEX_PUBLISH_URL` (optional HTTP endpoint for outbound Codex notifications)
+- `AGENT_RUNTIME_CODEX_PUBLISH_BEARER_TOKEN` (optional bearer token for that endpoint)
+- `AGENT_RUNTIME_CODEX_PUBLISH_TIMEOUT_SECONDS` (default: `8`)
+
 IMAP runtime env:
 - `AGENT_RUNTIME_IMAP_HOST` (required to enable IMAP connector)
 - `AGENT_RUNTIME_IMAP_PORT` (default: `993`)
@@ -184,6 +198,7 @@ IMAP ingestion behavior:
 
 Objective scheduler runtime env:
 - `AGENT_RUNTIME_OBJECTIVE_POLL_SECONDS` (default: `15`)
+- `AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS` (default: `600`)
 
 Heartbeat runtime env:
 - `AGENT_RUNTIME_HEARTBEAT_ENABLED` (default: `true`)
@@ -205,10 +220,14 @@ Message triage behavior:
 
 Objectives and proactivity:
 - objectives can be stored as:
-  - `trigger_type: "schedule"` with `interval_seconds` (and optional `next_run_unix`)
+  - `trigger_type: "schedule"` with `cron_expr` (and optional `next_run_unix`)
   - `trigger_type: "event"` with `event_key` (currently `markdown.updated`)
 - scheduler polls due schedule objectives and enqueues `objective` tasks
+- scheduled objective runs are idempotent via a persisted per-run key (`objective:<objective-id>:<scheduled-unix>`)
 - markdown file changes can trigger event objectives for the changed workspace
+- task recovery on startup:
+  - persisted `queued` tasks are re-enqueued into the in-memory worker engine
+  - persisted `running` tasks older than `AGENT_RUNTIME_TASK_RECOVERY_RUNNING_STALE_SECONDS` are re-queued and replayed
 - create/list objectives via API:
   - `POST /api/v1/objectives`
   - `GET /api/v1/objectives?workspace_id=<workspace-id>&active_only=true`
