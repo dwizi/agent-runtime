@@ -17,12 +17,14 @@ import (
 
 // Agent coordinates the "Think-Act" loop.
 type Agent struct {
-	logger         *slog.Logger
-	llm            llm.Responder
-	registry       *tools.Registry
-	prompt         string // Base system prompt
-	defaultPolicy  Policy
-	policyResolver PolicyResolver
+	logger          *slog.Logger
+	llm             llm.Responder
+	registry        *tools.Registry
+	prompt          string // Base system prompt
+	defaultPolicy   Policy
+	policyResolver  PolicyResolver
+	groundFirstStep bool
+	groundEveryStep bool
 
 	quotaMu    sync.Mutex
 	taskEvents map[string][]time.Time
@@ -41,12 +43,13 @@ func New(logger *slog.Logger, responder llm.Responder, registry *tools.Registry,
 		logger = slog.Default()
 	}
 	return &Agent{
-		logger:        logger,
-		llm:           responder,
-		registry:      registry,
-		prompt:        systemPrompt,
-		defaultPolicy: defaultPolicy(),
-		taskEvents:    map[string][]time.Time{},
+		logger:          logger,
+		llm:             responder,
+		registry:        registry,
+		prompt:          systemPrompt,
+		defaultPolicy:   defaultPolicy(),
+		groundFirstStep: true,
+		taskEvents:      map[string][]time.Time{},
 	}
 }
 
@@ -96,6 +99,12 @@ func (a *Agent) SetDefaultPolicy(policy Policy) {
 
 func (a *Agent) SetPolicyResolver(resolver PolicyResolver) {
 	a.policyResolver = resolver
+}
+
+// SetGroundingPolicy controls when LLM loop calls include grounding augmentation.
+func (a *Agent) SetGroundingPolicy(firstStep, everyStep bool) {
+	a.groundFirstStep = firstStep
+	a.groundEveryStep = everyStep
 }
 
 type loopToolStep struct {
@@ -174,7 +183,15 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		result.Steps = step
 		llmInput := input
 		llmInput.SystemPrompt = fullPrompt
-		llmInput.SkipGrounding = true
+		shouldGround := false
+		if !input.SkipGrounding {
+			if a.groundEveryStep {
+				shouldGround = true
+			} else if a.groundFirstStep && step == 1 && len(toolSteps) == 0 {
+				shouldGround = true
+			}
+		}
+		llmInput.SkipGrounding = !shouldGround
 		llmInput.Text = buildLoopInput(input.Text, toolSteps, step, maxSteps)
 
 		response, err := a.llm.Reply(ctx, llmInput)

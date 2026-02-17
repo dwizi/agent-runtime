@@ -62,34 +62,48 @@ type Config struct {
 	LLMModel      string
 	LLMTimeoutSec int
 
-	SMTPHost                  string
-	SMTPPort                  int
-	SMTPUsername              string
-	SMTPPassword              string
-	SMTPFrom                  string
-	SandboxEnabled            bool
-	SandboxAllowedCommandsCSV string
-	SandboxRunnerCommand      string
-	SandboxRunnerArgs         string
-	SandboxTimeoutSec         int
-	LLMEnabled                bool
-	LLMAllowDM                bool
-	LLMRequireMentionInGroups bool
-	LLMAllowedRolesCSV        string
-	LLMAllowedContextIDsCSV   string
-	LLMRateLimitPerWindow     int
-	LLMRateLimitWindowSec     int
-	LLMAdminSystemPrompt      string
-	LLMPublicSystemPrompt     string
-	AgentMaxTurnDurationSec   int
-	SoulGlobalFile            string
-	SoulWorkspaceRelPath      string
-	SoulContextRelPath        string
-	SystemPromptGlobalFile    string
-	SystemPromptWorkspacePath string
-	SystemPromptContextPath   string
-	ReasoningPromptFile       string
-	SkillsGlobalRoot          string
+	SMTPHost                   string
+	SMTPPort                   int
+	SMTPUsername               string
+	SMTPPassword               string
+	SMTPFrom                   string
+	SandboxEnabled             bool
+	SandboxAllowedCommandsCSV  string
+	SandboxRunnerCommand       string
+	SandboxRunnerArgs          string
+	SandboxTimeoutSec          int
+	SandboxMaxOutputBytes      int
+	LLMEnabled                 bool
+	LLMAllowDM                 bool
+	LLMRequireMentionInGroups  bool
+	LLMAllowedRolesCSV         string
+	LLMAllowedContextIDsCSV    string
+	LLMRateLimitPerWindow      int
+	LLMRateLimitWindowSec      int
+	LLMGroundingTopK           int
+	LLMGroundingMaxDocExcerpt  int
+	LLMGroundingMaxPromptBytes int
+	LLMGroundingChatTailLines  int
+	LLMGroundingChatTailBytes  int
+	LLMAdminSystemPrompt       string
+	LLMPublicSystemPrompt      string
+	AgentMaxTurnDurationSec    int
+	AgentGroundingFirstStep    bool
+	AgentGroundingEveryStep    bool
+	AgentAutonomousMaxLoopSteps        int
+	AgentAutonomousMaxTurnDurationSec  int
+	AgentAutonomousMaxToolCallsPerTurn int
+	AgentAutonomousMaxTasksPerHour     int
+	AgentAutonomousMaxTasksPerDay      int
+	AgentAutonomousMinConfidence       float64
+	SoulGlobalFile             string
+	SoulWorkspaceRelPath       string
+	SoulContextRelPath         string
+	SystemPromptGlobalFile     string
+	SystemPromptWorkspacePath  string
+	SystemPromptContextPath    string
+	ReasoningPromptFile        string
+	SkillsGlobalRoot           string
 
 	PublicHost string
 	AdminHost  string
@@ -163,43 +177,57 @@ func FromEnv() Config {
 		LLMModel:      stringOrDefault("AGENT_RUNTIME_LLM_MODEL", "gpt-4o"),
 		LLMTimeoutSec: intOrDefault("AGENT_RUNTIME_LLM_TIMEOUT_SECONDS", 60),
 
-		SMTPHost:                  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_HOST")),
-		SMTPPort:                  intOrDefault("AGENT_RUNTIME_SMTP_PORT", 587),
-		SMTPUsername:              strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_USERNAME")),
-		SMTPPassword:              os.Getenv("AGENT_RUNTIME_SMTP_PASSWORD"),
-		SMTPFrom:                  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_FROM")),
-		SandboxEnabled:            boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
-		SandboxAllowedCommandsCSV: stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,grep,head,tail"),
-		SandboxRunnerCommand:      strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),
-		SandboxRunnerArgs:         strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_ARGS")),
-		SandboxTimeoutSec:         intOrDefault("AGENT_RUNTIME_SANDBOX_TIMEOUT_SECONDS", 20),
-		LLMEnabled:                boolOrDefault("AGENT_RUNTIME_LLM_ENABLED", true),
-		LLMAllowDM:                boolOrDefault("AGENT_RUNTIME_LLM_ALLOW_DM", true),
-		LLMRequireMentionInGroups: boolOrDefault("AGENT_RUNTIME_LLM_REQUIRE_MENTION_IN_GROUPS", true),
-		LLMAllowedRolesCSV:        strings.TrimSpace(os.Getenv("AGENT_RUNTIME_LLM_ALLOWED_ROLES")),
-		LLMAllowedContextIDsCSV:   strings.TrimSpace(os.Getenv("AGENT_RUNTIME_LLM_ALLOWED_CONTEXT_IDS")),
-		LLMRateLimitPerWindow:     intOrDefault("AGENT_RUNTIME_LLM_RATE_LIMIT_PER_WINDOW", 8),
-		LLMRateLimitWindowSec:     intOrDefault("AGENT_RUNTIME_LLM_RATE_LIMIT_WINDOW_SECONDS", 60),
-		LLMAdminSystemPrompt:      stringOrDefault("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "You are assisting admin operators. Prioritize security, approvals, and operational clarity."),
-		LLMPublicSystemPrompt:     stringOrDefault("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "You are assisting community members. Be concise, safe, and policy-compliant."),
-		AgentMaxTurnDurationSec:   intOrDefault("AGENT_RUNTIME_AGENT_MAX_TURN_DURATION_SECONDS", 120),
-		SoulGlobalFile:            stringOrDefault("AGENT_RUNTIME_SOUL_GLOBAL_FILE", "/context/SOUL.md"),
-		SoulWorkspaceRelPath:      stringOrDefault("AGENT_RUNTIME_SOUL_WORKSPACE_REL_PATH", "context/SOUL.md"),
-		SoulContextRelPath:        stringOrDefault("AGENT_RUNTIME_SOUL_CONTEXT_REL_PATH", "context/agents/{context_id}/SOUL.md"),
-		SystemPromptGlobalFile:    stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_GLOBAL_FILE", "/context/SYSTEM_PROMPT.md"),
-		SystemPromptWorkspacePath: stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
-		SystemPromptContextPath:   stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
-		ReasoningPromptFile:       stringOrDefault("AGENT_RUNTIME_REASONING_PROMPT_FILE", "/context/REASONING.md"),
-		SkillsGlobalRoot:          stringOrDefault("AGENT_RUNTIME_SKILLS_GLOBAL_ROOT", "/context/skills"),
-		PublicHost:                stringOrDefault("PUBLIC_HOST", "localhost"),
-		AdminHost:                 stringOrDefault("ADMIN_HOST", "admin.localhost"),
-		AdminAPIURL:               stringOrDefault("AGENT_RUNTIME_ADMIN_API_URL", "https://admin.localhost"),
-		AdminTLSSkipVerify:        boolOrDefault("AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY", true),
-		AdminTLSCAFile:            strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CA_FILE")),
-		AdminTLSCertFile:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE")),
-		AdminTLSKeyFile:           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE")),
-		TUIApproverUserID:         stringOrDefault("AGENT_RUNTIME_TUI_APPROVER_USER_ID", "tui-admin"),
-		TUIApprovalRole:           stringOrDefault("AGENT_RUNTIME_TUI_APPROVAL_ROLE", "admin"),
+		SMTPHost:                   strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_HOST")),
+		SMTPPort:                   intOrDefault("AGENT_RUNTIME_SMTP_PORT", 587),
+		SMTPUsername:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_USERNAME")),
+		SMTPPassword:               os.Getenv("AGENT_RUNTIME_SMTP_PASSWORD"),
+		SMTPFrom:                   strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_FROM")),
+		SandboxEnabled:             boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
+		SandboxAllowedCommandsCSV:  stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,grep,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
+		SandboxRunnerCommand:       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),
+		SandboxRunnerArgs:          strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_ARGS")),
+		SandboxTimeoutSec:          intOrDefault("AGENT_RUNTIME_SANDBOX_TIMEOUT_SECONDS", 20),
+		SandboxMaxOutputBytes:      intOrDefault("AGENT_RUNTIME_SANDBOX_MAX_OUTPUT_BYTES", 500*1024),
+		LLMEnabled:                 boolOrDefault("AGENT_RUNTIME_LLM_ENABLED", true),
+		LLMAllowDM:                 boolOrDefault("AGENT_RUNTIME_LLM_ALLOW_DM", true),
+		LLMRequireMentionInGroups:  boolOrDefault("AGENT_RUNTIME_LLM_REQUIRE_MENTION_IN_GROUPS", true),
+		LLMAllowedRolesCSV:         strings.TrimSpace(os.Getenv("AGENT_RUNTIME_LLM_ALLOWED_ROLES")),
+		LLMAllowedContextIDsCSV:    strings.TrimSpace(os.Getenv("AGENT_RUNTIME_LLM_ALLOWED_CONTEXT_IDS")),
+		LLMRateLimitPerWindow:      intOrDefault("AGENT_RUNTIME_LLM_RATE_LIMIT_PER_WINDOW", 8),
+		LLMRateLimitWindowSec:      intOrDefault("AGENT_RUNTIME_LLM_RATE_LIMIT_WINDOW_SECONDS", 60),
+		LLMGroundingTopK:           intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_TOP_K", 3),
+		LLMGroundingMaxDocExcerpt:  intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES", 1200),
+		LLMGroundingMaxPromptBytes: intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES", 8000),
+		LLMGroundingChatTailLines:  intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES", 24),
+		LLMGroundingChatTailBytes:  intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES", 1800),
+		LLMAdminSystemPrompt:       stringOrDefault("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "You are assisting admin operators. Prioritize security, approvals, and operational clarity."),
+		LLMPublicSystemPrompt:      stringOrDefault("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "You are assisting community members. Be concise, safe, and policy-compliant."),
+		AgentMaxTurnDurationSec:    intOrDefault("AGENT_RUNTIME_AGENT_MAX_TURN_DURATION_SECONDS", 120),
+		AgentGroundingFirstStep:    boolOrDefault("AGENT_RUNTIME_AGENT_GROUNDING_FIRST_STEP", true),
+		AgentGroundingEveryStep:    boolOrDefault("AGENT_RUNTIME_AGENT_GROUNDING_EVERY_STEP", false),
+		AgentAutonomousMaxLoopSteps:        intOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MAX_LOOP_STEPS", 50),
+		AgentAutonomousMaxTurnDurationSec:  intOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MAX_TURN_DURATION_SECONDS", 1200),
+		AgentAutonomousMaxToolCallsPerTurn: intOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MAX_TOOL_CALLS_PER_TURN", 100),
+		AgentAutonomousMaxTasksPerHour:     intOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MAX_TASKS_PER_HOUR", 200),
+		AgentAutonomousMaxTasksPerDay:      intOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MAX_TASKS_PER_DAY", 1000),
+		AgentAutonomousMinConfidence:       floatOrDefault("AGENT_RUNTIME_AGENT_AUTONOMOUS_MIN_CONFIDENCE", 0.05),
+		SoulGlobalFile:             stringOrDefault("AGENT_RUNTIME_SOUL_GLOBAL_FILE", "/context/SOUL.md"),
+		SoulWorkspaceRelPath:       stringOrDefault("AGENT_RUNTIME_SOUL_WORKSPACE_REL_PATH", "context/SOUL.md"),
+		SoulContextRelPath:         stringOrDefault("AGENT_RUNTIME_SOUL_CONTEXT_REL_PATH", "context/agents/{context_id}/SOUL.md"),
+		SystemPromptGlobalFile:     stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_GLOBAL_FILE", "/context/SYSTEM_PROMPT.md"),
+		SystemPromptWorkspacePath:  stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
+		SystemPromptContextPath:    stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
+		ReasoningPromptFile:        stringOrDefault("AGENT_RUNTIME_REASONING_PROMPT_FILE", "/context/REASONING.md"),
+		SkillsGlobalRoot:           stringOrDefault("AGENT_RUNTIME_SKILLS_GLOBAL_ROOT", "/context/skills"),
+		PublicHost:                 stringOrDefault("PUBLIC_HOST", "localhost"),
+		AdminHost:                  stringOrDefault("ADMIN_HOST", "admin.localhost"),
+		AdminAPIURL:                stringOrDefault("AGENT_RUNTIME_ADMIN_API_URL", "https://admin.localhost"),
+		AdminTLSSkipVerify:         boolOrDefault("AGENT_RUNTIME_ADMIN_TLS_SKIP_VERIFY", true),
+		AdminTLSCAFile:             strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CA_FILE")),
+		AdminTLSCertFile:           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_CERT_FILE")),
+		AdminTLSKeyFile:            strings.TrimSpace(os.Getenv("AGENT_RUNTIME_ADMIN_TLS_KEY_FILE")),
+		TUIApproverUserID:          stringOrDefault("AGENT_RUNTIME_TUI_APPROVER_USER_ID", "tui-admin"),
+		TUIApprovalRole:            stringOrDefault("AGENT_RUNTIME_TUI_APPROVAL_ROLE", "admin"),
 	}
 }
 
@@ -248,4 +276,16 @@ func notificationPolicyOrDefault(name, fallback string) string {
 			return "both"
 		}
 	}
+}
+
+func floatOrDefault(name string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

@@ -70,6 +70,8 @@ type Service struct {
 	reasoningPromptTemplate string
 	workspaceRoot           string
 	agentMaxTurnDuration    time.Duration
+	agentGroundingFirstStep bool
+	agentGroundingEveryStep bool
 	triageAcknowledger      llm.Responder
 	triageEnabled           bool
 	routingNotify           RoutingNotifier
@@ -93,6 +95,7 @@ type MessageOutput struct {
 }
 
 const latestPendingActionAlias = "__latest_pending__"
+const allPendingActionsAlias = "__all_pending__"
 
 func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionExecutor, workspaceRoot string, logger *slog.Logger) *Service {
 	if logger == nil {
@@ -100,6 +103,7 @@ func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionE
 	}
 	registry := tools.NewRegistry()
 	registry.Register(NewSearchTool(retriever))
+	registry.Register(NewOpenKnowledgeDocumentTool(retriever))
 	registry.Register(NewCreateTaskTool(store, engine))
 	registry.Register(NewModerationTriageTool())
 	registry.Register(NewDraftEscalationTool())
@@ -109,19 +113,33 @@ func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionE
 	registry.Register(NewUpdateTaskTool(store))
 	registry.Register(NewLearnSkillTool(workspaceRoot))
 	registry.Register(NewRunActionTool(store, actionExecutor))
+	registry.Register(NewWriteFileTool(workspaceRoot))
+	registry.Register(NewReadFileTool(workspaceRoot))
+	registry.Register(NewListFilesTool(workspaceRoot))
+	registry.Register(NewCurlTool(store, actionExecutor))
+	registry.Register(NewFetchUrlTool(store, actionExecutor))
+	registry.Register(NewInspectFileTool(store, actionExecutor, workspaceRoot))
+	registry.Register(NewLookupTaskTool(store))
+	registry.Register(NewWebSearchTool(store, actionExecutor))
+	registry.Register(NewPythonCodeTool(store, actionExecutor, workspaceRoot))
 
 	return &Service{
-		store:                store,
-		engine:               engine,
-		retriever:            retriever,
-		actionExecutor:       actionExecutor,
-		toolRegistry:         registry,
-		workspaceRoot:        workspaceRoot,
-		triageEnabled:        true,
-		sensitiveApprovals:   map[string]time.Time{},
-		sensitiveApprovalTTL: 10 * time.Minute,
-		logger:               logger,
+		store:                   store,
+		engine:                  engine,
+		retriever:               retriever,
+		actionExecutor:          actionExecutor,
+		toolRegistry:            registry,
+		workspaceRoot:           workspaceRoot,
+		agentGroundingFirstStep: true,
+		triageEnabled:           true,
+		sensitiveApprovals:      map[string]time.Time{},
+		sensitiveApprovalTTL:    10 * time.Minute,
+		logger:                  logger,
 	}
+}
+
+func (s *Service) Registry() *tools.Registry {
+	return s.toolRegistry
 }
 
 func (s *Service) SetTriageEnabled(enabled bool) {
@@ -139,15 +157,20 @@ func (s *Service) SetSensitiveApprovalTTL(ttl time.Duration) {
 
 func (s *Service) SetAgentMaxTurnDuration(duration time.Duration) {
 	s.agentMaxTurnDuration = duration
-	if s.agent != nil {
-		s.agent.SetDefaultPolicy(agent.Policy{MaxTurnDuration: duration})
-	}
+	s.applyAgentConfig()
+}
+
+func (s *Service) SetAgentGroundingPolicy(firstStep, everyStep bool) {
+	s.agentGroundingFirstStep = firstStep
+	s.agentGroundingEveryStep = everyStep
+	s.applyAgentConfig()
 }
 
 func (s *Service) SetReasoningPromptTemplate(template string) {
 	s.reasoningPromptTemplate = template
 	if s.triageAcknowledger != nil {
 		s.agent = agent.New(s.logger.With("component", "agent"), s.triageAcknowledger, s.toolRegistry, s.reasoningPromptTemplate)
+		s.applyAgentConfig()
 	}
 }
 
@@ -155,10 +178,18 @@ func (s *Service) SetTriageAcknowledger(responder llm.Responder) {
 	s.triageAcknowledger = responder
 	if responder != nil {
 		s.agent = agent.New(s.logger.With("component", "agent"), responder, s.toolRegistry, s.reasoningPromptTemplate)
-		if s.agentMaxTurnDuration > 0 {
-			s.agent.SetDefaultPolicy(agent.Policy{MaxTurnDuration: s.agentMaxTurnDuration})
-		}
+		s.applyAgentConfig()
 	}
+}
+
+func (s *Service) applyAgentConfig() {
+	if s == nil || s.agent == nil {
+		return
+	}
+	if s.agentMaxTurnDuration > 0 {
+		s.agent.SetDefaultPolicy(agent.Policy{MaxTurnDuration: s.agentMaxTurnDuration})
+	}
+	s.agent.SetGroundingPolicy(s.agentGroundingFirstStep, s.agentGroundingEveryStep)
 }
 
 func (s *Service) SetRoutingNotifier(notifier RoutingNotifier) {
@@ -298,8 +329,10 @@ func (s *Service) handlePendingActions(ctx context.Context, input MessageInput) 
 func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, arg string) (MessageOutput, error) {
 	actionID := normalizeActionCommandID(arg)
 	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
+	resolveAll := strings.EqualFold(actionID, allPendingActionsAlias)
+	
 	if actionID == "" {
-		return MessageOutput{Handled: true, Reply: "Usage: /approve-action <action-id>"}, nil
+		return MessageOutput{Handled: true, Reply: "Usage: /approve-action <action-id> or 'approve all'"}, nil
 	}
 	identity, err := s.store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
 	if err != nil {
@@ -311,6 +344,81 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 	if !isAdminRole(identity.Role) {
 		return MessageOutput{Handled: true, Reply: "Access denied: admin role required."}, nil
 	}
+
+	if resolveAll {
+		// List all pending actions for this context
+		items, err := s.store.ListPendingActionApprovals(ctx, input.Connector, input.ExternalID, 50)
+		if err != nil {
+			return MessageOutput{}, err
+		}
+		if len(items) == 0 {
+			// Fallback to global if empty? Or just say none.
+			// Let's check global too if context is empty, similar to pending-actions command.
+			items, err = s.store.ListPendingActionApprovalsGlobal(ctx, 50)
+			if err != nil {
+				return MessageOutput{}, err
+			}
+		}
+		if len(items) == 0 {
+			return MessageOutput{Handled: true, Reply: "No pending actions to approve."}, nil
+		}
+		
+		successCount := 0
+		failures := []string{}
+		results := []string{}
+		
+		for _, item := range items {
+			res, _, err := s.approveAndExecuteAction(ctx, input, item.ID, identity.UserID)
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", item.ID, err))
+			} else {
+				successCount++
+				if res != nil {
+					results = append(results, fmt.Sprintf("Action `%s` output:\n%s", item.ID, res.Message))
+				}
+			}
+		}
+		
+		if successCount > 0 && s.agent != nil {
+			contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+			if err == nil {
+				agentPrompt := fmt.Sprintf("APPROVED ACTIONS EXECUTED.\n\n%s\n\nInterpret these results for the user.", strings.Join(results, "\n\n"))
+				
+				// 1. Get History
+				history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
+				if history != "" {
+					agentPrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, agentPrompt)
+				}
+
+				agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
+				agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
+				// Grant sensitive approval for follow-up actions (if any)
+				s.grantSensitiveToolApproval(input, time.Now().UTC())
+				agentCtx = agent.WithSensitiveToolApproval(agentCtx)
+
+				agentRes := s.agent.Execute(agentCtx, llm.MessageInput{
+					Connector:   input.Connector,
+					WorkspaceID: contextRecord.WorkspaceID,
+					ContextID:   contextRecord.ID,
+					ExternalID:  input.ExternalID,
+					DisplayName: input.DisplayName,
+					FromUserID:  input.FromUserID,
+					Text:        agentPrompt,
+				})
+				
+				if agentRes.Error == nil && strings.TrimSpace(agentRes.Reply) != "" {
+					return MessageOutput{Handled: true, Reply: agentRes.Reply}, nil
+				}
+			}
+		}
+		
+		reply := fmt.Sprintf("Approved %d actions.", successCount)
+		if len(failures) > 0 {
+			reply += fmt.Sprintf("\nFailed: %d\n%s", len(failures), strings.Join(failures, "\n"))
+		}
+		return MessageOutput{Handled: true, Reply: reply}, nil
+	}
+
 	if resolveLatest {
 		resolved, reply := s.resolveSinglePendingActionID(ctx, input)
 		if strings.TrimSpace(reply) != "" {
@@ -318,10 +426,8 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		actionID = resolved
 	}
-	record, err := s.store.ApproveActionApproval(ctx, store.ApproveActionApprovalInput{
-		ID:             actionID,
-		ApproverUserID: identity.UserID,
-	})
+	
+	res, reply, err := s.approveAndExecuteAction(ctx, input, actionID, identity.UserID)
 	if err != nil {
 		if errors.Is(err, store.ErrActionApprovalNotFound) {
 			return MessageOutput{Handled: true, Reply: "Action approval not found."}, nil
@@ -330,6 +436,51 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 			return MessageOutput{Handled: true, Reply: "Action approval is not pending."}, nil
 		}
 		return MessageOutput{}, err
+	}
+	
+	if res != nil && s.agent != nil {
+		contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
+		if err == nil {
+			agentPrompt := fmt.Sprintf("APPROVED ACTION EXECUTED.\nAction: %s\nResult: %s\n\nInterpret this result for the user.", actionID, res.Message)
+			
+			// 1. Get History
+			history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
+			if history != "" {
+				agentPrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, agentPrompt)
+			}
+
+			agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
+			agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
+			// Grant sensitive approval for follow-up actions (if any)
+			s.grantSensitiveToolApproval(input, time.Now().UTC())
+			agentCtx = agent.WithSensitiveToolApproval(agentCtx)
+
+			agentRes := s.agent.Execute(agentCtx, llm.MessageInput{
+				Connector:   input.Connector,
+				WorkspaceID: contextRecord.WorkspaceID,
+				ContextID:   contextRecord.ID,
+				ExternalID:  input.ExternalID,
+				DisplayName: input.DisplayName,
+				FromUserID:  input.FromUserID,
+				Text:        agentPrompt,
+			})
+			
+			if agentRes.Error == nil && strings.TrimSpace(agentRes.Reply) != "" {
+				return MessageOutput{Handled: true, Reply: agentRes.Reply}, nil
+			}
+		}
+	}
+	
+	return MessageOutput{Handled: true, Reply: reply}, nil
+}
+
+func (s *Service) approveAndExecuteAction(ctx context.Context, input MessageInput, actionID, approverID string) (*executor.Result, string, error) {
+	record, err := s.store.ApproveActionApproval(ctx, store.ApproveActionApprovalInput{
+		ID:             actionID,
+		ApproverUserID: approverID,
+	})
+	if err != nil {
+		return nil, "", err
 	}
 	s.grantSensitiveToolApproval(input, time.Now().UTC())
 
@@ -342,12 +493,9 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 			ExecutedAt:       time.Now().UTC(),
 		})
 		if err != nil {
-			return MessageOutput{}, err
+			return nil, "", err
 		}
-		return MessageOutput{
-			Handled: true,
-			Reply:   formatActionExecutionReply(record),
-		}, nil
+		return nil, formatActionExecutionReply(record), nil
 	}
 
 	executionResult, execErr := s.actionExecutor.Execute(ctx, record)
@@ -360,12 +508,9 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 			ExecutedAt:       time.Now().UTC(),
 		})
 		if err != nil {
-			return MessageOutput{}, err
+			return nil, "", err
 		}
-		return MessageOutput{
-			Handled: true,
-			Reply:   formatActionExecutionReply(record),
-		}, nil
+		return &executionResult, formatActionExecutionReply(record), nil
 	}
 
 	record, err = s.store.UpdateActionExecution(ctx, store.UpdateActionExecutionInput{
@@ -376,15 +521,12 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		ExecutedAt:       time.Now().UTC(),
 	})
 	if err != nil {
-		return MessageOutput{}, err
+		return nil, "", err
 	}
 	if strings.TrimSpace(record.ExecutionMessage) == "" {
 		record.ExecutionMessage = "executed successfully"
 	}
-	return MessageOutput{
-		Handled: true,
-		Reply:   formatActionExecutionReply(record),
-	}, nil
+	return &executionResult, formatActionExecutionReply(record), nil
 }
 
 func fallbackPluginLabel(value string) string {
@@ -756,8 +898,8 @@ func (s *Service) handleAgentAutoTriage(ctx context.Context, input MessageInput,
 		agentInputText = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\nNEW MESSAGE:\n%s", history, agentInputText)
 	}
 
-	agentCtx := context.WithValue(ctx, contextKeyRecord, contextRecord)
-	agentCtx = context.WithValue(agentCtx, contextKeyInput, input)
+	agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
+	agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
 	if s.consumeSensitiveToolApproval(input, time.Now().UTC()) {
 		agentCtx = agent.WithSensitiveToolApproval(agentCtx)
 	}
@@ -895,8 +1037,8 @@ func (s *Service) NarrateTaskResult(ctx context.Context, connector, externalID s
 	}
 
 	// 4. Execute Agent turn
-	agentCtx := context.WithValue(ctx, contextKeyRecord, contextRecord)
-	agentCtx = context.WithValue(agentCtx, contextKeyInput, MessageInput{
+	agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
+	agentCtx = context.WithValue(agentCtx, ContextKeyInput, MessageInput{
 		Connector:  connector,
 		ExternalID: externalID,
 	})
@@ -1427,9 +1569,12 @@ func parseIntentTask(text string) (string, bool) {
 func parseApproveCommandAsActionArg(arg string) (string, bool) {
 	trimmed := strings.TrimSpace(arg)
 	if trimmed == "" {
-		return "", false
+		return latestPendingActionAlias, true
 	}
 	lower := strings.ToLower(trimmed)
+	if lower == "all" || lower == "everything" {
+		return allPendingActionsAlias, true
+	}
 	if actionID, ok := findActionID(trimmed); ok {
 		return actionID, true
 	}
@@ -1445,9 +1590,12 @@ func parseApproveCommandAsActionArg(arg string) (string, bool) {
 func parseDenyCommandAsActionArg(arg string) (string, bool) {
 	trimmed := strings.TrimSpace(arg)
 	if trimmed == "" {
-		return "", false
+		return latestPendingActionAlias, true
 	}
 	lower := strings.ToLower(trimmed)
+	if lower == "all" || lower == "everything" {
+		return allPendingActionsAlias, true
+	}
 	if actionID, _, end, ok := findActionIDWithBounds(trimmed); ok {
 		reason := strings.TrimSpace(trimmed[end:])
 		reason = normalizeDenyReason(reason)
@@ -1533,6 +1681,9 @@ func parseNaturalLanguageCommand(text string) (command, arg string, ok bool) {
 }
 
 func isImplicitApproveActionIntent(lower string) bool {
+	if lower == "approve" || lower == "yes" {
+		return true
+	}
 	if !(strings.Contains(lower, "approve") || strings.Contains(lower, "approved")) {
 		return false
 	}

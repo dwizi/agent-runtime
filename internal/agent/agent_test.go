@@ -58,6 +58,62 @@ func TestAgent_Execute_DirectReply(t *testing.T) {
 	}
 }
 
+func TestAgent_Execute_UsesGroundingOnFirstStepByDefault(t *testing.T) {
+	reg := tools.NewRegistry()
+	calls := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			calls++
+			if calls != 1 {
+				t.Fatalf("expected exactly one call, got %d", calls)
+			}
+			if input.SkipGrounding {
+				t.Fatal("expected first-step agent call to allow grounding")
+			}
+			return "ok", nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "how do we do this?", WorkspaceID: "ws-1"})
+	if res.Error != nil {
+		t.Fatalf("unexpected error: %v", res.Error)
+	}
+}
+
+func TestAgent_Execute_GroundingCanBeForcedEveryStep(t *testing.T) {
+	reg := tools.NewRegistry()
+	reg.Register(&mockTool{
+		name: "test_tool",
+		exec: func(input json.RawMessage) (string, error) {
+			return "done", nil
+		},
+	})
+	calls := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			calls++
+			if input.SkipGrounding {
+				t.Fatalf("expected grounding enabled for call %d", calls)
+			}
+			if calls == 1 {
+				return `{"tool":"test_tool","args":{}}`, nil
+			}
+			return `{"final":"ok","confidence":0.9}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	a.SetGroundingPolicy(true, true)
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "use tools", WorkspaceID: "ws-1"})
+	if res.Error != nil {
+		t.Fatalf("unexpected error: %v", res.Error)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls, got %d", calls)
+	}
+}
+
 func TestAgent_Execute_ToolCall(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{

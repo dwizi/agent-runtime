@@ -95,7 +95,8 @@ func (m *MockEngine) Enqueue(task orchestrator.Task) (orchestrator.Task, error) 
 // MockRetriever for testing tools
 type MockRetriever struct {
 	Retriever
-	SearchFunc func(ctx context.Context, workspaceID, query string, limit int) ([]qmd.SearchResult, error)
+	SearchFunc       func(ctx context.Context, workspaceID, query string, limit int) ([]qmd.SearchResult, error)
+	OpenMarkdownFunc func(ctx context.Context, workspaceID, target string) (qmd.OpenResult, error)
 }
 
 func (m *MockRetriever) Search(ctx context.Context, workspaceID, query string, limit int) ([]qmd.SearchResult, error) {
@@ -103,6 +104,13 @@ func (m *MockRetriever) Search(ctx context.Context, workspaceID, query string, l
 		return m.SearchFunc(ctx, workspaceID, query, limit)
 	}
 	return nil, nil
+}
+
+func (m *MockRetriever) OpenMarkdown(ctx context.Context, workspaceID, target string) (qmd.OpenResult, error) {
+	if m.OpenMarkdownFunc != nil {
+		return m.OpenMarkdownFunc(ctx, workspaceID, target)
+	}
+	return qmd.OpenResult{}, qmd.ErrNotFound
 }
 
 func TestSearchTool_Execute(t *testing.T) {
@@ -116,8 +124,8 @@ func TestSearchTool_Execute(t *testing.T) {
 	}
 
 	tool := NewSearchTool(mockRetriever)
-	ctx := context.WithValue(context.Background(), contextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
-	ctx = context.WithValue(ctx, contextKeyInput, MessageInput{Text: "question"})
+	ctx := context.WithValue(context.Background(), ContextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
+	ctx = context.WithValue(ctx, ContextKeyInput, MessageInput{Text: "question"})
 
 	out, err := tool.Execute(ctx, json.RawMessage(`{"query": "test query"}`))
 	if err != nil {
@@ -140,8 +148,8 @@ func TestCreateTaskTool_Execute(t *testing.T) {
 	mockEngine := &MockEngine{}
 
 	tool := NewCreateTaskTool(mockStore, mockEngine)
-	ctx := context.WithValue(context.Background(), contextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1"})
-	ctx = context.WithValue(ctx, contextKeyInput, MessageInput{Text: "original message"})
+	ctx := context.WithValue(context.Background(), ContextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1"})
+	ctx = context.WithValue(ctx, ContextKeyInput, MessageInput{Text: "original message"})
 
 	out, err := tool.Execute(ctx, json.RawMessage(`{"title": "Fix Bug", "description": "It is broken", "priority": "p1"}`))
 	if err != nil {
@@ -149,6 +157,45 @@ func TestCreateTaskTool_Execute(t *testing.T) {
 	}
 	if out == "" {
 		t.Error("expected output")
+	}
+}
+
+func TestOpenKnowledgeDocumentTool_Execute(t *testing.T) {
+	mockRetriever := &MockRetriever{
+		OpenMarkdownFunc: func(ctx context.Context, workspaceID, target string) (qmd.OpenResult, error) {
+			if workspaceID != "ws-1" {
+				t.Fatalf("expected workspace ws-1, got %s", workspaceID)
+			}
+			if target != "docs/readme.md" {
+				t.Fatalf("expected docs/readme.md target, got %s", target)
+			}
+			return qmd.OpenResult{
+				Path:    "docs/readme.md",
+				Content: "Important details",
+			}, nil
+		},
+	}
+	tool := NewOpenKnowledgeDocumentTool(mockRetriever)
+	ctx := context.WithValue(context.Background(), ContextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
+	ctx = context.WithValue(ctx, ContextKeyInput, MessageInput{Text: "read docs"})
+
+	out, err := tool.Execute(ctx, json.RawMessage(`{"target":"docs/readme.md"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Source: docs/readme.md") {
+		t.Fatalf("expected source marker, got %q", out)
+	}
+	if !strings.Contains(out, "Important details") {
+		t.Fatalf("expected content in output, got %q", out)
+	}
+}
+
+func TestOpenKnowledgeDocumentTool_ValidateRejectsUnknownField(t *testing.T) {
+	tool := NewOpenKnowledgeDocumentTool(&MockRetriever{})
+	err := tool.ValidateArgs(json.RawMessage(`{"target":"docs/readme.md","extra":1}`))
+	if err == nil {
+		t.Fatal("expected strict schema validation error")
 	}
 }
 
@@ -183,8 +230,8 @@ func TestCreateObjectiveTool_Execute(t *testing.T) {
 		},
 	}
 	tool := NewCreateObjectiveTool(mockStore)
-	ctx := context.WithValue(context.Background(), contextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
-	ctx = context.WithValue(ctx, contextKeyInput, MessageInput{Text: "monitor this"})
+	ctx := context.WithValue(context.Background(), ContextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
+	ctx = context.WithValue(ctx, ContextKeyInput, MessageInput{Text: "monitor this"})
 
 	out, err := tool.Execute(ctx, json.RawMessage(`{"title":"Watch spam","prompt":"Track repeated spam","active":true}`))
 	if err != nil {

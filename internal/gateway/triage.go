@@ -255,11 +255,30 @@ func looksLikeModeration(text string) bool {
 }
 
 func looksLikeTask(text string) bool {
-	if strings.HasPrefix(text, "please ") || strings.HasPrefix(text, "need ") || strings.HasPrefix(text, "todo ") {
-		return true
+	if text == "" {
+		return false
+	}
+	prefixes := []string{
+		"please ",
+		"need you to ",
+		"help me ",
+		"todo ",
+		"create a task",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) && len(strings.Fields(text)) >= 4 {
+			return true
+		}
 	}
 	keywords := []string{
-		"should", "please", "need to", "follow up", "action item", "assign", "schedule", "investigate", "publish",
+		"follow up",
+		"action item",
+		"assign this",
+		"schedule this",
+		"investigate this",
+		"please investigate",
+		"set reminder",
+		"track this",
 	}
 	return containsAny(text, keywords)
 }
@@ -269,13 +288,23 @@ func questionNeedsExternalFollowUp(text string) bool {
 	if normalized == "" {
 		return false
 	}
-	if strings.Contains(normalized, "http://") || strings.Contains(normalized, "https://") {
+	asyncCues := []string{
+		"follow up",
+		"monitor",
+		"track",
+		"watch",
+		"remind",
+		"schedule",
+		"notify me",
+		"later",
+		"in 5 minutes",
+		"in 10 minutes",
+		"tomorrow",
+	}
+	if containsAny(normalized, asyncCues) {
 		return true
 	}
-	if looksLikeDomainReference(normalized) {
-		return true
-	}
-	keywords := []string{
+	researchCues := []string{
 		"run a search",
 		"search ",
 		"web search",
@@ -284,15 +313,33 @@ func questionNeedsExternalFollowUp(text string) bool {
 		"find ",
 		"check ",
 		"fetch ",
+	}
+	researchTopicCues := []string{
 		"pricing",
 		"price ",
 		"cost ",
 		"plans",
-		"monitor",
-		"track ",
 		"latest",
+		"today",
 	}
-	return containsAny(normalized, keywords)
+	if containsAny(normalized, researchCues) && containsAny(normalized, researchTopicCues) {
+		return true
+	}
+	if strings.Contains(normalized, "http://") || strings.Contains(normalized, "https://") || looksLikeDomainReference(normalized) {
+		webActionCues := []string{
+			"search",
+			"check",
+			"monitor",
+			"track",
+			"look up",
+			"verify",
+			"fetch",
+		}
+		if containsAny(normalized, webActionCues) {
+			return true
+		}
+	}
+	return false
 }
 
 func looksLikeDomainReference(text string) bool {

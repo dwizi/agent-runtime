@@ -122,6 +122,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			RunnerCommand:   cfg.SandboxRunnerCommand,
 			RunnerArgs:      parseShellArgs(cfg.SandboxRunnerArgs),
 			Timeout:         time.Duration(cfg.SandboxTimeoutSec) * time.Second,
+			MaxOutputBytes:  cfg.SandboxMaxOutputBytes,
 		}))
 	}
 	actionExecutor := executor.NewRegistry(plugins...)
@@ -130,6 +131,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	if cfg.AgentMaxTurnDurationSec > 0 {
 		commandGateway.SetAgentMaxTurnDuration(time.Duration(cfg.AgentMaxTurnDurationSec) * time.Second)
 	}
+	commandGateway.SetAgentGroundingPolicy(cfg.AgentGroundingFirstStep, cfg.AgentGroundingEveryStep)
 	commandGateway.SetSensitiveApprovalTTL(time.Duration(cfg.AgentSensitiveApprovalTTLSeconds) * time.Second)
 
 	// Load Reasoning Prompt
@@ -190,9 +192,11 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		MaxSystemPromptBytes: 12000,
 	})
 	groundedResponder := grounded.New(policyResponder, qmdService, grounded.Config{
-		TopK:           3,
-		MaxDocExcerpt:  1200,
-		MaxPromptBytes: 8000,
+		TopK:           cfg.LLMGroundingTopK,
+		MaxDocExcerpt:  cfg.LLMGroundingMaxDocExcerpt,
+		MaxPromptBytes: cfg.LLMGroundingMaxPromptBytes,
+		ChatTailLines:  cfg.LLMGroundingChatTailLines,
+		ChatTailBytes:  cfg.LLMGroundingChatTailBytes,
 	}, logger.With("component", "llm-grounding"))
 	commandGateway.SetTriageAcknowledger(groundedResponder)
 	llmPolicy := safety.New(safety.Config{
@@ -205,7 +209,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		RateLimitWindow:        time.Duration(cfg.LLMRateLimitWindowSec) * time.Second,
 	})
 	schedulerService := scheduler.New(sqlStore, engine, time.Duration(cfg.ObjectivePollSec)*time.Second, logger.With("component", "scheduler"))
-	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, sqlStore, groundedResponder, qmdService, actionExecutor, logger.With("component", "task-executor")))
+	engine.SetExecutor(newTaskWorkerExecutor(cfg.WorkspaceRoot, sqlStore, groundedResponder, qmdService, actionExecutor, commandGateway.Registry(), cfg, logger.With("component", "task-executor")))
 	if heartbeatRegistry != nil {
 		schedulerService.SetHeartbeatReporter(heartbeatRegistry)
 	}

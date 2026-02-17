@@ -225,6 +225,13 @@ func DecideMemoryStrategy(input llm.MessageInput) MemoryDecision {
 			Acknowledge: shouldAcknowledgeContextLoad(input),
 		}
 	}
+	if shouldUseImplicitQMD(lower) {
+		return MemoryDecision{
+			Strategy:    StrategyQMD,
+			Reason:      "implicit_information_request",
+			Acknowledge: false,
+		}
+	}
 	return MemoryDecision{Strategy: StrategyNone, Reason: "no_retrieval_cue"}
 }
 
@@ -274,6 +281,40 @@ func shouldUseQMD(lower string) bool {
 	}
 	if domainReferencePattern.MatchString(lower) {
 		return true
+	}
+	return false
+}
+
+func shouldUseImplicitQMD(lower string) bool {
+	trimmed := strings.TrimSpace(lower)
+	if trimmed == "" {
+		return false
+	}
+	words := strings.Fields(trimmed)
+	if len(words) < 5 {
+		return false
+	}
+	if strings.Contains(trimmed, "?") {
+		return true
+	}
+	questionPrefixes := []string{
+		"how ",
+		"what ",
+		"why ",
+		"when ",
+		"where ",
+		"which ",
+		"can ",
+		"could ",
+		"do ",
+		"does ",
+		"is ",
+		"are ",
+	}
+	for _, prefix := range questionPrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
 	}
 	return false
 }

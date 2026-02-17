@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o /out/agent-runtime ./cmd/agent-runtime
 
 FROM alpine:3.20 AS runtime
-RUN apk add --no-cache ca-certificates curl git jq ripgrep
+RUN apk add --no-cache ca-certificates curl git jq ripgrep python3 chromium bash
 WORKDIR /
 COPY --from=builder /out/agent-runtime /agent-runtime
 ENTRYPOINT ["/agent-runtime"]

@@ -659,8 +659,8 @@ func TestHandleAutoTriageUsesLLMAckWhenAvailable(t *testing.T) {
 	if !strings.Contains(ack.lastInput.Text, "USER REQUEST") {
 		t.Fatalf("expected agent prompt structure, got %q", ack.lastInput.Text)
 	}
-	if !ack.lastInput.SkipGrounding {
-		t.Fatal("expected triage acknowledgement to skip grounding")
+	if ack.lastInput.SkipGrounding {
+		t.Fatal("expected first-step triage reasoning to allow grounding")
 	}
 }
 

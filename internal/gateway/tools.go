@@ -20,6 +20,7 @@ import (
 
 // Ensure implementation
 var _ tools.Tool = (*SearchTool)(nil)
+var _ tools.Tool = (*OpenKnowledgeDocumentTool)(nil)
 var _ tools.Tool = (*CreateTaskTool)(nil)
 var _ tools.Tool = (*ModerationTriageTool)(nil)
 var _ tools.Tool = (*DraftEscalationTool)(nil)
@@ -28,6 +29,7 @@ var _ tools.Tool = (*CreateObjectiveTool)(nil)
 var _ tools.Tool = (*UpdateObjectiveTool)(nil)
 var _ tools.Tool = (*UpdateTaskTool)(nil)
 var _ tools.MetadataProvider = (*SearchTool)(nil)
+var _ tools.MetadataProvider = (*OpenKnowledgeDocumentTool)(nil)
 var _ tools.MetadataProvider = (*CreateTaskTool)(nil)
 var _ tools.MetadataProvider = (*ModerationTriageTool)(nil)
 var _ tools.MetadataProvider = (*DraftEscalationTool)(nil)
@@ -37,6 +39,7 @@ var _ tools.MetadataProvider = (*UpdateObjectiveTool)(nil)
 var _ tools.MetadataProvider = (*UpdateTaskTool)(nil)
 
 var _ tools.ArgumentValidator = (*SearchTool)(nil)
+var _ tools.ArgumentValidator = (*OpenKnowledgeDocumentTool)(nil)
 var _ tools.ArgumentValidator = (*CreateTaskTool)(nil)
 var _ tools.ArgumentValidator = (*ModerationTriageTool)(nil)
 var _ tools.ArgumentValidator = (*DraftEscalationTool)(nil)
@@ -48,8 +51,8 @@ var _ tools.ArgumentValidator = (*UpdateTaskTool)(nil)
 type contextKey string
 
 const (
-	contextKeyRecord contextKey = "context_record"
-	contextKeyInput  contextKey = "message_input"
+	ContextKeyRecord contextKey = "context_record"
+	ContextKeyInput  contextKey = "message_input"
 )
 
 // SearchTool implements tools.Tool for QMD search.
@@ -129,9 +132,92 @@ func (t *SearchTool) Execute(ctx context.Context, rawArgs json.RawMessage) (stri
 
 	lines := []string{fmt.Sprintf("Found %d results:", len(results))}
 	for i, result := range results {
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, result.Path, compactSnippet(result.Snippet)))
+		target := strings.TrimSpace(result.Path)
+		if target == "" {
+			target = strings.TrimSpace(result.DocID)
+		}
+		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, target, compactSnippet(result.Snippet)))
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// OpenKnowledgeDocumentTool implements tools.Tool for opening a specific markdown document.
+type OpenKnowledgeDocumentTool struct {
+	retriever Retriever
+}
+
+func NewOpenKnowledgeDocumentTool(retriever Retriever) *OpenKnowledgeDocumentTool {
+	return &OpenKnowledgeDocumentTool{retriever: retriever}
+}
+
+func (t *OpenKnowledgeDocumentTool) Name() string { return "open_knowledge_document" }
+func (t *OpenKnowledgeDocumentTool) ToolClass() tools.ToolClass {
+	return tools.ToolClassKnowledge
+}
+func (t *OpenKnowledgeDocumentTool) RequiresApproval() bool { return false }
+
+func (t *OpenKnowledgeDocumentTool) Description() string {
+	return "Open a markdown document from the workspace knowledge base by path or doc id."
+}
+
+func (t *OpenKnowledgeDocumentTool) ParametersSchema() string {
+	return `{"target":"string (path/doc id from search results)"}`
+}
+
+func (t *OpenKnowledgeDocumentTool) ValidateArgs(rawArgs json.RawMessage) error {
+	var args struct {
+		Target string `json:"target"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return err
+	}
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return fmt.Errorf("target is required")
+	}
+	if len(target) > 800 {
+		return fmt.Errorf("target is too long")
+	}
+	return nil
+}
+
+func (t *OpenKnowledgeDocumentTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {
+	var args struct {
+		Target string `json:"target"`
+	}
+	if err := strictDecodeArgs(rawArgs, &args); err != nil {
+		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if t.retriever == nil {
+		return "Knowledge base is currently unavailable.", nil
+	}
+
+	record, _, err := readToolContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	target := strings.TrimSpace(args.Target)
+	openResult, err := t.retriever.OpenMarkdown(ctx, record.WorkspaceID, target)
+	if err != nil {
+		if errors.Is(err, qmd.ErrNotFound) {
+			return "Document not found.", nil
+		}
+		if errors.Is(err, qmd.ErrInvalidTarget) {
+			return "Invalid document target.", nil
+		}
+		if errors.Is(err, qmd.ErrUnavailable) {
+			return "Knowledge base is currently unavailable.", nil
+		}
+		return "", err
+	}
+	content := strings.TrimSpace(openResult.Content)
+	if content == "" {
+		return "Document is empty.", nil
+	}
+	if openResult.Truncated {
+		return fmt.Sprintf("Source: %s\n%s\n\n[truncated]", strings.TrimSpace(openResult.Path), content), nil
+	}
+	return fmt.Sprintf("Source: %s\n%s", strings.TrimSpace(openResult.Path), content), nil
 }
 
 // CreateTaskTool implements tools.Tool for creating tasks.
@@ -203,7 +289,24 @@ func (t *CreateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	if err != nil {
 		return "", err
 	}
-
+	
+	// Check approval if not system/admin
+	// CreateTaskTool previously had RequiresApproval() = false,
+	// but the Agent loop was blocking sensitive tools if they required approval.
+	// Now we moved approval logic inside Execute for other tools.
+	// But CreateTaskTool was always false.
+	// The complaint is likely about the SUB-TASKS created by the agent or subsequent actions?
+	// OR the user means: "I ask agent to do something, it creates 5 subtasks, and I have to approve each one?"
+	// If create_task does not require approval (it doesn't), then the user doesn't approve CREATION.
+	// But maybe the ACTIONS inside those tasks require approval?
+	// If the user is Admin, we already enabled auto-approval for fetch/search etc. in the WORKER.
+	// But maybe the user is talking about the CHAT session where the agent proposes actions?
+	// The user said: "it needs to approve multiple ones for just one prompt".
+	// This usually means the agent proposes multiple `run_action` calls in sequence.
+	// And `RunActionTool` (legacy) requires approval.
+	// I should update `RunActionTool` to also support auto-approval for Admin!
+	// This is the missing piece. I updated specialized tools, but RunActionTool (the generic one used by legacy/chat agent) still blocks.
+	
 	priority := "p3"
 	if p, ok := normalizeTriagePriority(args.Priority); ok {
 		priority = string(p)
@@ -272,7 +375,7 @@ func (t *LearnSkillTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	record, ok := ctx.Value(ContextKeyRecord).(store.ContextRecord)
 	if !ok {
 		return "", fmt.Errorf("internal error: context record missing from context")
 	}
@@ -322,16 +425,16 @@ func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (s
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	record, ok := ctx.Value(ContextKeyRecord).(store.ContextRecord)
 	if !ok {
 		return "", fmt.Errorf("internal error: context record missing from context")
 	}
-	input, ok := ctx.Value(contextKeyInput).(MessageInput)
+	input, ok := ctx.Value(ContextKeyInput).(MessageInput)
 	if !ok {
 		return "", fmt.Errorf("internal error: message input missing from context")
 	}
 
-	// 1. Create the approval record (even if it might be auto-approved in future, 
+	// 1. Create the approval record (even if it might be auto-approved in future,
 	// for now we follow the system's human-in-the-loop design).
 	approval, err := t.store.CreateActionApproval(ctx, store.CreateActionApprovalInput{
 		WorkspaceID:     record.WorkspaceID,
@@ -348,10 +451,51 @@ func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (s
 		return "", err
 	}
 
-	// 2. Return the approval notice. 
-	// NOTE: In an autonomous loop, if the tool requires approval, 
-	// the loop should probably stop here and wait for the human.
-	return fmt.Sprintf("Action request created: %s. I need an admin to approve this before I can continue.", approval.ID), nil
+	// 2. Check if we can auto-approve
+	// We reuse checkAutoApproval logic but don't return error, just bool
+	canAutoApprove := false
+	if input.FromUserID == "system:task-worker" {
+		canAutoApprove = true
+	} else if identity, err := t.store.LookupUserIdentity(ctx, input.Connector, input.FromUserID); err == nil {
+		if identity.Role == "admin" || identity.Role == "overlord" {
+			canAutoApprove = true
+		}
+	}
+
+	if !canAutoApprove {
+		return fmt.Sprintf("Action request created: %s. I need an admin to approve this before I can continue.", approval.ID), nil
+	}
+
+	// 3. Auto-approve
+	approved, err := t.store.ApproveActionApproval(ctx, store.ApproveActionApprovalInput{
+		ID:             approval.ID,
+		ApproverUserID: "system:agent",
+	})
+	if err != nil {
+		return "", fmt.Errorf("auto-approve failed: %w", err)
+	}
+
+	// 4. Execute
+	result, err := t.executor.Execute(ctx, approved)
+	
+	status := "succeeded"
+	msg := result.Message
+	if err != nil {
+		status = "failed"
+		msg = err.Error()
+	}
+	_, _ = t.store.UpdateActionExecution(ctx, store.UpdateActionExecutionInput{
+		ID:               approved.ID,
+		ExecutionStatus:  status,
+		ExecutionMessage: msg,
+		ExecutorPlugin:   result.Plugin,
+		ExecutedAt:       time.Now().UTC(),
+	})
+
+	if err != nil {
+		return "", err
+	}
+	return result.Message, nil
 }
 
 type ModerationTriageTool struct{}
@@ -611,7 +755,7 @@ func (t *CreateObjectiveTool) Name() string { return "create_objective" }
 func (t *CreateObjectiveTool) ToolClass() tools.ToolClass {
 	return tools.ToolClassObjective
 }
-func (t *CreateObjectiveTool) RequiresApproval() bool { return true }
+func (t *CreateObjectiveTool) RequiresApproval() bool { return false }
 
 func (t *CreateObjectiveTool) Description() string {
 	return "Create a proactive monitoring objective for recurring community checks."
@@ -657,6 +801,19 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if err != nil {
 		return "", err
 	}
+	
+	// Check approval if not system/admin
+	if err := checkAutoApproval(ctx, t.store); err != nil {
+		// For objective creation, we don't have a specific ActionApproval flow wired up for 'create_objective' tool class yet?
+		// Wait, 'CreateObjectiveTool' is ToolClassObjective.
+		// If RequiresApproval is false, the Agent calls it.
+		// If we want to gate it, we must implement internal gating or rely on Agent policy.
+		// Agent policy 'RequiresApproval' was true. Now false.
+		// So we must gate internally if we want to restrict non-admins.
+		// But 'checkAutoApproval' will return error if not admin.
+		return "", fmt.Errorf("approval required: %w", err)
+	}
+
 	intervalSeconds := args.IntervalSeconds
 	if intervalSeconds < 1 {
 		intervalSeconds = int((6 * time.Hour).Seconds())
@@ -692,7 +849,7 @@ func (t *UpdateObjectiveTool) Name() string { return "update_objective" }
 func (t *UpdateObjectiveTool) ToolClass() tools.ToolClass {
 	return tools.ToolClassObjective
 }
-func (t *UpdateObjectiveTool) RequiresApproval() bool { return true }
+func (t *UpdateObjectiveTool) RequiresApproval() bool { return false }
 
 func (t *UpdateObjectiveTool) Description() string {
 	return "Update objective settings such as title, prompt, schedule, trigger type, or active state."
@@ -753,6 +910,10 @@ func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
+	
+	if err := checkAutoApproval(ctx, t.store); err != nil {
+		return "", fmt.Errorf("approval required: %w", err)
+	}
 
 	update := store.UpdateObjectiveInput{
 		ID: strings.TrimSpace(args.ObjectiveID),
@@ -796,7 +957,7 @@ func (t *UpdateTaskTool) Name() string { return "update_task" }
 func (t *UpdateTaskTool) ToolClass() tools.ToolClass {
 	return tools.ToolClassTasking
 }
-func (t *UpdateTaskTool) RequiresApproval() bool { return true }
+func (t *UpdateTaskTool) RequiresApproval() bool { return false }
 
 func (t *UpdateTaskTool) Description() string {
 	return "Update task routing metadata or close a task with a completion summary."
@@ -866,6 +1027,11 @@ func (t *UpdateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
+	
+	if err := checkAutoApproval(ctx, t.store); err != nil {
+		return "", fmt.Errorf("approval required: %w", err)
+	}
+
 	taskID := strings.TrimSpace(args.TaskID)
 	status := strings.ToLower(strings.TrimSpace(args.Status))
 	if status == "closed" {
@@ -941,11 +1107,11 @@ func (t *UpdateTaskTool) Execute(ctx context.Context, rawArgs json.RawMessage) (
 }
 
 func readToolContext(ctx context.Context) (store.ContextRecord, MessageInput, error) {
-	record, ok := ctx.Value(contextKeyRecord).(store.ContextRecord)
+	record, ok := ctx.Value(ContextKeyRecord).(store.ContextRecord)
 	if !ok {
 		return store.ContextRecord{}, MessageInput{}, fmt.Errorf("internal error: context record missing from context")
 	}
-	input, ok := ctx.Value(contextKeyInput).(MessageInput)
+	input, ok := ctx.Value(ContextKeyInput).(MessageInput)
 	if !ok {
 		return store.ContextRecord{}, MessageInput{}, fmt.Errorf("internal error: message input missing from context")
 	}
@@ -976,4 +1142,22 @@ func containsAnyKeyword(haystack string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+func checkAutoApproval(ctx context.Context, store Store) error {
+	input, ok := ctx.Value(ContextKeyInput).(MessageInput)
+	if !ok {
+		return fmt.Errorf("internal error: input context missing")
+	}
+	if input.FromUserID == "system:task-worker" {
+		return nil
+	}
+	identity, err := store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
+	if err != nil {
+		return fmt.Errorf("access denied")
+	}
+	if identity.Role == "admin" || identity.Role == "overlord" {
+		return nil
+	}
+	return fmt.Errorf("admin role required")
 }

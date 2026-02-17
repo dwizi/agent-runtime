@@ -7,5 +7,5 @@ func FormatApprovalRequestNotice(actionID string) string {
 	if id == "" {
 		id = "(unknown-action-request)"
 	}
-	return "Admin approval required.\n\n'" + id + "'"
+	return "Approval required for action `" + id + "`. Reply 'approve' to execute, or 'deny' to reject."
 }

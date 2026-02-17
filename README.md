@@ -148,6 +148,13 @@ LLM runtime env:
 - `AGENT_RUNTIME_LLM_API_KEY` (provider key for OpenAI/Z.ai/Claude; leave empty for unauthenticated local endpoints)
 - `AGENT_RUNTIME_LLM_MODEL` (default: `gpt-4o`; can override with Z.ai/Claude/local model names such as `glm-4.7-flash`, `claude-3.5-sonic`, or `qwen2.5`)
 - `AGENT_RUNTIME_LLM_TIMEOUT_SECONDS` (default: `60`; request timeout per attempt)
+- `AGENT_RUNTIME_LLM_GROUNDING_TOP_K` (default: `3`; qmd results pulled when grounding runs)
+- `AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES` (default: `1200`; max excerpt size per grounded document)
+- `AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES` (default: `8000`; cap for grounded prompt expansion)
+- `AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES` (default: `24`; max chat-tail lines for memory grounding)
+- `AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES` (default: `1800`; byte cap for chat-tail memory grounding)
+- `AGENT_RUNTIME_AGENT_GROUNDING_FIRST_STEP` (default: `true`; allows grounding in step 1 of think-act loop)
+- `AGENT_RUNTIME_AGENT_GROUNDING_EVERY_STEP` (default: `false`; if true, applies grounding on every loop step)
 Notes:
 - Setting `AGENT_RUNTIME_LLM_PROVIDER=openai` routes LLM calls through `internal/llm/openai`, which can talk to any OpenAI-compatible endpoint (OpenAI itself, Z.ai, Ollama, vLLM, etc.).
 - Run locally against Ollama or vLLM by pointing `AGENT_RUNTIME_LLM_BASE_URL` at your local server (`http://localhost:11434/v1`) and updating `AGENT_RUNTIME_LLM_MODEL` accordingly.

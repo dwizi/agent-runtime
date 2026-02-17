@@ -71,8 +71,15 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_LLM_ALLOWED_CONTEXT_IDS", "")
 	t.Setenv("AGENT_RUNTIME_LLM_RATE_LIMIT_PER_WINDOW", "")
 	t.Setenv("AGENT_RUNTIME_LLM_RATE_LIMIT_WINDOW_SECONDS", "")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_TOP_K", "")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES", "")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES", "")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES", "")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES", "")
 	t.Setenv("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "")
 	t.Setenv("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "")
+	t.Setenv("AGENT_RUNTIME_AGENT_GROUNDING_FIRST_STEP", "")
+	t.Setenv("AGENT_RUNTIME_AGENT_GROUNDING_EVERY_STEP", "")
 	t.Setenv("AGENT_RUNTIME_SOUL_GLOBAL_FILE", "")
 	t.Setenv("AGENT_RUNTIME_SOUL_WORKSPACE_REL_PATH", "")
 	t.Setenv("AGENT_RUNTIME_SOUL_CONTEXT_REL_PATH", "")
@@ -268,6 +275,21 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.LLMRateLimitWindowSec != 60 {
 		t.Fatalf("expected default llm rate limit window 60, got %d", cfg.LLMRateLimitWindowSec)
 	}
+	if cfg.LLMGroundingTopK != 3 {
+		t.Fatalf("expected default llm grounding top k 3, got %d", cfg.LLMGroundingTopK)
+	}
+	if cfg.LLMGroundingMaxDocExcerpt != 1200 {
+		t.Fatalf("expected default llm grounding max doc excerpt 1200, got %d", cfg.LLMGroundingMaxDocExcerpt)
+	}
+	if cfg.LLMGroundingMaxPromptBytes != 8000 {
+		t.Fatalf("expected default llm grounding max prompt bytes 8000, got %d", cfg.LLMGroundingMaxPromptBytes)
+	}
+	if cfg.LLMGroundingChatTailLines != 24 {
+		t.Fatalf("expected default llm grounding chat tail lines 24, got %d", cfg.LLMGroundingChatTailLines)
+	}
+	if cfg.LLMGroundingChatTailBytes != 1800 {
+		t.Fatalf("expected default llm grounding chat tail bytes 1800, got %d", cfg.LLMGroundingChatTailBytes)
+	}
 	if cfg.LLMAdminSystemPrompt == "" {
 		t.Fatal("expected default admin system prompt")
 	}
@@ -294,6 +316,12 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if cfg.SkillsGlobalRoot != "/context/skills" {
 		t.Fatalf("expected default skills global root /context/skills, got %s", cfg.SkillsGlobalRoot)
+	}
+	if !cfg.AgentGroundingFirstStep {
+		t.Fatal("expected agent grounding first step enabled by default")
+	}
+	if cfg.AgentGroundingEveryStep {
+		t.Fatal("expected agent grounding every step disabled by default")
 	}
 	if !cfg.AdminTLSSkipVerify {
 		t.Fatal("expected admin tls skip verify to default to true")
@@ -368,8 +396,15 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_LLM_ALLOWED_CONTEXT_IDS", "ctx-1,ctx-2")
 	t.Setenv("AGENT_RUNTIME_LLM_RATE_LIMIT_PER_WINDOW", "3")
 	t.Setenv("AGENT_RUNTIME_LLM_RATE_LIMIT_WINDOW_SECONDS", "120")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_TOP_K", "7")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES", "2200")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES", "12000")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES", "40")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES", "3200")
 	t.Setenv("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "admin prompt")
 	t.Setenv("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "public prompt")
+	t.Setenv("AGENT_RUNTIME_AGENT_GROUNDING_FIRST_STEP", "false")
+	t.Setenv("AGENT_RUNTIME_AGENT_GROUNDING_EVERY_STEP", "true")
 	t.Setenv("AGENT_RUNTIME_SOUL_GLOBAL_FILE", "/context/GLOBAL_SOUL.md")
 	t.Setenv("AGENT_RUNTIME_SOUL_WORKSPACE_REL_PATH", "persona/SOUL.md")
 	t.Setenv("AGENT_RUNTIME_SOUL_CONTEXT_REL_PATH", "persona/agents/{context_id}.md")
@@ -577,6 +612,21 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.LLMRateLimitWindowSec != 120 {
 		t.Fatalf("expected overridden llm rate limit window, got %d", cfg.LLMRateLimitWindowSec)
 	}
+	if cfg.LLMGroundingTopK != 7 {
+		t.Fatalf("expected overridden llm grounding top k 7, got %d", cfg.LLMGroundingTopK)
+	}
+	if cfg.LLMGroundingMaxDocExcerpt != 2200 {
+		t.Fatalf("expected overridden llm grounding max doc excerpt 2200, got %d", cfg.LLMGroundingMaxDocExcerpt)
+	}
+	if cfg.LLMGroundingMaxPromptBytes != 12000 {
+		t.Fatalf("expected overridden llm grounding max prompt bytes 12000, got %d", cfg.LLMGroundingMaxPromptBytes)
+	}
+	if cfg.LLMGroundingChatTailLines != 40 {
+		t.Fatalf("expected overridden llm grounding chat tail lines 40, got %d", cfg.LLMGroundingChatTailLines)
+	}
+	if cfg.LLMGroundingChatTailBytes != 3200 {
+		t.Fatalf("expected overridden llm grounding chat tail bytes 3200, got %d", cfg.LLMGroundingChatTailBytes)
+	}
 	if cfg.LLMAdminSystemPrompt != "admin prompt" {
 		t.Fatalf("expected overridden admin system prompt, got %s", cfg.LLMAdminSystemPrompt)
 	}
@@ -603,6 +653,12 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SkillsGlobalRoot != "/context/skill-packs" {
 		t.Fatalf("expected overridden skills global root, got %s", cfg.SkillsGlobalRoot)
+	}
+	if cfg.AgentGroundingFirstStep {
+		t.Fatal("expected overridden agent grounding first step false")
+	}
+	if !cfg.AgentGroundingEveryStep {
+		t.Fatal("expected overridden agent grounding every step true")
 	}
 	if cfg.PublicHost != "chat.example.com" {
 		t.Fatalf("expected overridden public host, got %s", cfg.PublicHost)

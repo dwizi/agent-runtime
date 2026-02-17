@@ -191,3 +191,30 @@ func TestReplyUsesChatTailForMemoryCue(t *testing.T) {
 		t.Fatalf("expected acknowledgement instruction for chat-tail strategy, got %q", base.lastInput.Text)
 	}
 }
+
+func TestReplyUsesImplicitQMDForQuestion(t *testing.T) {
+	base := &fakeBase{reply: "ok"}
+	retriever := &fakeRetriever{
+		searchResults: []qmd.SearchResult{
+			{Path: "docs/guide.md", Snippet: "guide summary"},
+		},
+		openByTarget: map[string]string{
+			"docs/guide.md": "Longer guide content",
+		},
+	}
+	responder := New(base, retriever, Config{TopK: 1}, nil)
+	input := llm.MessageInput{
+		WorkspaceID: "ws-1",
+		Text:        "How should I migrate this workspace safely?",
+	}
+	_, err := responder.Reply(context.Background(), input)
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+	if retriever.searchCalls == 0 {
+		t.Fatal("expected implicit informational question to trigger qmd search")
+	}
+	if !strings.Contains(base.lastInput.Text, "Relevant workspace context:") {
+		t.Fatalf("expected grounded prompt, got %q", base.lastInput.Text)
+	}
+}
