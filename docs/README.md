@@ -14,6 +14,9 @@ This documentation is written for the operators who install, secure, and run Age
    - `docs/operations.md`
 5. Run go-live gate:
    - `docs/production-checklist.md`
+6. Understand memory and context internals:
+   - `docs/memory-context-strategy.md`
+   - `docs/memory-context-playbook.md`
 
 ## Product Planning Docs
 

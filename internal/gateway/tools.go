@@ -799,7 +799,7 @@ func (t *CreateObjectiveTool) Description() string {
 }
 
 func (t *CreateObjectiveTool) ParametersSchema() string {
-	return `{"title":"string","prompt":"string","cron_expr":"string(optional, default: 0 */6 * * *)","active":"boolean(optional)"}`
+	return `{"title":"string","prompt":"string","cron_expr":"string(optional, default: 0 */6 * * *)","timezone":"string(optional, IANA timezone)","active":"boolean(optional)"}`
 }
 
 func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
@@ -807,6 +807,7 @@ func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 		Title    string `json:"title"`
 		Prompt   string `json:"prompt"`
 		CronExpr string `json:"cron_expr"`
+		Timezone string `json:"timezone"`
 		Active   *bool  `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
@@ -818,8 +819,14 @@ func (t *CreateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 	if strings.TrimSpace(args.Prompt) == "" {
 		return fmt.Errorf("prompt is required")
 	}
+	timezone := strings.TrimSpace(args.Timezone)
+	if timezone != "" {
+		if _, err := time.LoadLocation(timezone); err != nil {
+			return fmt.Errorf("timezone is invalid")
+		}
+	}
 	if cronExpr := strings.TrimSpace(args.CronExpr); cronExpr != "" {
-		if _, err := store.ComputeScheduleNextRun(cronExpr, time.Now().UTC()); err != nil {
+		if _, err := store.ComputeScheduleNextRunForTimezone(cronExpr, timezone, time.Now().UTC()); err != nil {
 			return fmt.Errorf("cron_expr is invalid")
 		}
 	}
@@ -831,6 +838,7 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 		Title    string `json:"title"`
 		Prompt   string `json:"prompt"`
 		CronExpr string `json:"cron_expr"`
+		Timezone string `json:"timezone"`
 		Active   *bool  `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
@@ -857,10 +865,6 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if cronExpr == "" {
 		cronExpr = defaultObjectiveCronExpr
 	}
-	active := true
-	if args.Active != nil {
-		active = *args.Active
-	}
 	obj, err := t.store.CreateObjective(ctx, store.CreateObjectiveInput{
 		WorkspaceID: record.WorkspaceID,
 		ContextID:   record.ID,
@@ -868,7 +872,8 @@ func (t *CreateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 		Prompt:      strings.TrimSpace(args.Prompt),
 		TriggerType: store.ObjectiveTriggerSchedule,
 		CronExpr:    cronExpr,
-		Active:      active,
+		Timezone:    strings.TrimSpace(args.Timezone),
+		Active:      args.Active,
 	})
 	if err != nil {
 		return "", err
@@ -895,7 +900,7 @@ func (t *UpdateObjectiveTool) Description() string {
 }
 
 func (t *UpdateObjectiveTool) ParametersSchema() string {
-	return `{"objective_id":"string","title":"string(optional)","prompt":"string(optional)","trigger_type":"schedule|event(optional)","event_key":"string(optional)","cron_expr":"string(optional)","active":"boolean(optional)"}`
+	return `{"objective_id":"string","title":"string(optional)","prompt":"string(optional)","trigger_type":"schedule|event(optional)","event_key":"string(optional)","cron_expr":"string(optional)","timezone":"string(optional, IANA timezone)","active":"boolean(optional)"}`
 }
 
 func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
@@ -906,6 +911,7 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 		TriggerType string  `json:"trigger_type"`
 		EventKey    string  `json:"event_key"`
 		CronExpr    *string `json:"cron_expr"`
+		Timezone    *string `json:"timezone"`
 		Active      *bool   `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
@@ -923,13 +929,22 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 			return fmt.Errorf("event_key is required when trigger_type is event")
 		}
 	}
+	timezone := ""
+	if args.Timezone != nil {
+		timezone = strings.TrimSpace(*args.Timezone)
+		if timezone != "" {
+			if _, err := time.LoadLocation(timezone); err != nil {
+				return fmt.Errorf("timezone is invalid")
+			}
+		}
+	}
 	if args.CronExpr != nil {
 		cronExpr := strings.TrimSpace(*args.CronExpr)
 		if cronExpr == "" {
 			if trigger != string(store.ObjectiveTriggerEvent) {
 				return fmt.Errorf("cron_expr cannot be empty for schedule objectives")
 			}
-		} else if _, err := store.ComputeScheduleNextRun(cronExpr, time.Now().UTC()); err != nil {
+		} else if _, err := store.ComputeScheduleNextRunForTimezone(cronExpr, timezone, time.Now().UTC()); err != nil {
 			return fmt.Errorf("cron_expr is invalid")
 		}
 	}
@@ -938,6 +953,7 @@ func (t *UpdateObjectiveTool) ValidateArgs(rawArgs json.RawMessage) error {
 		strings.TrimSpace(args.TriggerType) == "" &&
 		strings.TrimSpace(args.EventKey) == "" &&
 		args.CronExpr == nil &&
+		args.Timezone == nil &&
 		args.Active == nil {
 		return fmt.Errorf("at least one field must be provided")
 	}
@@ -952,6 +968,7 @@ func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 		TriggerType string  `json:"trigger_type"`
 		EventKey    string  `json:"event_key"`
 		CronExpr    *string `json:"cron_expr"`
+		Timezone    *string `json:"timezone"`
 		Active      *bool   `json:"active"`
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
@@ -981,6 +998,10 @@ func (t *UpdateObjectiveTool) Execute(ctx context.Context, rawArgs json.RawMessa
 	if args.CronExpr != nil {
 		cronExpr := strings.TrimSpace(*args.CronExpr)
 		update.CronExpr = &cronExpr
+	}
+	if args.Timezone != nil {
+		timezone := strings.TrimSpace(*args.Timezone)
+		update.Timezone = &timezone
 	}
 	if args.Active != nil {
 		update.Active = args.Active

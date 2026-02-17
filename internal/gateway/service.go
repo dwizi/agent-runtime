@@ -507,12 +507,6 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 			if err == nil {
 				agentPrompt := fmt.Sprintf("APPROVED ACTIONS EXECUTED.\n\n%s\n\nInterpret these results for the user.", strings.Join(results, "\n\n"))
 
-				// 1. Get History
-				history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
-				if history != "" {
-					agentPrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, agentPrompt)
-				}
-
 				agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
 				agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
 				// Grant sensitive approval for follow-up actions (if any)
@@ -572,12 +566,6 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
 		if err == nil {
 			agentPrompt := fmt.Sprintf("APPROVED ACTION EXECUTED.\nAction: %s\nResult: %s\n\nInterpret this result for the user.", actionID, res.Message)
-
-			// 1. Get History
-			history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
-			if history != "" {
-				agentPrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, agentPrompt)
-			}
 
 			agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
 			agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
@@ -981,6 +969,7 @@ func (s *Service) handleMonitorObjective(ctx context.Context, input MessageInput
 		title = title[:72]
 	}
 	objectivePrompt := strings.TrimSpace("Monitor this target for updates and report only concrete changes:\n" + goal)
+	active := true
 	_, err = s.store.CreateObjective(ctx, store.CreateObjectiveInput{
 		WorkspaceID: contextRecord.WorkspaceID,
 		ContextID:   contextRecord.ID,
@@ -988,7 +977,7 @@ func (s *Service) handleMonitorObjective(ctx context.Context, input MessageInput
 		Prompt:      objectivePrompt,
 		TriggerType: store.ObjectiveTriggerSchedule,
 		CronExpr:    defaultObjectiveCronExpr,
-		Active:      true,
+		Active:      &active,
 	})
 	if err != nil {
 		return MessageOutput{}, err
@@ -1021,12 +1010,7 @@ func (s *Service) handleAgentAutoTriage(ctx context.Context, input MessageInput,
 		}
 	}
 
-	// 1. Get Conversation Context (Memory)
-	history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
 	agentInputText := strings.TrimSpace(text)
-	if history != "" {
-		agentInputText = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\nNEW MESSAGE:\n%s", history, agentInputText)
-	}
 
 	agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
 	agentCtx = context.WithValue(agentCtx, ContextKeyInput, input)
@@ -1160,13 +1144,7 @@ func (s *Service) NarrateTaskResult(ctx context.Context, connector, externalID s
 		task.Title, result.Summary,
 	)
 
-	// 3. Get history for context
-	history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, connector, externalID, 10)
-	if history != "" {
-		narrativePrompt = fmt.Sprintf("CONVERSATION HISTORY:\n%s\n\n%s", history, narrativePrompt)
-	}
-
-	// 4. Execute Agent turn
+	// 3. Execute Agent turn
 	agentCtx := context.WithValue(ctx, ContextKeyRecord, contextRecord)
 	agentCtx = context.WithValue(agentCtx, ContextKeyInput, MessageInput{
 		Connector:  connector,

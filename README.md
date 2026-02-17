@@ -219,6 +219,7 @@ Message triage behavior:
 - routing decisions are posted to workspace admin channels with `/route ...` override examples
 
 Objectives and proactivity:
+- detailed lifecycle, payloads, and troubleshooting: `docs/objectives-flow.md`
 - objectives can be stored as:
   - `trigger_type: "schedule"` with `cron_expr` (and optional `next_run_unix`)
   - `trigger_type: "event"` with `event_key` (currently `markdown.updated`)

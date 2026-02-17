@@ -72,6 +72,7 @@ func TestProcessDueQueuesObjectiveTask(t *testing.T) {
 				ContextID:   "ctx-1",
 				Title:       "Daily Review",
 				Prompt:      "Review daily updates",
+				TriggerType: store.ObjectiveTriggerSchedule,
 				CronExpr:    "* * * * *",
 			},
 		},
@@ -104,6 +105,7 @@ func TestProcessDueWritesLastErrorOnEnqueueFailure(t *testing.T) {
 				ContextID:   "ctx-1",
 				Title:       "Daily Review",
 				Prompt:      "Review daily updates",
+				TriggerType: store.ObjectiveTriggerSchedule,
 				CronExpr:    "* * * * *",
 			},
 		},
@@ -127,6 +129,7 @@ func TestHandleMarkdownUpdateQueuesEventObjectives(t *testing.T) {
 				ContextID:   "ctx-1",
 				Title:       "React to edits",
 				Prompt:      "Inspect updated markdown and create follow-up tasks",
+				TriggerType: store.ObjectiveTriggerEvent,
 			},
 		},
 	}
@@ -139,8 +142,11 @@ func TestHandleMarkdownUpdateQueuesEventObjectives(t *testing.T) {
 	if !strings.Contains(engineMock.lastTask.Prompt, "memory/notes.md") {
 		t.Fatalf("expected changed path in prompt, got %s", engineMock.lastTask.Prompt)
 	}
-	if strings.TrimSpace(storeMock.lastTask.RunKey) != "" {
-		t.Fatalf("expected no run key for event objective task, got %s", storeMock.lastTask.RunKey)
+	if !strings.Contains(storeMock.lastTask.RunKey, ":event:") {
+		t.Fatalf("expected event run key for objective task, got %s", storeMock.lastTask.RunKey)
+	}
+	if strings.TrimSpace(storeMock.lastRunUpdate.ID) != "obj-3" {
+		t.Fatalf("expected run update for obj-3, got %s", storeMock.lastRunUpdate.ID)
 	}
 }
 
@@ -148,10 +154,11 @@ func TestProcessDueTreatsDuplicateRunAsIdempotent(t *testing.T) {
 	storeMock := &fakeStore{
 		dueObjectives: []store.Objective{
 			{
-				ID:        "obj-dup",
-				CronExpr:  "* * * * *",
-				Prompt:    "run",
-				NextRunAt: time.Now().UTC().Add(-time.Minute),
+				ID:          "obj-dup",
+				TriggerType: store.ObjectiveTriggerSchedule,
+				CronExpr:    "* * * * *",
+				Prompt:      "run",
+				NextRunAt:   time.Now().UTC().Add(-time.Minute),
 			},
 		},
 		createTaskErr: store.ErrTaskRunAlreadyExists,
@@ -166,5 +173,60 @@ func TestProcessDueTreatsDuplicateRunAsIdempotent(t *testing.T) {
 	}
 	if strings.TrimSpace(storeMock.lastRunUpdate.LastError) != "" {
 		t.Fatalf("expected duplicate run to leave last_error empty, got %q", storeMock.lastRunUpdate.LastError)
+	}
+}
+
+func TestProcessDueAutoPausesAfterConsecutiveFailures(t *testing.T) {
+	storeMock := &fakeStore{
+		dueObjectives: []store.Objective{
+			{
+				ID:                  "obj-pause",
+				WorkspaceID:         "ws-1",
+				ContextID:           "ctx-1",
+				TriggerType:         store.ObjectiveTriggerSchedule,
+				CronExpr:            "* * * * *",
+				Prompt:              "run",
+				NextRunAt:           time.Now().UTC().Add(-time.Minute),
+				ConsecutiveFailures: 4,
+			},
+		},
+	}
+	engineMock := &fakeEngine{enqueueErr: errors.New("boom")}
+	service := New(storeMock, engineMock, 30*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := service.processDue(context.Background()); err != nil {
+		t.Fatalf("processDue failed: %v", err)
+	}
+	if storeMock.lastRunUpdate.Active == nil || *storeMock.lastRunUpdate.Active {
+		t.Fatalf("expected objective to be auto-paused after repeated failures")
+	}
+	if storeMock.lastRunUpdate.AutoPausedReason == nil || strings.TrimSpace(*storeMock.lastRunUpdate.AutoPausedReason) == "" {
+		t.Fatalf("expected auto pause reason to be recorded")
+	}
+}
+
+func TestProcessDueBacksOffAfterFailure(t *testing.T) {
+	storeMock := &fakeStore{
+		dueObjectives: []store.Objective{
+			{
+				ID:                  "obj-backoff",
+				WorkspaceID:         "ws-1",
+				ContextID:           "ctx-1",
+				TriggerType:         store.ObjectiveTriggerSchedule,
+				CronExpr:            "* * * * *",
+				Prompt:              "run",
+				NextRunAt:           time.Now().UTC().Add(-time.Minute),
+				ConsecutiveFailures: 2,
+			},
+		},
+	}
+	engineMock := &fakeEngine{enqueueErr: errors.New("queue full")}
+	service := New(storeMock, engineMock, 30*time.Second, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	started := time.Now().UTC()
+	if err := service.processDue(context.Background()); err != nil {
+		t.Fatalf("processDue failed: %v", err)
+	}
+	minNext := started.Add(time.Minute)
+	if storeMock.lastRunUpdate.NextRunAt.Before(minNext) {
+		t.Fatalf("expected failure backoff to delay next run, got %s", storeMock.lastRunUpdate.NextRunAt)
 	}
 }

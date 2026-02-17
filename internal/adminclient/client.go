@@ -64,10 +64,21 @@ type Objective struct {
 	TriggerType string `json:"trigger_type"`
 	EventKey    string `json:"event_key"`
 	CronExpr    string `json:"cron_expr"`
+	Timezone    string `json:"timezone"`
 	Active      bool   `json:"active"`
-	NextRunUnix int64  `json:"next_run_unix"`
-	LastRunUnix int64  `json:"last_run_unix"`
+	NextRunUnix *int64 `json:"next_run_unix"`
+	LastRunUnix *int64 `json:"last_run_unix"`
 	LastError   string `json:"last_error"`
+
+	RunCount             int    `json:"run_count"`
+	SuccessCount         int    `json:"success_count"`
+	FailureCount         int    `json:"failure_count"`
+	ConsecutiveFailures  int    `json:"consecutive_failures"`
+	ConsecutiveSuccesses int    `json:"consecutive_successes"`
+	TotalRunDurationMs   int64  `json:"total_run_duration_ms"`
+	AvgRunDurationMs     int64  `json:"avg_run_duration_ms"`
+	LastSuccessUnix      *int64 `json:"last_success_unix"`
+	LastFailureUnix      *int64 `json:"last_failure_unix"`
 }
 
 type ListObjectivesResponse struct {

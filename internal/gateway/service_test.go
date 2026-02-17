@@ -251,6 +251,10 @@ func (f *fakeStore) UpdateActionExecution(ctx context.Context, input store.Updat
 func (f *fakeStore) CreateObjective(ctx context.Context, input store.CreateObjectiveInput) (store.Objective, error) {
 	f.objectiveInvoked = true
 	f.lastObjective = input
+	active := true
+	if input.Active != nil {
+		active = *input.Active
+	}
 	return store.Objective{
 		ID:          "obj-1",
 		WorkspaceID: input.WorkspaceID,
@@ -259,7 +263,7 @@ func (f *fakeStore) CreateObjective(ctx context.Context, input store.CreateObjec
 		Prompt:      input.Prompt,
 		TriggerType: input.TriggerType,
 		CronExpr:    input.CronExpr,
-		Active:      input.Active,
+		Active:      active,
 	}, nil
 }
 

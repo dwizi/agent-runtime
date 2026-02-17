@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,7 +16,14 @@ import (
 	"github.com/google/uuid"
 )
 
-const markdownUpdatedEventKey = "markdown.updated"
+const (
+	markdownUpdatedEventKey = "markdown.updated"
+
+	objectiveEventDedupeWindow = 30 * time.Second
+	objectiveFailureBackoffMin = 1 * time.Minute
+	objectiveFailureBackoffMax = 30 * time.Minute
+	objectiveAutoPauseAfter    = 5
+)
 
 var errObjectiveRunAlreadyQueued = errors.New("objective run already queued")
 
@@ -109,15 +118,31 @@ func (s *Service) HandleMarkdownUpdate(ctx context.Context, workspaceID, changed
 		s.logger.Error("list event objectives failed", "error", err, "workspace_id", workspaceID)
 		return
 	}
+	now := time.Now().UTC()
 	for _, objective := range objectives {
+		startedAt := time.Now().UTC()
 		prompt := strings.TrimSpace(objective.Prompt)
 		if prompt == "" {
+			s.persistRunResult(ctx, objective, startedAt, time.Time{}, "objective prompt is empty", false)
 			continue
 		}
 		if strings.TrimSpace(changedPath) != "" {
 			prompt += "\n\nChanged markdown file: `" + strings.TrimSpace(changedPath) + "`."
 		}
-		_, _ = s.enqueueObjectiveTask(ctx, objective, prompt, false, time.Time{})
+		runKey := objectiveEventRunKey(objective.ID, changedPath, now)
+		task, taskErr := s.enqueueObjectiveTask(ctx, objective, prompt, runKey)
+		if errors.Is(taskErr, errObjectiveRunAlreadyQueued) {
+			s.persistRunResult(ctx, objective, startedAt, time.Time{}, "", true)
+			s.logger.Info("event objective already queued", "objective_id", objective.ID, "workspace_id", objective.WorkspaceID)
+			continue
+		}
+		if taskErr != nil {
+			s.persistRunResult(ctx, objective, startedAt, time.Time{}, taskErr.Error(), false)
+			s.logger.Error("event objective enqueue failed", "objective_id", objective.ID, "workspace_id", objective.WorkspaceID, "error", taskErr)
+			continue
+		}
+		s.persistRunResult(ctx, objective, startedAt, time.Time{}, "", false)
+		s.logger.Info("event objective queued", "objective_id", objective.ID, "task_id", task.ID, "workspace_id", objective.WorkspaceID)
 	}
 }
 
@@ -134,65 +159,63 @@ func (s *Service) processDue(ctx context.Context) error {
 }
 
 func (s *Service) runScheduledObjective(ctx context.Context, objective store.Objective, now time.Time) {
+	startedAt := time.Now().UTC()
 	prompt := strings.TrimSpace(objective.Prompt)
-	nextRun, nextErr := store.ComputeScheduleNextRun(objective.CronExpr, now)
+	nextRun, nextErr := store.ComputeScheduleNextRunForTimezone(objective.CronExpr, objective.Timezone, now)
 	if nextErr != nil {
-		_, _ = s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
-			ID:        objective.ID,
-			LastRunAt: now,
-			NextRunAt: time.Time{},
-			LastError: nextErr.Error(),
-		})
+		s.persistRunResult(ctx, objective, startedAt, time.Time{}, nextErr.Error(), false)
 		return
 	}
 	if prompt == "" {
-		_, _ = s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
-			ID:        objective.ID,
-			LastRunAt: now,
-			NextRunAt: nextRun,
-			LastError: "objective prompt is empty",
-		})
+		s.persistRunResult(ctx, objective, startedAt, nextRun, "objective prompt is empty", false)
 		return
 	}
-	task, err := s.enqueueObjectiveTask(ctx, objective, prompt, true, objective.NextRunAt)
-	lastError := ""
-	switch {
-	case err == nil:
-	case errors.Is(err, errObjectiveRunAlreadyQueued):
-		lastError = ""
-	default:
-		lastError = err.Error()
-	}
-	_, updateErr := s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
-		ID:        objective.ID,
-		LastRunAt: now,
-		NextRunAt: nextRun,
-		LastError: lastError,
-	})
-	if updateErr != nil {
-		s.logger.Error("update objective run failed", "error", updateErr, "objective_id", objective.ID)
-	}
-	if err != nil && !errors.Is(err, errObjectiveRunAlreadyQueued) {
-		return
-	}
+	task, err := s.enqueueObjectiveTask(ctx, objective, prompt, objectiveScheduleRunKey(objective.ID, objective.NextRunAt))
 	if errors.Is(err, errObjectiveRunAlreadyQueued) {
+		s.persistRunResult(ctx, objective, startedAt, nextRun, "", true)
 		s.logger.Info("scheduled objective already queued", "objective_id", objective.ID, "workspace_id", objective.WorkspaceID)
 		return
 	}
+	if err != nil {
+		s.persistRunResult(ctx, objective, startedAt, nextRun, err.Error(), false)
+		return
+	}
+	s.persistRunResult(ctx, objective, startedAt, nextRun, "", false)
 	s.logger.Info("scheduled objective queued", "objective_id", objective.ID, "task_id", task.ID, "workspace_id", objective.WorkspaceID)
 }
 
-func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Objective, prompt string, scheduled bool, scheduledFor time.Time) (orchestrator.Task, error) {
+func (s *Service) persistRunResult(
+	ctx context.Context,
+	objective store.Objective,
+	startedAt time.Time,
+	nextRunAt time.Time,
+	lastError string,
+	skipStats bool,
+) {
+	lastError = strings.TrimSpace(lastError)
+	activeOverride, reasonOverride, adjustedNextRun := objectiveFailurePolicy(objective, startedAt, nextRunAt, lastError)
+	_, err := s.store.UpdateObjectiveRun(ctx, store.UpdateObjectiveRunInput{
+		ID:               objective.ID,
+		LastRunAt:        startedAt,
+		NextRunAt:        adjustedNextRun,
+		LastError:        lastError,
+		RunDuration:      time.Since(startedAt),
+		SkipStats:        skipStats,
+		Active:           activeOverride,
+		AutoPausedReason: reasonOverride,
+	})
+	if err != nil {
+		s.logger.Error("update objective run failed", "error", err, "objective_id", objective.ID)
+	}
+}
+
+func (s *Service) enqueueObjectiveTask(ctx context.Context, objective store.Objective, prompt string, runKey string) (orchestrator.Task, error) {
 	title := strings.TrimSpace(objective.Title)
 	if title == "" {
 		title = "Objective task"
 	}
 	if len(title) > 72 {
 		title = title[:72]
-	}
-	runKey := ""
-	if scheduled {
-		runKey = objectiveScheduleRunKey(objective.ID, scheduledFor)
 	}
 	task := orchestrator.Task{
 		ID:          "task-" + uuid.NewString(),
@@ -234,4 +257,71 @@ func objectiveScheduleRunKey(objectiveID string, scheduledFor time.Time) string 
 		scheduledFor = time.Now().UTC()
 	}
 	return fmt.Sprintf("objective:%s:%d", id, scheduledFor.UTC().Unix())
+}
+
+func objectiveEventRunKey(objectiveID, changedPath string, eventTime time.Time) string {
+	id := strings.TrimSpace(objectiveID)
+	if id == "" {
+		id = "objective"
+	}
+	if eventTime.IsZero() {
+		eventTime = time.Now().UTC()
+	}
+	windowSeconds := int64(objectiveEventDedupeWindow.Seconds())
+	if windowSeconds < 1 {
+		windowSeconds = 1
+	}
+	bucket := eventTime.UTC().Unix() / windowSeconds
+	path := strings.ToLower(strings.TrimSpace(changedPath))
+	if path == "" {
+		path = "-"
+	}
+	sum := sha1.Sum([]byte(path))
+	return fmt.Sprintf("objective:%s:event:%d:%s", id, bucket, hex.EncodeToString(sum[:6]))
+}
+
+func objectiveFailurePolicy(
+	objective store.Objective,
+	now time.Time,
+	nextRun time.Time,
+	lastError string,
+) (*bool, *string, time.Time) {
+	lastError = strings.TrimSpace(lastError)
+	if lastError == "" {
+		return nil, nil, nextRun
+	}
+	consecutive := objective.ConsecutiveFailures + 1
+	if consecutive >= objectiveAutoPauseAfter {
+		active := false
+		reason := fmt.Sprintf("auto-paused after %d consecutive failures", consecutive)
+		return &active, &reason, time.Time{}
+	}
+	if objective.TriggerType != store.ObjectiveTriggerSchedule {
+		return nil, nil, time.Time{}
+	}
+	backoffRun := now.UTC().Add(objectiveFailureBackoff(consecutive))
+	if nextRun.IsZero() || backoffRun.After(nextRun) {
+		nextRun = backoffRun
+	}
+	return nil, nil, nextRun
+}
+
+func objectiveFailureBackoff(consecutive int) time.Duration {
+	if consecutive <= 0 {
+		return objectiveFailureBackoffMin
+	}
+	backoff := objectiveFailureBackoffMin
+	for index := 1; index < consecutive; index++ {
+		backoff *= 2
+		if backoff >= objectiveFailureBackoffMax {
+			return objectiveFailureBackoffMax
+		}
+	}
+	if backoff < objectiveFailureBackoffMin {
+		return objectiveFailureBackoffMin
+	}
+	if backoff > objectiveFailureBackoffMax {
+		return objectiveFailureBackoffMax
+	}
+	return backoff
 }

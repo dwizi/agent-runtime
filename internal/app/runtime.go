@@ -193,11 +193,20 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		MaxSystemPromptBytes: 12000,
 	})
 	groundedResponder := grounded.New(policyResponder, qmdService, grounded.Config{
-		TopK:           cfg.LLMGroundingTopK,
-		MaxDocExcerpt:  cfg.LLMGroundingMaxDocExcerpt,
-		MaxPromptBytes: cfg.LLMGroundingMaxPromptBytes,
-		ChatTailLines:  cfg.LLMGroundingChatTailLines,
-		ChatTailBytes:  cfg.LLMGroundingChatTailBytes,
+		WorkspaceRoot:               cfg.WorkspaceRoot,
+		TopK:                        cfg.LLMGroundingTopK,
+		MaxDocExcerpt:               cfg.LLMGroundingMaxDocExcerpt,
+		MaxPromptBytes:              cfg.LLMGroundingMaxPromptBytes,
+		MaxPromptTokens:             cfg.LLMGroundingMaxPromptTokens,
+		UserPromptMaxTokens:         cfg.LLMGroundingUserMaxTokens,
+		MemorySummaryMaxTokens:      cfg.LLMGroundingSummaryMaxTokens,
+		ChatTailMaxTokens:           cfg.LLMGroundingChatTailMaxTokens,
+		QMDContextMaxTokens:         cfg.LLMGroundingQMDMaxTokens,
+		ChatTailLines:               cfg.LLMGroundingChatTailLines,
+		ChatTailBytes:               cfg.LLMGroundingChatTailBytes,
+		MemorySummaryRefreshTurns:   cfg.LLMGroundingSummaryRefreshTurns,
+		MemorySummaryMaxItems:       cfg.LLMGroundingSummaryMaxItems,
+		MemorySummarySourceMaxLines: cfg.LLMGroundingSummarySourceMaxLines,
 	}, logger.With("component", "llm-grounding"))
 	commandGateway.SetTriageAcknowledger(groundedResponder)
 	llmPolicy := safety.New(safety.Config{

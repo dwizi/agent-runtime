@@ -3,6 +3,8 @@ package grounded
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -216,5 +218,179 @@ func TestReplyUsesImplicitQMDForQuestion(t *testing.T) {
 	}
 	if !strings.Contains(base.lastInput.Text, "Relevant workspace context:") {
 		t.Fatalf("expected grounded prompt, got %q", base.lastInput.Text)
+	}
+}
+
+func TestReplySkipsImplicitQMDForGenericQuestion(t *testing.T) {
+	base := &fakeBase{reply: "ok"}
+	retriever := &fakeRetriever{
+		searchResults: []qmd.SearchResult{
+			{Path: "docs/math.md", Snippet: "not expected"},
+		},
+		openByTarget: map[string]string{
+			"docs/math.md": "not expected",
+		},
+	}
+	responder := New(base, retriever, Config{TopK: 1}, nil)
+	input := llm.MessageInput{
+		WorkspaceID: "ws-1",
+		Text:        "What is two plus two?",
+	}
+	_, err := responder.Reply(context.Background(), input)
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+	if retriever.searchCalls != 0 {
+		t.Fatalf("expected no implicit qmd search for generic question, got %d calls", retriever.searchCalls)
+	}
+	if strings.Contains(base.lastInput.Text, "Relevant workspace context:") {
+		t.Fatalf("expected no grounded context, got %q", base.lastInput.Text)
+	}
+}
+
+func TestReplyBuildsAndPersistsMemorySummary(t *testing.T) {
+	base := &fakeBase{reply: "ok"}
+	retriever := &fakeRetriever{}
+
+	root := t.TempDir()
+	workspaceID := "ws-1"
+	chatPath := filepath.Join(root, workspaceID, "logs", "chats", "discord", "chan-1.md")
+	if err := os.MkdirAll(filepath.Dir(chatPath), 0o755); err != nil {
+		t.Fatalf("mkdir chat path: %v", err)
+	}
+	chatLog := strings.Join([]string{
+		"# Chat Log",
+		"",
+		"## 2026-02-10T11:00:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Please summarize what we changed earlier.",
+		"",
+		"## 2026-02-10T11:01:00Z `OUTBOUND`",
+		"- direction: `outbound`",
+		"- actor: `agent-runtime`",
+		"",
+		"I'll gather the latest updates and summarize the delta.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(chatPath, []byte(chatLog), 0o644); err != nil {
+		t.Fatalf("write chat log: %v", err)
+	}
+
+	responder := New(base, retriever, Config{
+		WorkspaceRoot:               root,
+		TopK:                        1,
+		MemorySummaryRefreshTurns:   1,
+		MemorySummaryMaxItems:       6,
+		MemorySummarySourceMaxLines: 80,
+	}, nil)
+
+	_, err := responder.Reply(context.Background(), llm.MessageInput{
+		Connector:   "discord",
+		WorkspaceID: workspaceID,
+		ContextID:   "ctx-1",
+		ExternalID:  "chan-1",
+		Text:        "continue from the previous thread and share what changed",
+	})
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+	if !strings.Contains(base.lastInput.Text, "Context memory summary:") {
+		t.Fatalf("expected memory summary in prompt, got %q", base.lastInput.Text)
+	}
+	if !strings.Contains(base.lastInput.Text, "Recent conversation memory:") {
+		t.Fatalf("expected chat tail memory in prompt, got %q", base.lastInput.Text)
+	}
+
+	summaryPath := filepath.Join(root, workspaceID, "memory", "contexts", "ctx-1.md")
+	summaryBytes, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("expected summary file to be written: %v", err)
+	}
+	summary := string(summaryBytes)
+	if !strings.Contains(summary, "# Context Memory Summary") {
+		t.Fatalf("expected summary doc header, got %q", summary)
+	}
+	if !strings.Contains(summary, "## Recent User Intents") {
+		t.Fatalf("expected summary sections, got %q", summary)
+	}
+}
+
+func TestSummarizeConversationBuildsCanonicalFactsWithLatestCorrections(t *testing.T) {
+	chatLog := strings.Join([]string{
+		"# Chat Log",
+		"",
+		"## 2026-02-17T17:00:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Fact set A: codename ORBIT-7, environment staging-eu2, freeze window Tuesday 17:30 UTC, incident id INC-4421.",
+		"",
+		"## 2026-02-17T17:00:30Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Preference: escalate only SEV1/SEV2 after two independent checks; notify #ops-war-room.",
+		"",
+		"## 2026-02-17T17:01:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Correction: freeze window moved to Wednesday 18:15 UTC and incident id is INC-4499. These supersede prior values.",
+		"",
+		"## 2026-02-17T17:01:30Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Dependency map: service alpha depends on redis-r3 and payments-v2.",
+		"",
+		"## 2026-02-17T17:02:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Add owner map: release manager is Nora Chen; backup is Luis Park.",
+		"",
+		"## 2026-02-17T17:02:30Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `u1`",
+		"",
+		"Constraint: no production schema migrations during freeze window.",
+		"",
+	}, "\n")
+
+	summary := summarizeConversation(chatLog, 300, 8)
+	if !strings.Contains(summary, "## Canonical Facts") {
+		t.Fatalf("expected canonical facts section, got %q", summary)
+	}
+	if !strings.Contains(summary, "Codename: ORBIT-7") {
+		t.Fatalf("expected codename fact, got %q", summary)
+	}
+	if !strings.Contains(summary, "Environment: staging-eu2") {
+		t.Fatalf("expected environment fact, got %q", summary)
+	}
+	if !strings.Contains(summary, "Freeze window: Wednesday 18:15 UTC") {
+		t.Fatalf("expected corrected freeze window fact, got %q", summary)
+	}
+	if strings.Contains(summary, "Freeze window: Tuesday 17:30 UTC") {
+		t.Fatalf("expected old freeze window to be superseded, got %q", summary)
+	}
+	if !strings.Contains(summary, "Incident ID: INC-4499") {
+		t.Fatalf("expected corrected incident fact, got %q", summary)
+	}
+	if strings.Contains(summary, "Incident ID: INC-4421") {
+		t.Fatalf("expected old incident to be superseded, got %q", summary)
+	}
+	if !strings.Contains(summary, "Notify channel: #ops-war-room") {
+		t.Fatalf("expected notify channel fact, got %q", summary)
+	}
+	if !strings.Contains(summary, "Owners: release manager Nora Chen; backup Luis Park") {
+		t.Fatalf("expected owner facts, got %q", summary)
+	}
+	if !strings.Contains(summary, "Dependencies (alpha): redis-r3, payments-v2") {
+		t.Fatalf("expected dependency facts, got %q", summary)
+	}
+	if !strings.Contains(summary, "Migration constraint: No production schema migrations during freeze window") {
+		t.Fatalf("expected migration constraint fact, got %q", summary)
 	}
 }

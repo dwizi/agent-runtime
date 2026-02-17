@@ -36,7 +36,11 @@ func (m *MockStore) CreateObjective(ctx context.Context, input store.CreateObjec
 	if m.CreateObjectiveFunc != nil {
 		return m.CreateObjectiveFunc(ctx, input)
 	}
-	return store.Objective{ID: "obj-1", Active: input.Active}, nil
+	active := true
+	if input.Active != nil {
+		active = *input.Active
+	}
+	return store.Objective{ID: "obj-1", Active: active}, nil
 }
 
 func (m *MockStore) UpdateObjective(ctx context.Context, input store.UpdateObjectiveInput) (store.Objective, error) {
@@ -235,7 +239,11 @@ func TestCreateObjectiveTool_Execute(t *testing.T) {
 			if input.CronExpr != defaultObjectiveCronExpr {
 				t.Fatalf("expected default cron %q, got %q", defaultObjectiveCronExpr, input.CronExpr)
 			}
-			return store.Objective{ID: "obj-1", Active: input.Active}, nil
+			active := true
+			if input.Active != nil {
+				active = *input.Active
+			}
+			return store.Objective{ID: "obj-1", Active: active}, nil
 		},
 	}
 	tool := NewCreateObjectiveTool(mockStore)

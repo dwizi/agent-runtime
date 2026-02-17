@@ -11,6 +11,7 @@ func TestCreateAndListScheduleObjective(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
 	nextRun := time.Now().UTC().Add(30 * time.Second)
+	active := true
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
 		WorkspaceID: "ws-1",
 		ContextID:   "ctx-1",
@@ -19,7 +20,7 @@ func TestCreateAndListScheduleObjective(t *testing.T) {
 		TriggerType: ObjectiveTriggerSchedule,
 		CronExpr:    "*/5 * * * *",
 		NextRunAt:   nextRun,
-		Active:      true,
+		Active:      &active,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -51,6 +52,7 @@ func TestListDueAndUpdateObjectiveRun(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
+	active := true
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
 		WorkspaceID: "ws-2",
 		ContextID:   "ctx-2",
@@ -59,7 +61,7 @@ func TestListDueAndUpdateObjectiveRun(t *testing.T) {
 		TriggerType: ObjectiveTriggerSchedule,
 		CronExpr:    "* * * * *",
 		NextRunAt:   now.Add(-10 * time.Second),
-		Active:      true,
+		Active:      &active,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -94,6 +96,7 @@ func TestListDueAndUpdateObjectiveRun(t *testing.T) {
 func TestListEventObjectives(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
+	active := true
 	_, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
 		WorkspaceID: "ws-3",
 		ContextID:   "ctx-3",
@@ -101,7 +104,7 @@ func TestListEventObjectives(t *testing.T) {
 		Prompt:      "Inspect changed markdown and raise follow-up tasks",
 		TriggerType: ObjectiveTriggerEvent,
 		EventKey:    "markdown.updated",
-		Active:      true,
+		Active:      &active,
 	})
 	if err != nil {
 		t.Fatalf("create event objective: %v", err)
@@ -122,6 +125,7 @@ func TestListEventObjectives(t *testing.T) {
 func TestUpdatePauseAndDeleteObjective(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
+	active := true
 	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
 		WorkspaceID: "ws-4",
 		ContextID:   "ctx-4",
@@ -129,7 +133,7 @@ func TestUpdatePauseAndDeleteObjective(t *testing.T) {
 		Prompt:      "Draft a summary",
 		TriggerType: ObjectiveTriggerSchedule,
 		CronExpr:    "*/15 * * * *",
-		Active:      true,
+		Active:      &active,
 	})
 	if err != nil {
 		t.Fatalf("create objective: %v", err)
@@ -173,15 +177,41 @@ func TestUpdatePauseAndDeleteObjective(t *testing.T) {
 func TestCreateScheduleObjectiveRequiresCronExpr(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()
+	active := true
 	_, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
 		WorkspaceID: "ws-5",
 		ContextID:   "ctx-5",
 		Title:       "Missing schedule",
 		Prompt:      "This should fail",
 		TriggerType: ObjectiveTriggerSchedule,
-		Active:      true,
+		Active:      &active,
 	})
 	if !errors.Is(err, ErrObjectiveInvalid) {
 		t.Fatalf("expected ErrObjectiveInvalid, got %v", err)
+	}
+}
+
+func TestCreateObjectiveRespectsExplicitInactiveAndTimezone(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+	active := false
+	created, err := sqlStore.CreateObjective(ctx, CreateObjectiveInput{
+		WorkspaceID: "ws-6",
+		ContextID:   "ctx-6",
+		Title:       "Timezone objective",
+		Prompt:      "Run on local timezone",
+		TriggerType: ObjectiveTriggerSchedule,
+		CronExpr:    "0 9 * * *",
+		Timezone:    "America/Chicago",
+		Active:      &active,
+	})
+	if err != nil {
+		t.Fatalf("create objective: %v", err)
+	}
+	if created.Active {
+		t.Fatal("expected objective to remain inactive")
+	}
+	if created.Timezone != "America/Chicago" {
+		t.Fatalf("expected timezone America/Chicago, got %s", created.Timezone)
 	}
 }

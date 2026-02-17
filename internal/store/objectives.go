@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +17,10 @@ var (
 	ErrObjectiveInvalid  = errors.New("objective input is invalid")
 )
 
+const maxRecentObjectiveErrors = 5
+
+const objectiveSelectColumns = `id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, timezone, active, next_run_unix, last_run_unix, last_error, run_count, success_count, failure_count, consecutive_failures, consecutive_successes, total_run_duration_ms, last_success_unix, last_failure_unix, auto_paused_reason, recent_errors_json, created_at_unix, updated_at_unix`
+
 type ObjectiveTriggerType string
 
 const (
@@ -23,21 +28,37 @@ const (
 	ObjectiveTriggerEvent    ObjectiveTriggerType = "event"
 )
 
+type ObjectiveRunError struct {
+	OccurredAt time.Time `json:"occurred_at"`
+	Message    string    `json:"message"`
+}
+
 type Objective struct {
-	ID          string
-	WorkspaceID string
-	ContextID   string
-	Title       string
-	Prompt      string
-	TriggerType ObjectiveTriggerType
-	EventKey    string
-	CronExpr    string
-	Active      bool
-	NextRunAt   time.Time
-	LastRunAt   time.Time
-	LastError   string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                   string
+	WorkspaceID          string
+	ContextID            string
+	Title                string
+	Prompt               string
+	TriggerType          ObjectiveTriggerType
+	EventKey             string
+	CronExpr             string
+	Timezone             string
+	Active               bool
+	NextRunAt            time.Time
+	LastRunAt            time.Time
+	LastError            string
+	RunCount             int
+	SuccessCount         int
+	FailureCount         int
+	ConsecutiveFailures  int
+	ConsecutiveSuccesses int
+	TotalRunDurationMs   int64
+	LastSuccessAt        time.Time
+	LastFailureAt        time.Time
+	AutoPausedReason     string
+	RecentErrors         []ObjectiveRunError
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type CreateObjectiveInput struct {
@@ -48,8 +69,9 @@ type CreateObjectiveInput struct {
 	TriggerType ObjectiveTriggerType
 	EventKey    string
 	CronExpr    string
+	Timezone    string
 	NextRunAt   time.Time
-	Active      bool
+	Active      *bool
 }
 
 type ListObjectivesInput struct {
@@ -59,10 +81,14 @@ type ListObjectivesInput struct {
 }
 
 type UpdateObjectiveRunInput struct {
-	ID        string
-	LastRunAt time.Time
-	NextRunAt time.Time
-	LastError string
+	ID               string
+	LastRunAt        time.Time
+	NextRunAt        time.Time
+	LastError        string
+	RunDuration      time.Duration
+	SkipStats        bool
+	Active           *bool
+	AutoPausedReason *string
 }
 
 type UpdateObjectiveInput struct {
@@ -72,28 +98,41 @@ type UpdateObjectiveInput struct {
 	TriggerType *ObjectiveTriggerType
 	EventKey    *string
 	CronExpr    *string
+	Timezone    *string
 	NextRunAt   *time.Time
 	Active      *bool
 }
 
 func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput) (Objective, error) {
 	now := time.Now().UTC()
-	record := Objective{
-		ID:          "obj_" + uuid.NewString(),
-		WorkspaceID: strings.TrimSpace(input.WorkspaceID),
-		ContextID:   strings.TrimSpace(input.ContextID),
-		Title:       strings.TrimSpace(input.Title),
-		Prompt:      strings.TrimSpace(input.Prompt),
-		TriggerType: input.TriggerType,
-		EventKey:    strings.TrimSpace(strings.ToLower(input.EventKey)),
-		CronExpr:    normalizeCronExpr(input.CronExpr),
-		Active:      input.Active,
-		NextRunAt:   input.NextRunAt.UTC(),
-		CreatedAt:   now,
-		UpdatedAt:   now,
+	active := true
+	if input.Active != nil {
+		active = *input.Active
 	}
-	if !record.Active {
-		record.Active = true
+	timezone, err := normalizeObjectiveTimezone(input.Timezone)
+	if err != nil {
+		return Objective{}, ErrObjectiveInvalid
+	}
+	record := Objective{
+		ID:                   "obj_" + uuid.NewString(),
+		WorkspaceID:          strings.TrimSpace(input.WorkspaceID),
+		ContextID:            strings.TrimSpace(input.ContextID),
+		Title:                strings.TrimSpace(input.Title),
+		Prompt:               strings.TrimSpace(input.Prompt),
+		TriggerType:          input.TriggerType,
+		EventKey:             strings.TrimSpace(strings.ToLower(input.EventKey)),
+		CronExpr:             normalizeCronExpr(input.CronExpr),
+		Timezone:             timezone,
+		Active:               active,
+		NextRunAt:            input.NextRunAt.UTC(),
+		RunCount:             0,
+		SuccessCount:         0,
+		FailureCount:         0,
+		ConsecutiveFailures:  0,
+		ConsecutiveSuccesses: 0,
+		TotalRunDurationMs:   0,
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	if record.WorkspaceID == "" || record.ContextID == "" || record.Title == "" || record.Prompt == "" {
 		return Objective{}, ErrObjectiveInvalid
@@ -103,11 +142,11 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 		if record.CronExpr == "" {
 			return Objective{}, ErrObjectiveInvalid
 		}
-		if _, err := ComputeScheduleNextRun(record.CronExpr, now); err != nil {
+		if _, err := ComputeScheduleNextRunForTimezone(record.CronExpr, record.Timezone, now); err != nil {
 			return Objective{}, ErrObjectiveInvalid
 		}
 		if record.NextRunAt.IsZero() {
-			nextRun, err := ComputeScheduleNextRun(record.CronExpr, now)
+			nextRun, err := ComputeScheduleNextRunForTimezone(record.CronExpr, record.Timezone, now)
 			if err != nil {
 				return Objective{}, ErrObjectiveInvalid
 			}
@@ -126,8 +165,12 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 	if _, err := s.db.ExecContext(
 		ctx,
 		`INSERT INTO objectives (
-			id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, timezone, active,
+			next_run_unix, last_run_unix, last_error,
+			run_count, success_count, failure_count, consecutive_failures, consecutive_successes, total_run_duration_ms,
+			last_success_unix, last_failure_unix, auto_paused_reason, recent_errors_json,
+			created_at_unix, updated_at_unix
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		record.WorkspaceID,
 		record.ContextID,
@@ -136,8 +179,19 @@ func (s *Store) CreateObjective(ctx context.Context, input CreateObjectiveInput)
 		string(record.TriggerType),
 		nullIfEmpty(record.EventKey),
 		nullIfEmpty(record.CronExpr),
+		record.Timezone,
 		boolToInt(record.Active),
 		nullTimeUnix(record.NextRunAt),
+		nil,
+		nil,
+		record.RunCount,
+		record.SuccessCount,
+		record.FailureCount,
+		record.ConsecutiveFailures,
+		record.ConsecutiveSuccesses,
+		record.TotalRunDurationMs,
+		nil,
+		nil,
 		nil,
 		nil,
 		record.CreatedAt.Unix(),
@@ -162,7 +216,7 @@ func (s *Store) ListObjectives(ctx context.Context, input ListObjectivesInput) (
 	if input.ActiveOnly {
 		whereParts = append(whereParts, "active = 1")
 	}
-	query := `SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+	query := `SELECT ` + objectiveSelectColumns + `
 		FROM objectives
 		WHERE ` + strings.Join(whereParts, " AND ") + `
 		ORDER BY created_at_unix ASC
@@ -193,7 +247,7 @@ func (s *Store) ListDueObjectives(ctx context.Context, now time.Time, limit int)
 	current := now.UTC()
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT `+objectiveSelectColumns+`
 		 FROM objectives
 		 WHERE active = 1
 		   AND trigger_type = ?
@@ -231,7 +285,7 @@ func (s *Store) ListEventObjectives(ctx context.Context, workspaceID, eventKey s
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT `+objectiveSelectColumns+`
 		 FROM objectives
 		 WHERE active = 1
 		   AND workspace_id = ?
@@ -264,21 +318,79 @@ func (s *Store) UpdateObjectiveRun(ctx context.Context, input UpdateObjectiveRun
 	if id == "" {
 		return Objective{}, ErrObjectiveInvalid
 	}
+	record, err := s.LookupObjective(ctx, id)
+	if err != nil {
+		return Objective{}, err
+	}
 	now := time.Now().UTC()
 	lastRun := input.LastRunAt.UTC()
 	if lastRun.IsZero() {
 		lastRun = now
 	}
 	nextRun := input.NextRunAt.UTC()
-	_, err := s.db.ExecContext(
+	lastError := strings.TrimSpace(input.LastError)
+
+	record.LastRunAt = lastRun
+	record.NextRunAt = nextRun
+	record.LastError = lastError
+	if input.Active != nil {
+		record.Active = *input.Active
+	}
+	if input.AutoPausedReason != nil {
+		record.AutoPausedReason = strings.TrimSpace(*input.AutoPausedReason)
+	}
+	if !input.SkipStats {
+		record.RunCount++
+		durationMs := input.RunDuration.Milliseconds()
+		if durationMs > 0 {
+			record.TotalRunDurationMs += durationMs
+		}
+		if lastError == "" {
+			record.SuccessCount++
+			record.ConsecutiveFailures = 0
+			record.ConsecutiveSuccesses++
+			record.LastSuccessAt = lastRun
+			if input.AutoPausedReason == nil {
+				record.AutoPausedReason = ""
+			}
+		} else {
+			record.FailureCount++
+			record.ConsecutiveFailures++
+			record.ConsecutiveSuccesses = 0
+			record.LastFailureAt = lastRun
+			record.RecentErrors = appendObjectiveRecentError(record.RecentErrors, lastRun, lastError)
+		}
+	}
+	record.UpdatedAt = now
+
+	recentErrorsJSON, err := encodeObjectiveRecentErrors(record.RecentErrors)
+	if err != nil {
+		return Objective{}, err
+	}
+
+	_, err = s.db.ExecContext(
 		ctx,
 		`UPDATE objectives
-		 SET last_run_unix = ?, next_run_unix = ?, last_error = ?, updated_at_unix = ?
+		 SET active = ?, next_run_unix = ?, last_run_unix = ?, last_error = ?,
+		     run_count = ?, success_count = ?, failure_count = ?, consecutive_failures = ?, consecutive_successes = ?,
+		     total_run_duration_ms = ?, last_success_unix = ?, last_failure_unix = ?,
+		     auto_paused_reason = ?, recent_errors_json = ?, updated_at_unix = ?
 		 WHERE id = ?`,
-		lastRun.Unix(),
-		nullTimeUnix(nextRun),
-		nullIfEmpty(strings.TrimSpace(input.LastError)),
-		now.Unix(),
+		boolToInt(record.Active),
+		nullTimeUnix(record.NextRunAt),
+		nullTimeUnix(record.LastRunAt),
+		nullIfEmpty(record.LastError),
+		record.RunCount,
+		record.SuccessCount,
+		record.FailureCount,
+		record.ConsecutiveFailures,
+		record.ConsecutiveSuccesses,
+		record.TotalRunDurationMs,
+		nullTimeUnix(record.LastSuccessAt),
+		nullTimeUnix(record.LastFailureAt),
+		nullIfEmpty(record.AutoPausedReason),
+		nullIfEmpty(recentErrorsJSON),
+		record.UpdatedAt.Unix(),
 		id,
 	)
 	if err != nil {
@@ -290,7 +402,7 @@ func (s *Store) UpdateObjectiveRun(ctx context.Context, input UpdateObjectiveRun
 func (s *Store) LookupObjective(ctx context.Context, id string) (Objective, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, workspace_id, context_id, title, prompt, trigger_type, event_key, cron_expr, active, next_run_unix, last_run_unix, last_error, created_at_unix, updated_at_unix
+		`SELECT `+objectiveSelectColumns+`
 		 FROM objectives
 		 WHERE id = ?`,
 		strings.TrimSpace(id),
@@ -325,11 +437,21 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 	if input.CronExpr != nil {
 		record.CronExpr = normalizeCronExpr(*input.CronExpr)
 	}
+	if input.Timezone != nil {
+		timezone, tzErr := normalizeObjectiveTimezone(*input.Timezone)
+		if tzErr != nil {
+			return Objective{}, ErrObjectiveInvalid
+		}
+		record.Timezone = timezone
+	}
 	if input.NextRunAt != nil {
 		record.NextRunAt = input.NextRunAt.UTC()
 	}
 	if input.Active != nil {
 		record.Active = *input.Active
+		if record.Active {
+			record.AutoPausedReason = ""
+		}
 	}
 
 	now := time.Now().UTC()
@@ -342,11 +464,11 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 		if record.CronExpr == "" {
 			return Objective{}, ErrObjectiveInvalid
 		}
-		if _, err := ComputeScheduleNextRun(record.CronExpr, now); err != nil {
+		if _, err := ComputeScheduleNextRunForTimezone(record.CronExpr, record.Timezone, now); err != nil {
 			return Objective{}, ErrObjectiveInvalid
 		}
 		if record.Active && record.NextRunAt.IsZero() {
-			nextRun, err := ComputeScheduleNextRun(record.CronExpr, now)
+			nextRun, err := ComputeScheduleNextRunForTimezone(record.CronExpr, record.Timezone, now)
 			if err != nil {
 				return Objective{}, ErrObjectiveInvalid
 			}
@@ -366,15 +488,17 @@ func (s *Store) UpdateObjective(ctx context.Context, input UpdateObjectiveInput)
 	if _, err := s.db.ExecContext(
 		ctx,
 		`UPDATE objectives
-		 SET title = ?, prompt = ?, trigger_type = ?, event_key = ?, cron_expr = ?, active = ?, next_run_unix = ?, updated_at_unix = ?
+		 SET title = ?, prompt = ?, trigger_type = ?, event_key = ?, cron_expr = ?, timezone = ?, active = ?, next_run_unix = ?, auto_paused_reason = ?, updated_at_unix = ?
 		 WHERE id = ?`,
 		record.Title,
 		record.Prompt,
 		string(record.TriggerType),
 		nullIfEmpty(record.EventKey),
 		nullIfEmpty(record.CronExpr),
+		record.Timezone,
 		boolToInt(record.Active),
 		nullTimeUnix(record.NextRunAt),
+		nullIfEmpty(record.AutoPausedReason),
 		record.UpdatedAt.Unix(),
 		record.ID,
 	); err != nil {
@@ -418,10 +542,21 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 	var triggerType string
 	var eventKey sql.NullString
 	var cronExpr sql.NullString
+	var timezone sql.NullString
 	var active int
 	var nextRunUnix sql.NullInt64
 	var lastRunUnix sql.NullInt64
 	var lastError sql.NullString
+	var runCount int
+	var successCount int
+	var failureCount int
+	var consecutiveFailures int
+	var consecutiveSuccesses int
+	var totalRunDurationMs int64
+	var lastSuccessUnix sql.NullInt64
+	var lastFailureUnix sql.NullInt64
+	var autoPausedReason sql.NullString
+	var recentErrorsJSON sql.NullString
 	var createdAtUnix int64
 	var updatedAtUnix int64
 	if err := scanner.Scan(
@@ -433,10 +568,21 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 		&triggerType,
 		&eventKey,
 		&cronExpr,
+		&timezone,
 		&active,
 		&nextRunUnix,
 		&lastRunUnix,
 		&lastError,
+		&runCount,
+		&successCount,
+		&failureCount,
+		&consecutiveFailures,
+		&consecutiveSuccesses,
+		&totalRunDurationMs,
+		&lastSuccessUnix,
+		&lastFailureUnix,
+		&autoPausedReason,
+		&recentErrorsJSON,
 		&createdAtUnix,
 		&updatedAtUnix,
 	); err != nil {
@@ -445,6 +591,11 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 	record.TriggerType = ObjectiveTriggerType(strings.TrimSpace(triggerType))
 	record.EventKey = eventKey.String
 	record.CronExpr = normalizeCronExpr(cronExpr.String)
+	normalizedTimezone, err := normalizeObjectiveTimezone(timezone.String)
+	if err != nil {
+		normalizedTimezone = objectiveDefaultTimezone
+	}
+	record.Timezone = normalizedTimezone
 	record.Active = active == 1
 	if nextRunUnix.Valid && nextRunUnix.Int64 > 0 {
 		record.NextRunAt = time.Unix(nextRunUnix.Int64, 0).UTC()
@@ -453,9 +604,83 @@ func scanObjective(scanner objectiveScanner) (Objective, error) {
 		record.LastRunAt = time.Unix(lastRunUnix.Int64, 0).UTC()
 	}
 	record.LastError = lastError.String
+	record.RunCount = runCount
+	record.SuccessCount = successCount
+	record.FailureCount = failureCount
+	record.ConsecutiveFailures = consecutiveFailures
+	record.ConsecutiveSuccesses = consecutiveSuccesses
+	record.TotalRunDurationMs = totalRunDurationMs
+	if lastSuccessUnix.Valid && lastSuccessUnix.Int64 > 0 {
+		record.LastSuccessAt = time.Unix(lastSuccessUnix.Int64, 0).UTC()
+	}
+	if lastFailureUnix.Valid && lastFailureUnix.Int64 > 0 {
+		record.LastFailureAt = time.Unix(lastFailureUnix.Int64, 0).UTC()
+	}
+	record.AutoPausedReason = strings.TrimSpace(autoPausedReason.String)
+	record.RecentErrors = decodeObjectiveRecentErrors(recentErrorsJSON.String)
 	record.CreatedAt = time.Unix(createdAtUnix, 0).UTC()
 	record.UpdatedAt = time.Unix(updatedAtUnix, 0).UTC()
 	return record, nil
+}
+
+func appendObjectiveRecentError(existing []ObjectiveRunError, occurredAt time.Time, message string) []ObjectiveRunError {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return existing
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	next := append([]ObjectiveRunError{}, existing...)
+	next = append(next, ObjectiveRunError{
+		OccurredAt: occurredAt.UTC(),
+		Message:    message,
+	})
+	if len(next) <= maxRecentObjectiveErrors {
+		return next
+	}
+	return next[len(next)-maxRecentObjectiveErrors:]
+}
+
+func decodeObjectiveRecentErrors(raw string) []ObjectiveRunError {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	var errorsList []ObjectiveRunError
+	if err := json.Unmarshal([]byte(trimmed), &errorsList); err != nil {
+		return nil
+	}
+	clean := make([]ObjectiveRunError, 0, len(errorsList))
+	for _, item := range errorsList {
+		message := strings.TrimSpace(item.Message)
+		if message == "" {
+			continue
+		}
+		occurredAt := item.OccurredAt.UTC()
+		if occurredAt.IsZero() {
+			occurredAt = time.Now().UTC()
+		}
+		clean = append(clean, ObjectiveRunError{
+			OccurredAt: occurredAt,
+			Message:    message,
+		})
+	}
+	if len(clean) <= maxRecentObjectiveErrors {
+		return clean
+	}
+	return clean[len(clean)-maxRecentObjectiveErrors:]
+}
+
+func encodeObjectiveRecentErrors(values []ObjectiveRunError) (string, error) {
+	if len(values) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("marshal recent objective errors: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func boolToInt(value bool) int {

@@ -87,8 +87,16 @@ type Config struct {
 	LLMGroundingTopK                   int
 	LLMGroundingMaxDocExcerpt          int
 	LLMGroundingMaxPromptBytes         int
+	LLMGroundingMaxPromptTokens        int
+	LLMGroundingUserMaxTokens          int
+	LLMGroundingSummaryMaxTokens       int
+	LLMGroundingChatTailMaxTokens      int
+	LLMGroundingQMDMaxTokens           int
 	LLMGroundingChatTailLines          int
 	LLMGroundingChatTailBytes          int
+	LLMGroundingSummaryRefreshTurns    int
+	LLMGroundingSummaryMaxItems        int
+	LLMGroundingSummarySourceMaxLines  int
 	LLMAdminSystemPrompt               string
 	LLMPublicSystemPrompt              string
 	AgentMaxTurnDurationSec            int
@@ -207,8 +215,16 @@ func FromEnv() Config {
 		LLMGroundingTopK:                   intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_TOP_K", 3),
 		LLMGroundingMaxDocExcerpt:          intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES", 1200),
 		LLMGroundingMaxPromptBytes:         intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES", 8000),
+		LLMGroundingMaxPromptTokens:        intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_TOKENS", 2000),
+		LLMGroundingUserMaxTokens:          intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_USER_MAX_TOKENS", 650),
+		LLMGroundingSummaryMaxTokens:       intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_MAX_TOKENS", 380),
+		LLMGroundingChatTailMaxTokens:      intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_MAX_TOKENS", 300),
+		LLMGroundingQMDMaxTokens:           intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_QMD_MAX_TOKENS", 900),
 		LLMGroundingChatTailLines:          intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES", 24),
 		LLMGroundingChatTailBytes:          intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES", 1800),
+		LLMGroundingSummaryRefreshTurns:    intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_REFRESH_TURNS", 6),
+		LLMGroundingSummaryMaxItems:        intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_MAX_ITEMS", 7),
+		LLMGroundingSummarySourceMaxLines:  intOrDefault("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_SOURCE_MAX_LINES", 120),
 		LLMAdminSystemPrompt:               stringOrDefault("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "You are assisting admin operators. Prioritize security, approvals, and operational clarity."),
 		LLMPublicSystemPrompt:              stringOrDefault("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "You are assisting community members. Be concise, safe, and policy-compliant."),
 		AgentMaxTurnDurationSec:            intOrDefault("AGENT_RUNTIME_AGENT_MAX_TURN_DURATION_SECONDS", 120),

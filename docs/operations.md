@@ -66,6 +66,9 @@ Use this when the Agent misclassifies intent (e.g., treating a question as a tas
 
 ## Objective Lifecycle
 
+Detailed objective lifecycle/run-policy/API reference:
+- `docs/objectives-flow.md`
+
 Create objective:
 - `POST /api/v1/objectives`
 

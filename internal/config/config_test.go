@@ -304,11 +304,35 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.LLMGroundingMaxPromptBytes != 8000 {
 		t.Fatalf("expected default llm grounding max prompt bytes 8000, got %d", cfg.LLMGroundingMaxPromptBytes)
 	}
+	if cfg.LLMGroundingMaxPromptTokens != 2000 {
+		t.Fatalf("expected default llm grounding max prompt tokens 2000, got %d", cfg.LLMGroundingMaxPromptTokens)
+	}
+	if cfg.LLMGroundingUserMaxTokens != 650 {
+		t.Fatalf("expected default llm grounding user max tokens 650, got %d", cfg.LLMGroundingUserMaxTokens)
+	}
+	if cfg.LLMGroundingSummaryMaxTokens != 380 {
+		t.Fatalf("expected default llm grounding summary max tokens 380, got %d", cfg.LLMGroundingSummaryMaxTokens)
+	}
+	if cfg.LLMGroundingChatTailMaxTokens != 300 {
+		t.Fatalf("expected default llm grounding chat tail max tokens 300, got %d", cfg.LLMGroundingChatTailMaxTokens)
+	}
+	if cfg.LLMGroundingQMDMaxTokens != 900 {
+		t.Fatalf("expected default llm grounding qmd max tokens 900, got %d", cfg.LLMGroundingQMDMaxTokens)
+	}
 	if cfg.LLMGroundingChatTailLines != 24 {
 		t.Fatalf("expected default llm grounding chat tail lines 24, got %d", cfg.LLMGroundingChatTailLines)
 	}
 	if cfg.LLMGroundingChatTailBytes != 1800 {
 		t.Fatalf("expected default llm grounding chat tail bytes 1800, got %d", cfg.LLMGroundingChatTailBytes)
+	}
+	if cfg.LLMGroundingSummaryRefreshTurns != 6 {
+		t.Fatalf("expected default llm grounding memory summary refresh turns 6, got %d", cfg.LLMGroundingSummaryRefreshTurns)
+	}
+	if cfg.LLMGroundingSummaryMaxItems != 7 {
+		t.Fatalf("expected default llm grounding memory summary max items 7, got %d", cfg.LLMGroundingSummaryMaxItems)
+	}
+	if cfg.LLMGroundingSummarySourceMaxLines != 120 {
+		t.Fatalf("expected default llm grounding memory summary source max lines 120, got %d", cfg.LLMGroundingSummarySourceMaxLines)
 	}
 	if cfg.LLMAdminSystemPrompt == "" {
 		t.Fatal("expected default admin system prompt")
@@ -426,8 +450,16 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_TOP_K", "7")
 	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_DOC_EXCERPT_BYTES", "2200")
 	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_BYTES", "12000")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MAX_PROMPT_TOKENS", "2600")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_USER_MAX_TOKENS", "700")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_MAX_TOKENS", "420")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_MAX_TOKENS", "330")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_QMD_MAX_TOKENS", "1150")
 	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_LINES", "40")
 	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_CHAT_TAIL_BYTES", "3200")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_REFRESH_TURNS", "4")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_MAX_ITEMS", "9")
+	t.Setenv("AGENT_RUNTIME_LLM_GROUNDING_MEMORY_SUMMARY_SOURCE_MAX_LINES", "180")
 	t.Setenv("AGENT_RUNTIME_LLM_ADMIN_SYSTEM_PROMPT", "admin prompt")
 	t.Setenv("AGENT_RUNTIME_LLM_PUBLIC_SYSTEM_PROMPT", "public prompt")
 	t.Setenv("AGENT_RUNTIME_AGENT_GROUNDING_FIRST_STEP", "false")
@@ -661,11 +693,35 @@ func TestFromEnvOverrides(t *testing.T) {
 	if cfg.LLMGroundingMaxPromptBytes != 12000 {
 		t.Fatalf("expected overridden llm grounding max prompt bytes 12000, got %d", cfg.LLMGroundingMaxPromptBytes)
 	}
+	if cfg.LLMGroundingMaxPromptTokens != 2600 {
+		t.Fatalf("expected overridden llm grounding max prompt tokens 2600, got %d", cfg.LLMGroundingMaxPromptTokens)
+	}
+	if cfg.LLMGroundingUserMaxTokens != 700 {
+		t.Fatalf("expected overridden llm grounding user max tokens 700, got %d", cfg.LLMGroundingUserMaxTokens)
+	}
+	if cfg.LLMGroundingSummaryMaxTokens != 420 {
+		t.Fatalf("expected overridden llm grounding summary max tokens 420, got %d", cfg.LLMGroundingSummaryMaxTokens)
+	}
+	if cfg.LLMGroundingChatTailMaxTokens != 330 {
+		t.Fatalf("expected overridden llm grounding chat tail max tokens 330, got %d", cfg.LLMGroundingChatTailMaxTokens)
+	}
+	if cfg.LLMGroundingQMDMaxTokens != 1150 {
+		t.Fatalf("expected overridden llm grounding qmd max tokens 1150, got %d", cfg.LLMGroundingQMDMaxTokens)
+	}
 	if cfg.LLMGroundingChatTailLines != 40 {
 		t.Fatalf("expected overridden llm grounding chat tail lines 40, got %d", cfg.LLMGroundingChatTailLines)
 	}
 	if cfg.LLMGroundingChatTailBytes != 3200 {
 		t.Fatalf("expected overridden llm grounding chat tail bytes 3200, got %d", cfg.LLMGroundingChatTailBytes)
+	}
+	if cfg.LLMGroundingSummaryRefreshTurns != 4 {
+		t.Fatalf("expected overridden llm grounding memory summary refresh turns 4, got %d", cfg.LLMGroundingSummaryRefreshTurns)
+	}
+	if cfg.LLMGroundingSummaryMaxItems != 9 {
+		t.Fatalf("expected overridden llm grounding memory summary max items 9, got %d", cfg.LLMGroundingSummaryMaxItems)
+	}
+	if cfg.LLMGroundingSummarySourceMaxLines != 180 {
+		t.Fatalf("expected overridden llm grounding memory summary source max lines 180, got %d", cfg.LLMGroundingSummarySourceMaxLines)
 	}
 	if cfg.LLMAdminSystemPrompt != "admin prompt" {
 		t.Fatalf("expected overridden admin system prompt, got %s", cfg.LLMAdminSystemPrompt)
