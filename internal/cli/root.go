@@ -27,6 +27,7 @@ func NewRoot(logger *slog.Logger) *cobra.Command {
 	root.AddCommand(newServeCommand(logger))
 	root.AddCommand(newQMDSidecarCommand(logger))
 	root.AddCommand(newTUICommand(logger))
+	root.AddCommand(newChatCommand(logger))
 	root.AddCommand(newVersionCommand())
 
 	return root

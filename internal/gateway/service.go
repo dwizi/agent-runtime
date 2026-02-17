@@ -237,6 +237,9 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 	case "deny-action":
 		return s.handleDenyAction(ctx, input, arg)
 	default:
+		if output, handled, err := s.handleCommandGuidance(ctx, input, text); handled || err != nil {
+			return output, err
+		}
 		if nlCommand, nlArg, ok := parseNaturalLanguageCommand(text); ok {
 			switch nlCommand {
 			case "task":
@@ -271,6 +274,96 @@ func (s *Service) HandleMessage(ctx context.Context, input MessageInput) (Messag
 		}
 		return triageOutput, nil
 	}
+}
+
+func (s *Service) handleCommandGuidance(ctx context.Context, input MessageInput, text string) (MessageOutput, bool, error) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if !looksLikeCommandGuidanceQuestion(lower) {
+		return MessageOutput{}, false, nil
+	}
+
+	if strings.Contains(lower, "pending action") || strings.Contains(lower, "pending approval") {
+		return MessageOutput{
+			Handled: true,
+			Reply:   "Use `/pending-actions` to list pending approvals.",
+		}, true, nil
+	}
+
+	if strings.Contains(lower, "approval") || strings.Contains(lower, "approve") {
+		reply, err := s.buildApprovalNextCommandGuidance(ctx, input)
+		if err != nil {
+			return MessageOutput{}, false, err
+		}
+		if strings.TrimSpace(reply) != "" {
+			return MessageOutput{
+				Handled: true,
+				Reply:   reply,
+			}, true, nil
+		}
+	}
+	return MessageOutput{}, false, nil
+}
+
+func looksLikeCommandGuidanceQuestion(lower string) bool {
+	if lower == "" || strings.HasPrefix(lower, "/") {
+		return false
+	}
+	guidancePhrases := []string{
+		"what command",
+		"which command",
+		"exact command",
+		"exact next command",
+		"what should i run",
+		"what do i run",
+		"tell me the command",
+		"next command i should run",
+	}
+	for _, phrase := range guidancePhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return strings.Contains(lower, "if approval is needed")
+}
+
+func (s *Service) buildApprovalNextCommandGuidance(ctx context.Context, input MessageInput) (string, error) {
+	items, err := s.store.ListPendingActionApprovals(ctx, input.Connector, input.ExternalID, 5)
+	if err != nil {
+		return "", err
+	}
+	scope := "this context"
+	if len(items) == 0 {
+		items, err = s.store.ListPendingActionApprovalsGlobal(ctx, 5)
+		if err != nil {
+			return "", err
+		}
+		scope = "all contexts"
+	}
+
+	if len(items) == 0 {
+		return "No pending action approvals right now. After an action is queued, run `/pending-actions` and then `/approve-action <action-id>`.", nil
+	}
+
+	if len(items) > 1 {
+		return fmt.Sprintf("Multiple pending actions found in %s. Run `/pending-actions`, then execute `/approve-action <action-id>` for the one you want.", scope), nil
+	}
+
+	actionID := strings.TrimSpace(items[0].ID)
+	if actionID == "" {
+		return "Run `/pending-actions`, then execute `/approve-action <action-id>`.", nil
+	}
+
+	identity, err := s.store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
+	if err != nil {
+		if errors.Is(err, store.ErrIdentityNotFound) {
+			return fmt.Sprintf("Pending action found: `%s`.\nNext:\n1) Link your admin identity by sending `pair` and completing approval.\n2) Run `/approve-action %s`.\nUse `/pending-actions` to verify.", actionID, actionID), nil
+		}
+		return "", err
+	}
+	if !isAdminRole(identity.Role) {
+		return fmt.Sprintf("Pending action found: `%s`.\nYou do not have admin approval rights in this context. Ask an admin to run `/approve-action %s`.\nUse `/pending-actions` to verify.", actionID, actionID), nil
+	}
+	return fmt.Sprintf("Run `/approve-action %s`.\nUse `/pending-actions` if you want to review all pending approvals first.", actionID), nil
 }
 
 func (s *Service) handlePendingActions(ctx context.Context, input MessageInput) (MessageOutput, error) {
@@ -330,7 +423,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 	actionID := normalizeActionCommandID(arg)
 	resolveLatest := strings.EqualFold(actionID, latestPendingActionAlias)
 	resolveAll := strings.EqualFold(actionID, allPendingActionsAlias)
-	
+
 	if actionID == "" {
 		return MessageOutput{Handled: true, Reply: "Usage: /approve-action <action-id> or 'approve all'"}, nil
 	}
@@ -362,11 +455,11 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		if len(items) == 0 {
 			return MessageOutput{Handled: true, Reply: "No pending actions to approve."}, nil
 		}
-		
+
 		successCount := 0
 		failures := []string{}
 		results := []string{}
-		
+
 		for _, item := range items {
 			res, _, err := s.approveAndExecuteAction(ctx, input, item.ID, identity.UserID)
 			if err != nil {
@@ -378,12 +471,12 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 				}
 			}
 		}
-		
+
 		if successCount > 0 && s.agent != nil {
 			contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
 			if err == nil {
 				agentPrompt := fmt.Sprintf("APPROVED ACTIONS EXECUTED.\n\n%s\n\nInterpret these results for the user.", strings.Join(results, "\n\n"))
-				
+
 				// 1. Get History
 				history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
 				if history != "" {
@@ -405,13 +498,13 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 					FromUserID:  input.FromUserID,
 					Text:        agentPrompt,
 				})
-				
+
 				if agentRes.Error == nil && strings.TrimSpace(agentRes.Reply) != "" {
 					return MessageOutput{Handled: true, Reply: agentRes.Reply}, nil
 				}
 			}
 		}
-		
+
 		reply := fmt.Sprintf("Approved %d actions.", successCount)
 		if len(failures) > 0 {
 			reply += fmt.Sprintf("\nFailed: %d\n%s", len(failures), strings.Join(failures, "\n"))
@@ -426,7 +519,7 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		actionID = resolved
 	}
-	
+
 	res, reply, err := s.approveAndExecuteAction(ctx, input, actionID, identity.UserID)
 	if err != nil {
 		if errors.Is(err, store.ErrActionApprovalNotFound) {
@@ -437,12 +530,12 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 		}
 		return MessageOutput{}, err
 	}
-	
+
 	if res != nil && s.agent != nil {
 		contextRecord, err := s.store.EnsureContextForExternalChannel(ctx, input.Connector, input.ExternalID, input.DisplayName)
 		if err == nil {
 			agentPrompt := fmt.Sprintf("APPROVED ACTION EXECUTED.\nAction: %s\nResult: %s\n\nInterpret this result for the user.", actionID, res.Message)
-			
+
 			// 1. Get History
 			history := agent.GetRecentHistory(s.workspaceRoot, contextRecord.WorkspaceID, input.Connector, input.ExternalID, 15)
 			if history != "" {
@@ -464,13 +557,13 @@ func (s *Service) handleApproveAction(ctx context.Context, input MessageInput, a
 				FromUserID:  input.FromUserID,
 				Text:        agentPrompt,
 			})
-			
+
 			if agentRes.Error == nil && strings.TrimSpace(agentRes.Reply) != "" {
 				return MessageOutput{Handled: true, Reply: agentRes.Reply}, nil
 			}
 		}
 	}
-	
+
 	return MessageOutput{Handled: true, Reply: reply}, nil
 }
 
@@ -1822,12 +1915,21 @@ func parseMonitorIntent(trimmed, lower string) (string, bool) {
 		"keep monitoring ",
 		"set an alert for ",
 		"set an alert to monitor ",
+		"create a monitoring objective for ",
+		"create monitoring objective for ",
+		"create a monitor objective for ",
+		"set up a monitoring objective for ",
+		"setup a monitoring objective for ",
+		"create an objective to monitor ",
+		"create a monitoring objective to monitor ",
+		"set up monitoring for ",
+		"setup monitoring for ",
 	}
 	for _, prefix := range prefixes {
 		if !strings.HasPrefix(lower, prefix) {
 			continue
 		}
-		value := strings.TrimSpace(trimmed[len(prefix):])
+		value := cleanMonitorGoal(trimmed[len(prefix):])
 		if value == "" {
 			return "", false
 		}
@@ -1841,13 +1943,54 @@ func parseMonitorIntent(trimmed, lower string) (string, bool) {
 		if index < 0 {
 			continue
 		}
-		value := strings.TrimSpace(trimmed[index+len(phrase):])
-		value = strings.TrimSpace(value)
+		value := cleanMonitorGoal(trimmed[index+len(phrase):])
 		if value != "" {
 			return value, true
 		}
 	}
+	if strings.Contains(lower, "monitoring objective") || strings.Contains(lower, "monitor objective") {
+		for _, marker := range []string{" for ", " to monitor "} {
+			index := strings.Index(lower, marker)
+			if index < 0 {
+				continue
+			}
+			value := cleanMonitorGoal(trimmed[index+len(marker):])
+			if value != "" {
+				return value, true
+			}
+		}
+	}
 	return "", false
+}
+
+func cleanMonitorGoal(value string) string {
+	goal := strings.TrimSpace(value)
+	if goal == "" {
+		return ""
+	}
+	lower := strings.ToLower(goal)
+	for _, marker := range []string{
+		" and tell me",
+		", and tell me",
+		" and then tell me",
+		", then tell me",
+		" and show me",
+		", and show me",
+		" and report",
+		", and report",
+	} {
+		index := strings.Index(lower, marker)
+		if index < 0 {
+			continue
+		}
+		goal = strings.TrimSpace(goal[:index])
+		lower = strings.ToLower(goal)
+	}
+	goal = strings.TrimSpace(strings.Trim(goal, " .,:;!?"))
+	if strings.HasPrefix(strings.ToLower(goal), "to ") {
+		goal = strings.TrimSpace(goal[len("to "):])
+	}
+	return goal
 }
 
 func parseIntentApproveAction(text string) (string, bool) {

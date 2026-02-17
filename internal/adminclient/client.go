@@ -97,6 +97,19 @@ type RetryTaskResponse struct {
 	Status      string `json:"status"`
 }
 
+type ChatRequest struct {
+	Connector   string `json:"connector"`
+	ExternalID  string `json:"external_id"`
+	DisplayName string `json:"display_name"`
+	FromUserID  string `json:"from_user_id"`
+	Text        string `json:"text"`
+}
+
+type ChatResponse struct {
+	Handled bool   `json:"handled"`
+	Reply   string `json:"reply"`
+}
+
 func New(cfg config.Config) (*Client, error) {
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
@@ -299,6 +312,27 @@ func (c *Client) RetryTask(ctx context.Context, taskID string) (RetryTaskRespons
 	var response RetryTaskResponse
 	if err := c.doJSON(req, &response); err != nil {
 		return RetryTaskResponse{}, err
+	}
+	return response, nil
+}
+
+func (c *Client) Chat(ctx context.Context, input ChatRequest) (ChatResponse, error) {
+	input.Text = strings.TrimSpace(input.Text)
+	if input.Text == "" {
+		return ChatResponse{}, fmt.Errorf("text is required")
+	}
+	requestBody, err := json.Marshal(input)
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/chat", bytes.NewReader(requestBody))
+	if err != nil {
+		return ChatResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var response ChatResponse
+	if err := c.doJSON(req, &response); err != nil {
+		return ChatResponse{}, err
 	}
 	return response, nil
 }

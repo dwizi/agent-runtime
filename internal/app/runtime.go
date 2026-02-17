@@ -288,6 +288,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		Config:              cfg,
 		Store:               sqlStore,
 		Engine:              engine,
+		Gateway:             commandGateway,
 		Logger:              logger.With("component", "api"),
 		Heartbeat:           heartbeatRegistry,
 		HeartbeatStaleAfter: time.Duration(cfg.HeartbeatStaleSec) * time.Second,

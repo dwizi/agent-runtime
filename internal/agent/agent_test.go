@@ -266,6 +266,103 @@ func TestAgent_Execute_BlocksRepeatedFailedToolSignature(t *testing.T) {
 	}
 }
 
+func TestAgent_Execute_BlocksRepeatedRunActionWhenApprovalAlreadyQueued(t *testing.T) {
+	reg := tools.NewRegistry()
+	execCount := 0
+	reg.Register(&mockTool{
+		name: "run_action",
+		exec: func(input json.RawMessage) (string, error) {
+			execCount++
+			return "Action request created: act_1234abcd-5678-4def-9012-abcdef123456. I need an admin to approve this before I can continue.", nil
+		},
+	})
+
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return `{"tool":"run_action","args":{"type":"run_command","target":"curl","summary":"Fetch example first phrasing","payload":{"args":["-sS","https://example.com"]}}}`, nil
+			default:
+				return `{"final":"unexpected extra model step","confidence":0.9}`, nil
+			}
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "fetch and summarize"})
+	if res.Error != nil {
+		t.Fatalf("unexpected agent error: %v", res.Error)
+	}
+	if execCount != 1 {
+		t.Fatalf("expected one run_action execution, got %d", execCount)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected one model call before early approval return, got %d", callCount)
+	}
+	if len(res.ToolCalls) != 1 {
+		t.Fatalf("expected one selected tool call, got %d", len(res.ToolCalls))
+	}
+	if res.ToolCalls[0].Status != "succeeded" {
+		t.Fatalf("expected run_action to succeed, got %s", res.ToolCalls[0].Status)
+	}
+	if !strings.Contains(strings.ToLower(res.Reply), "/approve-action") {
+		t.Fatalf("expected deterministic approval guidance reply, got %q", res.Reply)
+	}
+	if !strings.Contains(res.Reply, "act_1234abcd-5678-4def-9012-abcdef123456") {
+		t.Fatalf("expected action id in approval guidance reply, got %q", res.Reply)
+	}
+}
+
+func TestAgent_Execute_BlocksRepeatedFailedRunActionDespiteSummaryDrift(t *testing.T) {
+	reg := tools.NewRegistry()
+	execCount := 0
+	reg.Register(&mockTool{
+		name: "run_action",
+		exec: func(input json.RawMessage) (string, error) {
+			execCount++
+			return "", fmt.Errorf("command failed: exec: \"curl\": executable file not found in $PATH")
+		},
+	})
+
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return `{"tool":"run_action","args":{"type":"run_command","target":"curl","summary":"Fetch example wording one","payload":{"args":["-sS","https://example.com"]}}}`, nil
+			case 2:
+				return `{"tool":"run_action","args":{"type":"run_command","target":"curl","summary":"Fetch example wording two","payload":{"args":["-sS","https://example.com"]}}}`, nil
+			default:
+				return `{"final":"Cannot fetch in this runtime.","confidence":0.8}`, nil
+			}
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "fetch and summarize"})
+	if res.Error != nil {
+		t.Fatalf("unexpected agent error: %v", res.Error)
+	}
+	if execCount != 1 {
+		t.Fatalf("expected one execution despite summary drift, got %d", execCount)
+	}
+	if len(res.ToolCalls) != 2 {
+		t.Fatalf("expected two selected tool calls, got %d", len(res.ToolCalls))
+	}
+	if res.ToolCalls[0].Status != "failed" {
+		t.Fatalf("expected first call to fail, got %s", res.ToolCalls[0].Status)
+	}
+	if res.ToolCalls[1].Status != "blocked" {
+		t.Fatalf("expected second call to be blocked, got %s", res.ToolCalls[1].Status)
+	}
+	if !strings.Contains(strings.ToLower(res.ToolCalls[1].Error), "repeated failed tool call") {
+		t.Fatalf("expected repeated-failure block reason, got %q", res.ToolCalls[1].Error)
+	}
+}
+
 func TestAgent_Execute_ToolCall_Markdown(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{

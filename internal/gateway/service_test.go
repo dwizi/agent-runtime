@@ -1380,6 +1380,30 @@ func TestHandleMonitorNaturalLanguageIntentCreatesObjective(t *testing.T) {
 	}
 }
 
+func TestHandleMonitorNaturalLanguageObjectivePhraseCreatesObjective(t *testing.T) {
+	fStore := &fakeStore{}
+	service := New(fStore, &fakeEngine{}, nil, nil, "", nil)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:   "telegram",
+		ExternalID:  "42",
+		DisplayName: "ops",
+		FromUserID:  "u1",
+		Text:        "Create a monitoring objective for OpenAI API status and tell me what you set.",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected monitor objective phrase to be handled")
+	}
+	if !fStore.objectiveInvoked {
+		t.Fatal("expected objective creation to be invoked")
+	}
+	if !strings.Contains(strings.ToLower(fStore.lastObjective.Prompt), "openai api status") {
+		t.Fatalf("expected objective prompt to include cleaned monitor target, got %q", fStore.lastObjective.Prompt)
+	}
+}
+
 func TestHandlePendingActionsCommand(t *testing.T) {
 	service := New(
 		&fakeStore{
@@ -1405,6 +1429,71 @@ func TestHandlePendingActionsCommand(t *testing.T) {
 	}
 	if !output.Handled || !strings.Contains(output.Reply, "act-1") {
 		t.Fatalf("expected pending actions list, got %s", output.Reply)
+	}
+}
+
+func TestHandlePendingActionsCommandHelpReturnsCommandWithoutIdentity(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identityErr: store.ErrIdentityNotFound,
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+		"",
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "telegram",
+		ExternalID: "42",
+		FromUserID: "u1",
+		Text:       "What command should I use to list pending actions?",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected command-help message to be handled")
+	}
+	if !strings.Contains(output.Reply, "/pending-actions") {
+		t.Fatalf("expected pending-actions command guidance, got %q", output.Reply)
+	}
+	if strings.Contains(strings.ToLower(output.Reply), "access denied") {
+		t.Fatalf("expected guidance instead of access denial, got %q", output.Reply)
+	}
+}
+
+func TestHandleApprovalCommandHelpReturnsExactApproveActionWhenUnlinked(t *testing.T) {
+	service := New(
+		&fakeStore{
+			identityErr: store.ErrIdentityNotFound,
+			actionApprovals: []store.ActionApproval{
+				{ID: "act_1234abcd", Connector: "codex", ExternalID: "session-1", ActionType: "run_command", Status: "pending"},
+			},
+		},
+		&fakeEngine{},
+		&fakeRetriever{},
+		nil,
+		"",
+		nil,
+	)
+	output, err := service.HandleMessage(context.Background(), MessageInput{
+		Connector:  "codex",
+		ExternalID: "session-1",
+		FromUserID: "u1",
+		Text:       "If approval is needed, tell me the exact next command I should run.",
+	})
+	if err != nil {
+		t.Fatalf("handle message failed: %v", err)
+	}
+	if !output.Handled {
+		t.Fatal("expected approval-help message to be handled")
+	}
+	if !strings.Contains(output.Reply, "/approve-action act_1234abcd") {
+		t.Fatalf("expected exact approve-action command with id, got %q", output.Reply)
+	}
+	if !strings.Contains(strings.ToLower(output.Reply), "pair") {
+		t.Fatalf("expected identity-linking next step, got %q", output.Reply)
 	}
 }
 

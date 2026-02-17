@@ -189,6 +189,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 	toolCalls := 0
 	toolSteps := make([]loopToolStep, 0, maxSteps)
 	failedSignatures := map[string]int{}
+	queuedApprovalSignatures := map[string]string{}
 	for step := 1; step <= maxSteps; step++ {
 		result.Steps = step
 		llmInput := input
@@ -339,6 +340,22 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			})
 			continue
 		}
+		if queuedActionID, queued := queuedApprovalSignatures[toolSig]; queued {
+			reason := "repeated tool call is already queued for approval; wait for approval instead of retrying"
+			if strings.TrimSpace(queuedActionID) != "" {
+				reason = fmt.Sprintf("repeated tool call is already queued for approval as `%s`; wait for approval instead of retrying", queuedActionID)
+			}
+			appendTrace("policy.retry_blocked", reason)
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = reason
+			toolSteps = append(toolSteps, loopToolStep{
+				ToolName:   toolName,
+				ToolArgs:   compactLoopText(string(toolArgs), 500),
+				ToolStatus: "blocked",
+				ToolError:  reason,
+			})
+			continue
+		}
 
 		output, err := a.registry.ExecuteTool(ctx, toolName, toolArgs)
 		toolCalls++
@@ -380,6 +397,12 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			ToolStatus: "succeeded",
 			ToolOutput: compactLoopText(output, 1000),
 		})
+		if queuedActionID, pendingApproval := extractPendingApprovalActionID(output); pendingApproval {
+			queuedApprovalSignatures[toolSig] = strings.TrimSpace(queuedActionID)
+			result.Reply = buildPendingApprovalReply(strings.TrimSpace(queuedActionID))
+			appendTrace("decision.reply", "tool queued pending approval; ending turn with approval guidance")
+			return result
+		}
 		delete(failedSignatures, toolSig)
 	}
 
@@ -662,8 +685,76 @@ func isApprovalRequiredToolError(err error) bool {
 
 func loopToolSignature(name string, args json.RawMessage) string {
 	toolName := strings.ToLower(strings.TrimSpace(name))
-	normalizedArgs := compactLoopText(string(args), 2000)
+	normalizedArgs := normalizeLoopToolArgs(toolName, args)
 	return toolName + "|" + normalizedArgs
+}
+
+func normalizeLoopToolArgs(toolName string, args json.RawMessage) string {
+	rawArgs := strings.TrimSpace(string(args))
+	if rawArgs == "" {
+		return "{}"
+	}
+	if toolName != "run_action" {
+		return compactLoopText(rawArgs, 2000)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(args, &parsed); err != nil || len(parsed) == 0 {
+		return compactLoopText(rawArgs, 2000)
+	}
+	// Ignore model-generated prose differences while preserving executable intent.
+	delete(parsed, "summary")
+	normalized, err := json.Marshal(parsed)
+	if err != nil {
+		return compactLoopText(rawArgs, 2000)
+	}
+	return compactLoopText(string(normalized), 2000)
+}
+
+func extractPendingApprovalActionID(output string) (string, bool) {
+	lower := strings.ToLower(strings.TrimSpace(output))
+	if lower == "" {
+		return "", false
+	}
+	waitingForApproval := strings.Contains(lower, "action request created") ||
+		strings.Contains(lower, "waiting on admin approval") ||
+		strings.Contains(lower, "need an admin to approve") ||
+		strings.Contains(lower, "requires admin approval") ||
+		strings.Contains(lower, "before i can continue")
+	if !waitingForApproval {
+		return "", false
+	}
+	actionID, _ := extractActionID(output)
+	return actionID, true
+}
+
+func extractActionID(input string) (string, bool) {
+	lower := strings.ToLower(input)
+	const prefix = "act_"
+	start := strings.Index(lower, prefix)
+	if start < 0 {
+		return "", false
+	}
+	end := start + len(prefix)
+	for end < len(lower) {
+		ch := lower[end]
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' {
+			end++
+			continue
+		}
+		break
+	}
+	if end-start < len(prefix)+4 {
+		return "", false
+	}
+	return strings.TrimSpace(lower[start:end]), true
+}
+
+func buildPendingApprovalReply(actionID string) string {
+	if strings.TrimSpace(actionID) == "" {
+		return "I queued the action and it now needs admin approval. Run `/pending-actions`, then `/approve-action <action-id>` to continue."
+	}
+	return fmt.Sprintf("I queued this action and it now needs admin approval.\n\nNext:\n1) Run `/approve-action %s`\n2) Or run `/pending-actions` to review approvals first.", actionID)
 }
 
 func (a *Agent) resolvePolicy(ctx context.Context, input llm.MessageInput) Policy {

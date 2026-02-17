@@ -1,0 +1,14 @@
+root = "."
+tmp_dir = "tmp/air"
+
+[build]
+cmd = "go build -o ./tmp/air/agent-runtime ./cmd/agent-runtime"
+bin = "./tmp/air/agent-runtime"
+args_bin = ["serve"]
+include_ext = ["go", "mod", "sum", "yaml", "yml", "json"]
+exclude_dir = ["tmp", "vendor", ".git", "data", "ops/caddy/pki"]
+delay = 500
+stop_on_error = true
+
+[log]
+time = true

@@ -1,0 +1,18 @@
+services:
+  agent-runtime:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    environment:
+      AGENT_RUNTIME_ENV: ${AGENT_RUNTIME_ENV:-development}
+    working_dir: /app
+    command: ["air", "-c", ".air.toml"]
+    volumes:
+      - ./:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+
+volumes:
+  go_mod_cache:
+  go_build_cache:
