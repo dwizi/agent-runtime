@@ -89,6 +89,80 @@ func TestTaskMarkFailed(t *testing.T) {
 	}
 }
 
+func TestTaskWorkerScopedCompletionPreventsStaleOverwrite(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+
+	if err := sqlStore.CreateTask(ctx, CreateTaskInput{
+		ID:          "task-worker-complete",
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Kind:        "general",
+		Title:       "Worker completion",
+		Prompt:      "run",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := sqlStore.MarkTaskRunning(ctx, "task-worker-complete", 1, time.Now().UTC()); err != nil {
+		t.Fatalf("mark task running worker 1: %v", err)
+	}
+	if err := sqlStore.MarkTaskCompletedByWorker(ctx, "task-worker-complete", 2, time.Now().UTC(), "stale", ""); !errors.Is(err, ErrTaskNotRunningForWorker) {
+		t.Fatalf("expected ErrTaskNotRunningForWorker for stale worker, got %v", err)
+	}
+	if err := sqlStore.MarkTaskCompletedByWorker(ctx, "task-worker-complete", 1, time.Now().UTC(), "ok", "tasks/out.md"); err != nil {
+		t.Fatalf("mark task completed by worker: %v", err)
+	}
+
+	record, err := sqlStore.LookupTask(ctx, "task-worker-complete")
+	if err != nil {
+		t.Fatalf("lookup task: %v", err)
+	}
+	if record.Status != "succeeded" {
+		t.Fatalf("expected succeeded status, got %s", record.Status)
+	}
+	if record.ResultSummary != "ok" {
+		t.Fatalf("expected result summary ok, got %q", record.ResultSummary)
+	}
+}
+
+func TestTaskWorkerScopedFailurePreventsStaleOverwrite(t *testing.T) {
+	sqlStore := newTestStore(t)
+	ctx := context.Background()
+
+	if err := sqlStore.CreateTask(ctx, CreateTaskInput{
+		ID:          "task-worker-fail",
+		WorkspaceID: "ws-1",
+		ContextID:   "ctx-1",
+		Kind:        "general",
+		Title:       "Worker failure",
+		Prompt:      "run",
+		Status:      "queued",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if err := sqlStore.MarkTaskRunning(ctx, "task-worker-fail", 7, time.Now().UTC()); err != nil {
+		t.Fatalf("mark task running worker 7: %v", err)
+	}
+	if err := sqlStore.MarkTaskFailedByWorker(ctx, "task-worker-fail", 3, time.Now().UTC(), "stale"); !errors.Is(err, ErrTaskNotRunningForWorker) {
+		t.Fatalf("expected ErrTaskNotRunningForWorker for stale worker failure, got %v", err)
+	}
+	if err := sqlStore.MarkTaskFailedByWorker(ctx, "task-worker-fail", 7, time.Now().UTC(), "boom"); err != nil {
+		t.Fatalf("mark task failed by worker: %v", err)
+	}
+
+	record, err := sqlStore.LookupTask(ctx, "task-worker-fail")
+	if err != nil {
+		t.Fatalf("lookup task: %v", err)
+	}
+	if record.Status != "failed" {
+		t.Fatalf("expected failed status, got %s", record.Status)
+	}
+	if record.ErrorMessage != "boom" {
+		t.Fatalf("expected failure message boom, got %q", record.ErrorMessage)
+	}
+}
+
 func TestListTasksFiltersByWorkspaceAndStatus(t *testing.T) {
 	sqlStore := newTestStore(t)
 	ctx := context.Background()

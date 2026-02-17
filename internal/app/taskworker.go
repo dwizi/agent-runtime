@@ -59,7 +59,7 @@ func newTaskWorkerExecutor(
 		registry,
 		"You are an autonomous worker agent. Complete the assigned task efficiently using available tools.",
 	)
-	
+
 	// Apply defaults if config is zero (for tests)
 	policy := agent.Policy{
 		MaxLoopSteps:              cfg.AgentAutonomousMaxLoopSteps,
@@ -157,11 +157,11 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 
 	// Lookup task record for metadata
 	taskRecord, _ := e.lookupTaskRecord(ctx, task.ID)
-	
+
 	connector := "orchestrator"
 	externalID := task.ContextID
 	fromUserID := "system:task-worker"
-	
+
 	if strings.TrimSpace(taskRecord.SourceConnector) != "" {
 		connector = taskRecord.SourceConnector
 	}
@@ -171,7 +171,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 	if strings.TrimSpace(taskRecord.SourceUserID) != "" {
 		fromUserID = taskRecord.SourceUserID
 	}
-	
+
 	// Prepare context
 	llmInput := llm.MessageInput{
 		Connector:     connector,
@@ -184,7 +184,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 		IsDM:          false,
 		SkipGrounding: false,
 	}
-	
+
 	gatewayInput := gateway.MessageInput{
 		Connector:   connector,
 		ExternalID:  externalID,
@@ -192,7 +192,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 		FromUserID:  fromUserID,
 		Text:        prompt,
 	}
-	
+
 	// Construct context with sensitive approval for "autonomous" tasks
 	agentCtx := ctx
 	// ContextRecord is needed for tools
@@ -202,12 +202,12 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 	}
 	agentCtx = context.WithValue(agentCtx, gateway.ContextKeyRecord, contextRecord)
 	agentCtx = context.WithValue(agentCtx, gateway.ContextKeyInput, gatewayInput)
-	
+
 	// Grant sensitive approval for deep work
 	agentCtx = agent.WithSensitiveToolApproval(agentCtx)
 
 	result := e.agent.Execute(agentCtx, llmInput)
-	
+
 	reply := strings.TrimSpace(result.Reply)
 	if result.Error != nil {
 		e.logger.Error("task agent execution failed", "task_id", task.ID, "error", result.Error)
@@ -224,7 +224,7 @@ func (e *taskWorkerExecutor) executeLLMTask(ctx context.Context, task orchestrat
 	if e.qmd != nil && strings.TrimSpace(task.WorkspaceID) != "" {
 		e.qmd.QueueWorkspaceIndex(task.WorkspaceID)
 	}
-	
+
 	summary := summarizeTaskReply(reply)
 	if strings.TrimSpace(taskRecord.RouteClass) != "" {
 		summary = truncatePreservingLines(reply, 1400)
@@ -263,7 +263,7 @@ func buildTaskMarkdown(task orchestrator.Task, now time.Time, result agent.Resul
 	builder.WriteString("- Context: `" + strings.TrimSpace(task.ContextID) + "`\n")
 	builder.WriteString("- Title: " + strings.TrimSpace(task.Title) + "\n")
 	builder.WriteString("- Completed At (UTC): " + now.Format(time.RFC3339) + "\n\n")
-	
+
 	builder.WriteString("## Prompt\n\n")
 	builder.WriteString(strings.TrimSpace(task.Prompt))
 	builder.WriteString("\n\n")
@@ -334,8 +334,6 @@ func (e *taskWorkerExecutor) lookupTaskRecord(ctx context.Context, taskID string
 	return record, true
 }
 
-
-
 type taskObserver struct {
 	store    *store.Store
 	notifier *taskCompletionNotifier
@@ -378,8 +376,15 @@ func (o *taskObserver) OnTaskCompleted(task orchestrator.Task, workerID int, res
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := o.store.MarkTaskCompleted(ctx, task.ID, time.Now().UTC(), result.Summary, result.ArtifactPath); err != nil && !errorsIsTaskNotFound(err) {
-		o.logger.Error("mark task completed failed", "task_id", task.ID, "error", err)
+	if err := o.store.MarkTaskCompletedByWorker(ctx, task.ID, workerID, time.Now().UTC(), result.Summary, result.ArtifactPath); err != nil {
+		if errors.Is(err, store.ErrTaskNotRunningForWorker) {
+			o.logger.Warn("skipping stale task completion update", "task_id", task.ID, "worker_id", workerID)
+			return
+		}
+		if !errorsIsTaskNotFound(err) {
+			o.logger.Error("mark task completed failed", "task_id", task.ID, "error", err)
+		}
+		return
 	}
 	if o.notifier != nil {
 		o.notifier.NotifyCompleted(task, result)
@@ -396,8 +401,15 @@ func (o *taskObserver) OnTaskFailed(task orchestrator.Task, workerID int, err er
 	if err != nil {
 		message = err.Error()
 	}
-	if updateErr := o.store.MarkTaskFailed(ctx, task.ID, time.Now().UTC(), message); updateErr != nil && !errorsIsTaskNotFound(updateErr) {
-		o.logger.Error("mark task failed failed", "task_id", task.ID, "error", updateErr)
+	if updateErr := o.store.MarkTaskFailedByWorker(ctx, task.ID, workerID, time.Now().UTC(), message); updateErr != nil {
+		if errors.Is(updateErr, store.ErrTaskNotRunningForWorker) {
+			o.logger.Warn("skipping stale task failure update", "task_id", task.ID, "worker_id", workerID)
+			return
+		}
+		if !errorsIsTaskNotFound(updateErr) {
+			o.logger.Error("mark task failed failed", "task_id", task.ID, "error", updateErr)
+		}
+		return
 	}
 	if o.notifier != nil {
 		o.notifier.NotifyFailed(task, err)

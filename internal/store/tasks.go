@@ -11,6 +11,7 @@ import (
 
 var ErrTaskNotFound = errors.New("task not found")
 var ErrTaskRunAlreadyExists = errors.New("task run already exists")
+var ErrTaskNotRunningForWorker = errors.New("task not running for worker")
 
 type TaskRecord struct {
 	ID               string
@@ -147,6 +148,44 @@ func (s *Store) MarkTaskCompleted(ctx context.Context, id string, finishedAt tim
 	return nil
 }
 
+func (s *Store) MarkTaskCompletedByWorker(ctx context.Context, id string, workerID int, finishedAt time.Time, summary, resultPath string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrTaskNotFound
+	}
+	if workerID < 1 {
+		return ErrTaskNotRunningForWorker
+	}
+	if finishedAt.IsZero() {
+		finishedAt = time.Now().UTC()
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET status = 'succeeded',
+		     finished_at_unix = ?,
+		     result_summary = ?,
+		     result_path = ?,
+		     error_message = NULL,
+		     updated_at_unix = ?
+		 WHERE id = ? AND status = 'running' AND worker_id = ?`,
+		finishedAt.Unix(),
+		nullIfEmpty(strings.TrimSpace(summary)),
+		nullIfEmpty(strings.TrimSpace(resultPath)),
+		time.Now().UTC().Unix(),
+		id,
+		workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark task completed by worker: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected == 0 {
+		return ErrTaskNotRunningForWorker
+	}
+	return nil
+}
+
 func (s *Store) MarkTaskFailed(ctx context.Context, id string, finishedAt time.Time, message string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -174,6 +213,41 @@ func (s *Store) MarkTaskFailed(ctx context.Context, id string, finishedAt time.T
 	rowsAffected, err := result.RowsAffected()
 	if err == nil && rowsAffected == 0 {
 		return ErrTaskNotFound
+	}
+	return nil
+}
+
+func (s *Store) MarkTaskFailedByWorker(ctx context.Context, id string, workerID int, finishedAt time.Time, message string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrTaskNotFound
+	}
+	if workerID < 1 {
+		return ErrTaskNotRunningForWorker
+	}
+	if finishedAt.IsZero() {
+		finishedAt = time.Now().UTC()
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET status = 'failed',
+		     finished_at_unix = ?,
+		     error_message = ?,
+		     updated_at_unix = ?
+		 WHERE id = ? AND status = 'running' AND worker_id = ?`,
+		finishedAt.Unix(),
+		nullIfEmpty(strings.TrimSpace(message)),
+		time.Now().UTC().Unix(),
+		id,
+		workerID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark task failed by worker: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err == nil && rowsAffected == 0 {
+		return ErrTaskNotRunningForWorker
 	}
 	return nil
 }

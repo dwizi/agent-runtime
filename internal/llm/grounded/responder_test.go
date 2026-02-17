@@ -3,6 +3,7 @@ package grounded
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,6 +315,101 @@ func TestReplyBuildsAndPersistsMemorySummary(t *testing.T) {
 	}
 	if !strings.Contains(summary, "## Recent User Intents") {
 		t.Fatalf("expected summary sections, got %q", summary)
+	}
+}
+
+func TestReplyRefreshesSummaryWhenCommandHeavyContextGrows(t *testing.T) {
+	base := &fakeBase{reply: "ok"}
+	retriever := &fakeRetriever{}
+
+	root := t.TempDir()
+	workspaceID := "ws-1"
+	chatPath := filepath.Join(root, workspaceID, "logs", "chats", "codex", "session-1.md")
+	if err := os.MkdirAll(filepath.Dir(chatPath), 0o755); err != nil {
+		t.Fatalf("mkdir chat path: %v", err)
+	}
+
+	lines := []string{
+		"# Chat Log",
+		"",
+		"## 2026-02-10T11:00:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `user-1`",
+		"",
+		"Memory seed for this run.",
+		"",
+		"## 2026-02-10T11:01:00Z `INBOUND`",
+		"- direction: `inbound`",
+		"- actor: `user-1`",
+		"",
+		"/task run sandbox checks and write a report",
+		"",
+	}
+	for i := 1; i <= 16; i++ {
+		lines = append(lines,
+			fmt.Sprintf("## 2026-02-10T11:%02d:00Z `OUTBOUND`", i+1),
+			"- direction: `outbound`",
+			"- actor: `agent-runtime`",
+			"",
+			fmt.Sprintf("Synthetic assistant update %d: step-%d completed.", i, i),
+			"",
+		)
+	}
+	if err := os.WriteFile(chatPath, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatalf("write chat log: %v", err)
+	}
+
+	summaryPath := filepath.Join(root, workspaceID, "memory", "contexts", "ctx-1.md")
+	if err := os.MkdirAll(filepath.Dir(summaryPath), 0o755); err != nil {
+		t.Fatalf("mkdir summary path: %v", err)
+	}
+	existingSummary := strings.Join([]string{
+		"# Context Memory Summary",
+		"",
+		"- context_id: `ctx-1`",
+		"- connector: `codex`",
+		"- external_id: `session-1`",
+		"- turns: `2`",
+		"- source_lines: `4`",
+		"- refreshed_at: `2026-02-10T11:01:00Z`",
+		"",
+		"## Recent User Intents",
+		"- Memory seed for this run.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(summaryPath, []byte(existingSummary), 0o644); err != nil {
+		t.Fatalf("write existing summary: %v", err)
+	}
+
+	responder := New(base, retriever, Config{
+		WorkspaceRoot:               root,
+		TopK:                        1,
+		MemorySummaryRefreshTurns:   6,
+		MemorySummaryMaxItems:       20,
+		MemorySummarySourceMaxLines: 400,
+	}, nil)
+
+	_, err := responder.Reply(context.Background(), llm.MessageInput{
+		Connector:   "codex",
+		WorkspaceID: workspaceID,
+		ContextID:   "ctx-1",
+		ExternalID:  "session-1",
+		Text:        "continue and use prior memory",
+	})
+	if err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+
+	updatedBytes, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("read updated summary: %v", err)
+	}
+	updated := string(updatedBytes)
+	if !strings.Contains(updated, "## Recent Assistant Actions") {
+		t.Fatalf("expected assistant actions after refresh, got %q", updated)
+	}
+	if parseSummarySourceLines(updated) <= 4 {
+		t.Fatalf("expected source line metadata to increase, got %q", updated)
 	}
 }
 

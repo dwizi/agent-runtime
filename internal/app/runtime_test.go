@@ -269,6 +269,86 @@ func TestRecoverPendingTasksEnqueuesQueuedAndStaleRunning(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleRunningTasksRequeuesOnlyStale(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "runtime_stale_recovery_test.sqlite")
+	sqlStore, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlStore.Close() })
+	if err := sqlStore.AutoMigrate(ctx); err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+
+	now := time.Now().UTC()
+	insertTask := func(id string) {
+		t.Helper()
+		if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+			ID:          id,
+			WorkspaceID: "ws-1",
+			ContextID:   "ctx-1",
+			Kind:        string(orchestrator.TaskKindGeneral),
+			Title:       id,
+			Prompt:      "run",
+			Status:      "queued",
+		}); err != nil {
+			t.Fatalf("create task %s: %v", id, err)
+		}
+	}
+	insertTask("task-running-stale-loop")
+	insertTask("task-running-fresh-loop")
+	if err := sqlStore.MarkTaskRunning(ctx, "task-running-stale-loop", 11, now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("mark stale running: %v", err)
+	}
+	if err := sqlStore.MarkTaskRunning(ctx, "task-running-fresh-loop", 12, now.Add(-2*time.Minute)); err != nil {
+		t.Fatalf("mark fresh running: %v", err)
+	}
+
+	engine := &recoveryEngineStub{}
+	requeued, err := recoverStaleRunningTasks(ctx, sqlStore, engine, 10*time.Minute, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("recover stale running tasks: %v", err)
+	}
+	if requeued != 1 {
+		t.Fatalf("expected 1 stale task requeued, got %d", requeued)
+	}
+	if len(engine.tasks) != 1 || engine.tasks[0].ID != "task-running-stale-loop" {
+		t.Fatalf("expected stale task enqueued once, got %+v", engine.tasks)
+	}
+
+	stale, err := sqlStore.LookupTask(ctx, "task-running-stale-loop")
+	if err != nil {
+		t.Fatalf("lookup stale task: %v", err)
+	}
+	if stale.Status != "queued" {
+		t.Fatalf("expected stale task queued after recovery, got %s", stale.Status)
+	}
+
+	fresh, err := sqlStore.LookupTask(ctx, "task-running-fresh-loop")
+	if err != nil {
+		t.Fatalf("lookup fresh task: %v", err)
+	}
+	if fresh.Status != "running" {
+		t.Fatalf("expected fresh task still running, got %s", fresh.Status)
+	}
+}
+
+func TestStaleRecoveryLoopIntervalBounds(t *testing.T) {
+	if got := staleRecoveryLoopInterval(0); got != 5*time.Minute {
+		t.Fatalf("expected default interval 5m, got %s", got)
+	}
+	if got := staleRecoveryLoopInterval(20 * time.Second); got != 30*time.Second {
+		t.Fatalf("expected minimum interval 30s, got %s", got)
+	}
+	if got := staleRecoveryLoopInterval(2 * time.Hour); got != 10*time.Minute {
+		t.Fatalf("expected capped interval 10m, got %s", got)
+	}
+	if got := staleRecoveryLoopInterval(8 * time.Minute); got != 4*time.Minute {
+		t.Fatalf("expected half stale interval 4m, got %s", got)
+	}
+}
+
 func nowUTC() time.Time {
 	return time.Now().UTC()
 }

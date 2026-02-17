@@ -8,6 +8,10 @@ Use these guides when provisioning connector credentials.
    - `docs/channels/discord.md`
 3. Codex CLI:
    - `docs/channels/codex.md`
+4. Cline CLI:
+   - `docs/channels/cline.md`
+5. Gemini CLI:
+   - `docs/channels/gemini.md`
 
 After configuring tokens:
 
@@ -15,6 +19,7 @@ After configuring tokens:
    - this also re-runs Telegram/Discord command sync at connector bootstrap
 2. pair at least one admin identity (`pair` in DM, then approve in TUI)
    - for Codex CLI channel, use `chat pairing pair-admin` (see `docs/channels/codex.md`)
+   - Cline/Gemini follow the same Codex connector pattern with their own session IDs
 3. enable an admin context:
    - `/admin-channel enable`
 4. verify task command path:

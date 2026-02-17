@@ -45,6 +45,57 @@ func TestExecuteAllowedCommand(t *testing.T) {
 	}
 }
 
+func TestExecuteAllowsWorkspaceFileCreation(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available in test environment")
+	}
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "ws-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+
+	plugin := New(Config{
+		Enabled:         true,
+		WorkspaceRoot:   root,
+		AllowedCommands: []string{"bash"},
+		Timeout:         10 * time.Second,
+	})
+	result, err := plugin.Execute(context.Background(), store.ActionApproval{
+		WorkspaceID:  "ws-1",
+		ActionType:   "run_command",
+		ActionTarget: "bash",
+		Payload: map[string]any{
+			"args": []any{
+				"-lc",
+				"mkdir -p memory && printf 'launch code: LUMEN-42\\nchecksum phrase: blue-otter\\n' > memory/sandbox-tool-memory-report.md && grep -n 'LUMEN-42\\|blue-otter' memory/sandbox-tool-memory-report.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if !strings.Contains(result.Message, "1:launch code: LUMEN-42") {
+		t.Fatalf("expected grep output for launch code, got %s", result.Message)
+	}
+	if !strings.Contains(result.Message, "2:checksum phrase: blue-otter") {
+		t.Fatalf("expected grep output for checksum phrase, got %s", result.Message)
+	}
+
+	reportPath := filepath.Join(workspaceDir, "memory", "sandbox-tool-memory-report.md")
+	reportBytes, readErr := os.ReadFile(reportPath)
+	if readErr != nil {
+		t.Fatalf("read created report: %v", readErr)
+	}
+	report := string(reportBytes)
+	if !strings.Contains(report, "launch code: LUMEN-42") {
+		t.Fatalf("expected launch code in report, got %q", report)
+	}
+	if !strings.Contains(report, "checksum phrase: blue-otter") {
+		t.Fatalf("expected checksum phrase in report, got %q", report)
+	}
+}
+
 func TestExecuteDisallowedCommand(t *testing.T) {
 	plugin := New(Config{
 		Enabled:         true,

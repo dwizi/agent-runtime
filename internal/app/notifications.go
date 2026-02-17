@@ -184,6 +184,9 @@ func (n *taskCompletionNotifier) messageForTarget(
 
 	// Try Agent Narration first for non-admin messages if it's a routed task
 	if n.agentService != nil && hasTaskRecord && strings.TrimSpace(taskRecord.RouteClass) != "" && !target.IsAdmin {
+		if shouldSkipAgentNarration(result) {
+			return buildTaskSuccessMessage(task, result, hasTaskRecord, taskRecord)
+		}
 		narration, err := n.agentService.NarrateTaskResult(ctx, target.Connector, target.ExternalID, task, result)
 		if err == nil && narration != "" {
 			return narration
@@ -194,6 +197,41 @@ func (n *taskCompletionNotifier) messageForTarget(
 	}
 
 	return buildTaskSuccessMessage(task, result, hasTaskRecord, taskRecord)
+}
+
+func shouldSkipAgentNarration(result orchestrator.TaskResult) bool {
+	summary := strings.TrimSpace(result.Summary)
+	if summary == "" {
+		return false
+	}
+	lower := strings.ToLower(summary)
+	advisoryMarkers := []string{
+		"i can't",
+		"i cannot",
+		"cannot run",
+		"can't run",
+		"cannot directly run",
+		"can't directly run",
+		"sandbox blocked",
+		"blocked by sandbox",
+		"not available",
+		"isn't available",
+		"cannot honestly",
+		"if you run",
+		"run these",
+		"paste the output",
+		"expected exact matching lines",
+		"what blocked it",
+		"what we should do next",
+		"admin/environment change",
+		"needs an admin",
+	}
+	for _, marker := range advisoryMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *taskCompletionNotifier) resolveTargets(ctx context.Context, task orchestrator.Task, policy string) []store.ContextDelivery {

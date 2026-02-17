@@ -1,6 +1,6 @@
 # agent-runtime
 
-Security-first, cloud-agnostic, multi-channel agent orchestrator for communities.
+Security-first, cloud-agnostic, multi-channel runtime for running and orchestrating agents.
 
 `agent-runtime` runs as Docker Compose with:
 - `caddy` for TLS, reverse proxy, and admin mTLS.
@@ -348,6 +348,7 @@ Rotate these artifacts before production use.
 ## Docs
 
 - Overlord/admin index: `docs/README.md`
+- Getting started (all channels/tools): `docs/getting-started.md`
 - Install runbook: `docs/install.md`
 - Configuration reference: `docs/configuration.md`
 - Operations runbook: `docs/operations.md`

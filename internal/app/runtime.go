@@ -455,6 +455,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 		r.logger.Error("startup task recovery failed", "error", err)
 	}
 	group.Go(func() error {
+		return runMonitored(groupCtx, r.heartbeat, "task-recovery", 20*time.Second, func(runCtx context.Context) error {
+			return runStaleTaskRecoveryLoop(runCtx, r.store, r.engine, recoveryStaleAfter, r.logger.With("component", "task-recovery-loop"))
+		})
+	})
+	group.Go(func() error {
 		return runMonitored(groupCtx, r.heartbeat, "watcher", 0, func(runCtx context.Context) error {
 			return r.watcher.Start(runCtx)
 		})
@@ -739,6 +744,114 @@ func recoverPendingTasks(
 		"recovered_enqueued", recovered,
 	)
 	return nil
+}
+
+func runStaleTaskRecoveryLoop(
+	ctx context.Context,
+	sqlStore taskRecoveryStore,
+	engine taskRecoveryEngine,
+	staleRunningAfter time.Duration,
+	logger *slog.Logger,
+) error {
+	if sqlStore == nil || engine == nil {
+		<-ctx.Done()
+		return nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if staleRunningAfter <= 0 {
+		staleRunningAfter = 10 * time.Minute
+	}
+	interval := staleRecoveryLoopInterval(staleRunningAfter)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			requeued, err := recoverStaleRunningTasks(ctx, sqlStore, engine, staleRunningAfter, logger)
+			if err != nil {
+				logger.Error("periodic stale task recovery failed", "error", err)
+				continue
+			}
+			if requeued > 0 {
+				logger.Info("periodic stale task recovery requeued tasks", "count", requeued)
+			}
+		}
+	}
+}
+
+func staleRecoveryLoopInterval(staleRunningAfter time.Duration) time.Duration {
+	if staleRunningAfter <= 0 {
+		return 5 * time.Minute
+	}
+	interval := staleRunningAfter / 2
+	if interval < 30*time.Second {
+		return 30 * time.Second
+	}
+	if interval > 10*time.Minute {
+		return 10 * time.Minute
+	}
+	return interval
+}
+
+func recoverStaleRunningTasks(
+	ctx context.Context,
+	sqlStore taskRecoveryStore,
+	engine taskRecoveryEngine,
+	staleRunningAfter time.Duration,
+	logger *slog.Logger,
+) (int, error) {
+	if sqlStore == nil || engine == nil {
+		return 0, nil
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if staleRunningAfter <= 0 {
+		staleRunningAfter = 10 * time.Minute
+	}
+	now := time.Now().UTC()
+	running, err := sqlStore.ListTasks(ctx, store.ListTasksInput{
+		Status: "running",
+		Limit:  500,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list running tasks for stale recovery: %w", err)
+	}
+	requeued := 0
+	for _, item := range running {
+		taskID := strings.TrimSpace(item.ID)
+		if taskID == "" {
+			continue
+		}
+		startedAt := item.StartedAt.UTC()
+		isStale := startedAt.IsZero() || now.Sub(startedAt) >= staleRunningAfter
+		if !isStale {
+			continue
+		}
+		if err := sqlStore.RequeueTask(ctx, taskID); err != nil {
+			logger.Error("failed to requeue stale running task", "task_id", taskID, "error", err)
+			continue
+		}
+		_, enqueueErr := engine.Enqueue(orchestrator.Task{
+			ID:          item.ID,
+			WorkspaceID: item.WorkspaceID,
+			ContextID:   item.ContextID,
+			Kind:        orchestrator.TaskKind(strings.TrimSpace(item.Kind)),
+			Title:       item.Title,
+			Prompt:      item.Prompt,
+		})
+		if enqueueErr != nil {
+			logger.Error("failed to enqueue stale requeued task", "task_id", taskID, "error", enqueueErr)
+			continue
+		}
+		requeued++
+	}
+	return requeued, nil
 }
 
 func runMonitored(

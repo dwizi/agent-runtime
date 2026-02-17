@@ -5,16 +5,18 @@ This documentation is written for the operators who install, secure, and run Age
 ## Start Here
 
 1. Install and bootstrap:
+   - `docs/getting-started.md`
+2. Install and bootstrap details:
    - `docs/install.md`
-2. Configure environment and security policy:
+3. Configure environment and security policy:
    - `docs/configuration.md`
-3. Configure channel connectors:
+4. Configure channel connectors:
    - `docs/channels/README.md`
-4. Run day-2 operations:
+5. Run day-2 operations:
    - `docs/operations.md`
-5. Run go-live gate:
+6. Run go-live gate:
    - `docs/production-checklist.md`
-6. Understand memory and context internals:
+7. Understand memory and context internals:
    - `docs/memory-context-strategy.md`
    - `docs/memory-context-playbook.md`
 

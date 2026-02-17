@@ -345,7 +345,8 @@ func (r *Responder) loadConversationMemory(ctx context.Context, input llm.Messag
 	}
 
 	turns := countInboundTurns(content)
-	summaryText, meta := r.loadOrRefreshSummary(input, content, turns)
+	sourceLines := countSummarySourceLines(content)
+	summaryText, meta := r.loadOrRefreshSummary(input, content, turns, sourceLines)
 	summaryText = clipToTokenBudget(summaryText, budget.Summary)
 
 	tailBytes := r.cfg.ChatTailBytes
@@ -383,7 +384,7 @@ func (r *Responder) loadChatLogContent(ctx context.Context, input llm.MessageInp
 	return openResult.Content
 }
 
-func (r *Responder) loadOrRefreshSummary(input llm.MessageInput, chatLogContent string, currentTurns int) (string, summaryMetadata) {
+func (r *Responder) loadOrRefreshSummary(input llm.MessageInput, chatLogContent string, currentTurns int, currentSourceLines int) (string, summaryMetadata) {
 	path := r.contextSummaryPath(input)
 	var existing string
 	if path != "" {
@@ -393,6 +394,7 @@ func (r *Responder) loadOrRefreshSummary(input llm.MessageInput, chatLogContent 
 		}
 	}
 	existingTurns := parseSummaryTurns(existing)
+	existingSourceLines := parseSummarySourceLines(existing)
 	existingBody := extractSummaryBody(existing)
 
 	refreshEvery := maxInt(1, r.cfg.MemorySummaryRefreshTurns)
@@ -402,6 +404,19 @@ func (r *Responder) loadOrRefreshSummary(input llm.MessageInput, chatLogContent 
 			needsRefresh = true
 		} else if currentTurns >= existingTurns+refreshEvery {
 			needsRefresh = true
+		}
+	}
+	if !needsRefresh && currentSourceLines > 0 {
+		if existingSourceLines == 0 {
+			// Migrate older summaries that predate source line metadata.
+			if strings.TrimSpace(existingBody) != "" && currentTurns > existingTurns {
+				needsRefresh = true
+			}
+		} else {
+			lineRefreshEvery := maxInt(6, refreshEvery*2)
+			if currentSourceLines >= existingSourceLines+lineRefreshEvery {
+				needsRefresh = true
+			}
 		}
 	}
 
@@ -421,7 +436,7 @@ func (r *Responder) loadOrRefreshSummary(input llm.MessageInput, chatLogContent 
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			r.logger.Debug("failed to create memory summary directory", "path", path, "error", err)
 		} else {
-			record := buildSummaryDocument(input, currentTurns, newBody)
+			record := buildSummaryDocument(input, currentTurns, currentSourceLines, newBody)
 			if writeErr := os.WriteFile(path, []byte(record), 0o644); writeErr != nil {
 				r.logger.Debug("failed to write memory summary", "path", path, "error", writeErr)
 			}
@@ -447,7 +462,7 @@ func (r *Responder) contextSummaryPath(input llm.MessageInput) string {
 	return filepath.Join(root, workspaceID, "memory", "contexts", key+".md")
 }
 
-func buildSummaryDocument(input llm.MessageInput, turns int, body string) string {
+func buildSummaryDocument(input llm.MessageInput, turns, sourceLines int, body string) string {
 	contextID := strings.TrimSpace(input.ContextID)
 	if contextID == "" {
 		contextID = "unknown"
@@ -467,6 +482,7 @@ func buildSummaryDocument(input llm.MessageInput, turns int, body string) string
 		fmt.Sprintf("- connector: `%s`", connector),
 		fmt.Sprintf("- external_id: `%s`", externalID),
 		fmt.Sprintf("- turns: `%d`", turns),
+		fmt.Sprintf("- source_lines: `%d`", maxInt(0, sourceLines)),
 		fmt.Sprintf("- refreshed_at: `%s`", time.Now().UTC().Format(time.RFC3339)),
 		"",
 		strings.TrimSpace(body),
@@ -996,12 +1012,28 @@ func mergeUniqueStrings(existing, additions []string) []string {
 }
 
 var summaryTurnsPattern = regexp.MustCompile("(?m)^- turns:\\s*`?(\\d+)`?\\s*$")
+var summarySourceLinesPattern = regexp.MustCompile("(?m)^- source_lines:\\s*`?(\\d+)`?\\s*$")
 
 func parseSummaryTurns(content string) int {
 	if strings.TrimSpace(content) == "" {
 		return 0
 	}
 	match := summaryTurnsPattern.FindStringSubmatch(content)
+	if len(match) < 2 {
+		return 0
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(match[1]))
+	if err != nil || parsed < 0 {
+		return 0
+	}
+	return parsed
+}
+
+func parseSummarySourceLines(content string) int {
+	if strings.TrimSpace(content) == "" {
+		return 0
+	}
+	match := summarySourceLinesPattern.FindStringSubmatch(content)
 	if len(match) < 2 {
 		return 0
 	}
@@ -1043,6 +1075,13 @@ func countInboundTurns(content string) int {
 		}
 	}
 	return count
+}
+
+func countSummarySourceLines(content string) int {
+	if strings.TrimSpace(content) == "" {
+		return 0
+	}
+	return len(extractConversationSummaryLines(content, 1000000))
 }
 
 type MemoryStrategy string

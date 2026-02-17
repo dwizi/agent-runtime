@@ -42,6 +42,20 @@ func (m *mockAgentService) NarrateTaskResult(ctx context.Context, connector, ext
 	return "", nil // Return empty to force fallback to summary in existing tests
 }
 
+type recordingAgentService struct {
+	reply string
+	err   error
+	calls int
+}
+
+func (r *recordingAgentService) NarrateTaskResult(ctx context.Context, connector, externalID string, task orchestrator.Task, result orchestrator.TaskResult) (string, error) {
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	return r.reply, nil
+}
+
 func TestTaskCompletionNotificationToTaskContext(t *testing.T) {
 	sqlStore := openAppTestStore(t)
 	ctx := context.Background()
@@ -318,6 +332,123 @@ func TestRoutedTaskFailureSkipsNonAdminChannels(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(publisher.messages[0].text), "still working") {
 		t.Fatalf("expected in-progress lifecycle text, got %q", publisher.messages[0].text)
+	}
+}
+
+func TestRoutedTaskSuccessUsesAgentNarrationWhenSafe(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "130", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:               "task-routed-narrate-safe",
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             "general",
+		Title:            "Routed update",
+		Prompt:           "status",
+		Status:           "queued",
+		RouteClass:       "question",
+		Priority:         "p3",
+		AssignedLane:     "support",
+		SourceConnector:  "telegram",
+		SourceExternalID: "130",
+		SourceUserID:     "u-safe",
+		SourceText:       "status",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	agentSvc := &recordingAgentService{reply: "I finished the checks and updated the report."}
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", agentSvc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-routed-narrate-safe",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Routed update",
+		Prompt:      "status",
+		CreatedAt:   time.Now().UTC(),
+	}
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: "Completed checks and wrote memory/sandbox-tool-memory-report.md.",
+	})
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 2 {
+		t.Fatalf("expected two published messages, got %d", len(publisher.messages))
+	}
+	if agentSvc.calls != 1 {
+		t.Fatalf("expected one narration call, got %d", agentSvc.calls)
+	}
+	if publisher.messages[1].text != "I finished the checks and updated the report." {
+		t.Fatalf("expected narrated completion message, got %q", publisher.messages[1].text)
+	}
+}
+
+func TestRoutedTaskSuccessSkipsAgentNarrationForAdvisorySummary(t *testing.T) {
+	sqlStore := openAppTestStore(t)
+	ctx := context.Background()
+	contextRecord, err := sqlStore.EnsureContextForExternalChannel(ctx, "telegram", "131", "community")
+	if err != nil {
+		t.Fatalf("ensure context: %v", err)
+	}
+
+	if err := sqlStore.CreateTask(ctx, store.CreateTaskInput{
+		ID:               "task-routed-narrate-skip",
+		WorkspaceID:      contextRecord.WorkspaceID,
+		ContextID:        contextRecord.ID,
+		Kind:             "general",
+		Title:            "Routed sandbox follow-up",
+		Prompt:           "run shell commands",
+		Status:           "queued",
+		RouteClass:       "task",
+		Priority:         "p2",
+		AssignedLane:     "operations",
+		SourceConnector:  "telegram",
+		SourceExternalID: "131",
+		SourceUserID:     "u-skip",
+		SourceText:       "run shell commands",
+	}); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	publisher := &fakePublisher{}
+	agentSvc := &recordingAgentService{reply: "Everything succeeded and file was written."}
+	notifier := newTaskCompletionNotifier("", sqlStore, map[string]connectors.Publisher{"telegram": publisher}, "both", "", "", agentSvc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	observer := newTaskObserver(sqlStore, notifier, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	task := orchestrator.Task{
+		ID:          "task-routed-narrate-skip",
+		WorkspaceID: contextRecord.WorkspaceID,
+		ContextID:   contextRecord.ID,
+		Kind:        orchestrator.TaskKindGeneral,
+		Title:       "Routed sandbox follow-up",
+		Prompt:      "run shell commands",
+		CreatedAt:   time.Now().UTC(),
+	}
+	advisory := "I can't directly run shell commands from here. If you run these four short commands, I'll summarize the matches."
+	observer.OnTaskStarted(task, 1)
+	observer.OnTaskCompleted(task, 1, orchestrator.TaskResult{
+		Summary: advisory,
+	})
+
+	publisher.mu.Lock()
+	defer publisher.mu.Unlock()
+	if len(publisher.messages) != 2 {
+		t.Fatalf("expected two published messages, got %d", len(publisher.messages))
+	}
+	if agentSvc.calls != 0 {
+		t.Fatalf("expected narration call to be skipped for advisory result, got %d", agentSvc.calls)
+	}
+	if publisher.messages[1].text != advisory {
+		t.Fatalf("expected fallback advisory summary, got %q", publisher.messages[1].text)
 	}
 }
 
