@@ -225,6 +225,47 @@ func TestAgent_Execute_ContinuesAfterToolFailure(t *testing.T) {
 	}
 }
 
+func TestAgent_Execute_BlocksRepeatedFailedToolSignature(t *testing.T) {
+	reg := tools.NewRegistry()
+	execCount := 0
+	reg.Register(&mockTool{
+		name: "fail_tool",
+		exec: func(input json.RawMessage) (string, error) {
+			execCount++
+			return "", fmt.Errorf("boom")
+		},
+	})
+
+	callCount := 0
+	responder := &mockResponder{
+		replyFunc: func(input llm.MessageInput) (string, error) {
+			callCount++
+			if callCount <= 2 {
+				return `{"tool":"fail_tool","args":{"q":"same"}}`, nil
+			}
+			return `{"final":"done","confidence":0.9}`, nil
+		},
+	}
+
+	a := New(nil, responder, reg, "")
+	res := a.Execute(context.Background(), llm.MessageInput{Text: "loop-safe retry"})
+	if res.Error != nil {
+		t.Fatalf("unexpected agent error: %v", res.Error)
+	}
+	if execCount != 1 {
+		t.Fatalf("expected only one actual execution for repeated failed signature, got %d", execCount)
+	}
+	if len(res.ToolCalls) != 2 {
+		t.Fatalf("expected two selected tool calls, got %d", len(res.ToolCalls))
+	}
+	if res.ToolCalls[1].Status != "blocked" {
+		t.Fatalf("expected second repeated call to be blocked, got %s", res.ToolCalls[1].Status)
+	}
+	if !strings.Contains(strings.ToLower(res.ToolCalls[1].Error), "repeated failed tool call") {
+		t.Fatalf("expected repeated-failure error detail, got %q", res.ToolCalls[1].Error)
+	}
+}
+
 func TestAgent_Execute_ToolCall_Markdown(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&mockTool{

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dwizi/agent-runtime/internal/agent"
 	"github.com/dwizi/agent-runtime/internal/orchestrator"
 	"github.com/dwizi/agent-runtime/internal/qmd"
 	"github.com/dwizi/agent-runtime/internal/store"
@@ -240,6 +241,7 @@ func TestCreateObjectiveTool_Execute(t *testing.T) {
 	tool := NewCreateObjectiveTool(mockStore)
 	ctx := context.WithValue(context.Background(), ContextKeyRecord, store.ContextRecord{WorkspaceID: "ws-1", ID: "ctx-1"})
 	ctx = context.WithValue(ctx, ContextKeyInput, MessageInput{Text: "monitor this"})
+	ctx = agent.WithSensitiveToolApproval(ctx)
 
 	out, err := tool.Execute(ctx, json.RawMessage(`{"title":"Watch spam","prompt":"Track repeated spam","active":true}`))
 	if err != nil {
@@ -265,8 +267,10 @@ func TestUpdateObjectiveTool_Execute(t *testing.T) {
 		},
 	}
 	tool := NewUpdateObjectiveTool(mockStore)
+	ctx := context.WithValue(context.Background(), ContextKeyInput, MessageInput{Text: "update"})
+	ctx = agent.WithSensitiveToolApproval(ctx)
 
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"objective_id":"obj-1","active":false}`))
+	out, err := tool.Execute(ctx, json.RawMessage(`{"objective_id":"obj-1","active":false}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -290,8 +294,10 @@ func TestUpdateTaskTool_Close(t *testing.T) {
 		},
 	}
 	tool := NewUpdateTaskTool(mockStore)
+	ctx := context.WithValue(context.Background(), ContextKeyInput, MessageInput{Text: "close"})
+	ctx = agent.WithSensitiveToolApproval(ctx)
 
-	out, err := tool.Execute(context.Background(), json.RawMessage(`{"task_id":"task-1","status":"closed","summary":"resolved"}`))
+	out, err := tool.Execute(ctx, json.RawMessage(`{"task_id":"task-1","status":"closed","summary":"resolved"}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -305,7 +311,7 @@ func TestUpdateTaskTool_Close(t *testing.T) {
 
 func TestRunActionTool_ValidateArgsRejectsPlaceholderValues(t *testing.T) {
 	tool := NewRunActionTool(&MockStore{}, nil)
-	err := tool.ValidateArgs(json.RawMessage(`{"type":"run_command","target":"grep","summary":"extract headlines","payload":{"args":["-nE","<h1|<h2","PATH_AL_HTML"]}}`))
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"run_command","target":"grep","summary":"extract headlines","payload":{"args":["-nE","<h1|<h2","FILE_PATH"]}}`))
 	if err == nil {
 		t.Fatal("expected placeholder args validation error")
 	}

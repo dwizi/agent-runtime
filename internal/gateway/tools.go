@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dwizi/agent-runtime/internal/agent"
 	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/agenterr"
 	"github.com/dwizi/agent-runtime/internal/orchestrator"
 	"github.com/dwizi/agent-runtime/internal/qmd"
 	"github.com/dwizi/agent-runtime/internal/store"
@@ -430,35 +432,17 @@ func (t *RunActionTool) ValidateArgs(rawArgs json.RawMessage) error {
 	switch actionType {
 	case "run_command", "send_email", "webhook":
 	default:
-		return fmt.Errorf("type must be run_command, send_email, or webhook")
+		return fmt.Errorf("%w: type must be run_command, send_email, or webhook", agenterr.ErrToolInvalidArgs)
 	}
 
 	if actionType == "run_command" {
-		target := strings.TrimSpace(args.Target)
-		if target == "" {
-			return fmt.Errorf("target is required for run_command")
-		}
-		if looksLikePlaceholderValue(target) {
-			return fmt.Errorf("target contains a placeholder value; use a concrete command")
-		}
-		if command := strings.TrimSpace(runActionPayloadString(args.Payload, "command")); command != "" && looksLikePlaceholderValue(command) {
-			return fmt.Errorf("payload.command contains a placeholder value; use a concrete command")
-		}
-		if rawArgs, ok := runActionPayloadValue(args.Payload, "args"); ok {
-			parsedArgs, err := runActionParseArgs(rawArgs)
-			if err != nil {
-				return fmt.Errorf("payload.args is invalid: %w", err)
-			}
-			for _, value := range parsedArgs {
-				if looksLikePlaceholderValue(value) {
-					return fmt.Errorf("payload.args contains placeholder value %q; use a concrete path or argument", value)
-				}
-			}
+		if err := validateRunCommandPreflight(args.Target, args.Payload); err != nil {
+			return err
 		}
 	}
 
 	if actionType == "webhook" && strings.TrimSpace(args.Target) == "" {
-		return fmt.Errorf("target is required for webhook")
+		return fmt.Errorf("%w: target is required for webhook", agenterr.ErrToolInvalidArgs)
 	}
 	return nil
 }
@@ -472,6 +456,9 @@ func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (s
 	}
 	if err := strictDecodeArgs(rawArgs, &args); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	if err := t.ValidateArgs(rawArgs); err != nil {
+		return "", err
 	}
 
 	record, ok := ctx.Value(ContextKeyRecord).(store.ContextRecord)
@@ -1194,21 +1181,18 @@ func containsAnyKeyword(haystack string, needles ...string) bool {
 }
 
 func checkAutoApproval(ctx context.Context, store Store) error {
+	_ = store
 	input, ok := ctx.Value(ContextKeyInput).(MessageInput)
 	if !ok {
-		return fmt.Errorf("internal error: input context missing")
+		return fmt.Errorf("%w: input context missing", agenterr.ErrAccessDenied)
 	}
 	if input.FromUserID == "system:task-worker" {
 		return nil
 	}
-	identity, err := store.LookupUserIdentity(ctx, input.Connector, input.FromUserID)
-	if err != nil {
-		return fmt.Errorf("access denied")
-	}
-	if identity.Role == "admin" || identity.Role == "overlord" {
+	if agent.HasSensitiveToolApproval(ctx) {
 		return nil
 	}
-	return fmt.Errorf("admin role required")
+	return fmt.Errorf("%w: %w", agenterr.ErrApprovalRequired, agenterr.ErrAdminRole)
 }
 
 func looksLikePlaceholderValue(value string) bool {
@@ -1310,6 +1294,60 @@ func runActionParseArgs(value any) ([]string, error) {
 		}
 		return strings.Fields(trimmed), nil
 	default:
-		return nil, fmt.Errorf("unsupported args payload")
+		return nil, fmt.Errorf("%w: unsupported args payload", agenterr.ErrToolInvalidArgs)
 	}
+}
+
+func validateRunCommandPreflight(target string, payload map[string]any) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("%w: target is required for run_command", agenterr.ErrToolInvalidArgs)
+	}
+	if looksLikePlaceholderValue(target) {
+		return fmt.Errorf("%w: target contains a placeholder value; use a concrete command", agenterr.ErrToolPreflight)
+	}
+	if strings.Contains(target, "/") || strings.Contains(target, "\\") || strings.ContainsAny(target, " \t\r\n") {
+		return fmt.Errorf("%w: target must be a bare executable name", agenterr.ErrToolPreflight)
+	}
+
+	if command := strings.TrimSpace(runActionPayloadString(payload, "command")); command != "" {
+		if looksLikePlaceholderValue(command) {
+			return fmt.Errorf("%w: payload.command contains a placeholder value; use a concrete command", agenterr.ErrToolPreflight)
+		}
+		commandParts := strings.Fields(command)
+		if len(commandParts) > 0 {
+			commandExec := strings.TrimSpace(commandParts[0])
+			if strings.Contains(commandExec, "/") || strings.Contains(commandExec, "\\") {
+				return fmt.Errorf("%w: payload.command must use a bare executable name", agenterr.ErrToolPreflight)
+			}
+			if !strings.EqualFold(commandExec, target) {
+				return fmt.Errorf("%w: payload.command executable must match target", agenterr.ErrToolPreflight)
+			}
+		}
+	}
+
+	if rawArgs, ok := runActionPayloadValue(payload, "args"); ok {
+		parsedArgs, err := runActionParseArgs(rawArgs)
+		if err != nil {
+			return fmt.Errorf("%w: payload.args is invalid: %w", agenterr.ErrToolInvalidArgs, err)
+		}
+		if len(parsedArgs) > 32 {
+			return fmt.Errorf("%w: too many command args", agenterr.ErrToolPreflight)
+		}
+		for _, value := range parsedArgs {
+			if looksLikePlaceholderValue(value) {
+				return fmt.Errorf("%w: payload.args contains placeholder value %q; use concrete args", agenterr.ErrToolPreflight, value)
+			}
+			if len(value) > 512 {
+				return fmt.Errorf("%w: command arg exceeds size limit", agenterr.ErrToolPreflight)
+			}
+		}
+	}
+
+	if cwd := strings.TrimSpace(runActionPayloadString(payload, "cwd")); cwd != "" {
+		if looksLikePlaceholderValue(cwd) {
+			return fmt.Errorf("%w: payload.cwd contains placeholder value; use a concrete path", agenterr.ErrToolPreflight)
+		}
+	}
+	return nil
 }

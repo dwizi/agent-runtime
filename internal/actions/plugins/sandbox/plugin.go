@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/agenterr"
 	"github.com/dwizi/agent-runtime/internal/store"
 )
 
@@ -77,14 +78,14 @@ func (p *Plugin) Execute(ctx context.Context, approval store.ActionApproval) (ex
 	}
 	command, args, err := parseCommand(approval)
 	if err != nil {
-		return executor.Result{}, err
+		return executor.Result{}, fmt.Errorf("%w: %v", agenterr.ErrToolInvalidArgs, err)
 	}
 	if !p.isAllowed(command) {
-		return executor.Result{}, fmt.Errorf("command %q is not allowed", command)
+		return executor.Result{}, fmt.Errorf("%w: command %q", agenterr.ErrToolNotAllowed, command)
 	}
 	workdir, err := p.resolveWorkingDir(approval)
 	if err != nil {
-		return executor.Result{}, err
+		return executor.Result{}, fmt.Errorf("%w: %v", agenterr.ErrToolPreflight, err)
 	}
 	runCtx, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
@@ -112,7 +113,7 @@ func (p *Plugin) isAllowed(command string) bool {
 func (p *Plugin) resolveWorkingDir(approval store.ActionApproval) (string, error) {
 	workspaceRoot := filepath.Clean(filepath.Join(p.workspaceRoot, approval.WorkspaceID))
 	if strings.TrimSpace(approval.WorkspaceID) == "" {
-		return "", fmt.Errorf("workspace id is required for sandbox command")
+		return "", fmt.Errorf("%w: workspace id is required for sandbox command", agenterr.ErrToolInvalidArgs)
 	}
 	cwd := getString(approval.Payload, "cwd")
 	if strings.TrimSpace(cwd) == "" {
@@ -125,11 +126,11 @@ func (p *Plugin) resolveWorkingDir(approval store.ActionApproval) (string, error
 		resolved = filepath.Clean(filepath.Join(workspaceRoot, cwd))
 	}
 	if !isWithin(resolved, workspaceRoot) {
-		return "", fmt.Errorf("cwd escapes workspace boundary")
+		return "", fmt.Errorf("%w: cwd escapes workspace boundary", agenterr.ErrToolPreflight)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("cwd does not exist")
+		return "", fmt.Errorf("%w: cwd does not exist", agenterr.ErrToolPreflight)
 	}
 	return resolved, nil
 }
@@ -155,17 +156,17 @@ func parseCommand(approval store.ActionApproval) (string, []string, error) {
 		args = append(args, payloadArgs...)
 	}
 	if command == "" {
-		return "", nil, fmt.Errorf("command action requires target or payload.command")
+		return "", nil, fmt.Errorf("%w: command action requires target or payload.command", agenterr.ErrToolInvalidArgs)
 	}
 	if strings.Contains(command, "/") || strings.Contains(command, "\\") || strings.ContainsAny(command, " \t\r\n") {
-		return "", nil, fmt.Errorf("command must be a bare executable name")
+		return "", nil, fmt.Errorf("%w: command must be a bare executable name", agenterr.ErrToolInvalidArgs)
 	}
 	if len(args) > 32 {
-		return "", nil, fmt.Errorf("too many arguments")
+		return "", nil, fmt.Errorf("%w: too many arguments", agenterr.ErrToolInvalidArgs)
 	}
 	for _, arg := range args {
 		if len(arg) > 512 {
-			return "", nil, fmt.Errorf("argument exceeds limit")
+			return "", nil, fmt.Errorf("%w: argument exceeds limit", agenterr.ErrToolInvalidArgs)
 		}
 	}
 	return command, args, nil

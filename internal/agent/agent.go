@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/dwizi/agent-runtime/internal/agent/tools"
+	"github.com/dwizi/agent-runtime/internal/agenterr"
 	"github.com/dwizi/agent-runtime/internal/llm"
 )
 
@@ -91,6 +93,11 @@ func WithSensitiveToolApproval(ctx context.Context) context.Context {
 		ctx = context.Background()
 	}
 	return context.WithValue(ctx, sensitiveToolApprovalKey, true)
+}
+
+// HasSensitiveToolApproval reports whether the context contains a sensitive-tool approval token.
+func HasSensitiveToolApproval(ctx context.Context) bool {
+	return hasSensitiveToolApproval(ctx)
 }
 
 func (a *Agent) SetDefaultPolicy(policy Policy) {
@@ -181,6 +188,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 
 	toolCalls := 0
 	toolSteps := make([]loopToolStep, 0, maxSteps)
+	failedSignatures := map[string]int{}
 	for step := 1; step <= maxSteps; step++ {
 		result.Steps = step
 		llmInput := input
@@ -231,6 +239,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 		toolName := decision.ToolName
 		toolArgs := decision.ToolArgs
 		appendTrace("decision.tool", fmt.Sprintf("model selected tool %s", toolName))
+		toolSig := loopToolSignature(toolName, toolArgs)
 		toolCallIndex := len(result.ToolCalls)
 		result.ToolCalls = append(result.ToolCalls, ToolCall{
 			ToolName: strings.TrimSpace(toolName),
@@ -317,6 +326,20 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			appendTrace("policy.quota", "autonomous task quota accepted")
 		}
 
+		if failedSignatures[toolSig] > 0 {
+			reason := "repeated failed tool call with unchanged args; choose a different approach"
+			appendTrace("policy.retry_blocked", reason)
+			result.ToolCalls[toolCallIndex].Status = "blocked"
+			result.ToolCalls[toolCallIndex].Error = reason
+			toolSteps = append(toolSteps, loopToolStep{
+				ToolName:   toolName,
+				ToolArgs:   compactLoopText(string(toolArgs), 500),
+				ToolStatus: "blocked",
+				ToolError:  reason,
+			})
+			continue
+		}
+
 		output, err := a.registry.ExecuteTool(ctx, toolName, toolArgs)
 		toolCalls++
 		result.ActionTaken = true
@@ -342,6 +365,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 				ToolStatus: "failed",
 				ToolError:  errText,
 			})
+			failedSignatures[toolSig]++
 			continue
 		}
 
@@ -356,6 +380,7 @@ func (a *Agent) Execute(ctx context.Context, input llm.MessageInput) Result {
 			ToolStatus: "succeeded",
 			ToolOutput: compactLoopText(output, 1000),
 		})
+		delete(failedSignatures, toolSig)
 	}
 
 	result.Blocked = true
@@ -623,6 +648,9 @@ func isApprovalRequiredToolError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, agenterr.ErrApprovalRequired) {
+		return true
+	}
 	lower := strings.ToLower(strings.TrimSpace(err.Error()))
 	if lower == "" {
 		return false
@@ -630,6 +658,12 @@ func isApprovalRequiredToolError(err error) bool {
 	return strings.Contains(lower, "approval required") ||
 		strings.Contains(lower, "admin role required") ||
 		strings.Contains(lower, "explicit approval")
+}
+
+func loopToolSignature(name string, args json.RawMessage) string {
+	toolName := strings.ToLower(strings.TrimSpace(name))
+	normalizedArgs := compactLoopText(string(args), 2000)
+	return toolName + "|" + normalizedArgs
 }
 
 func (a *Agent) resolvePolicy(ctx context.Context, input llm.MessageInput) Policy {
