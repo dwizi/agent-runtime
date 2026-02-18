@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/externalcmd"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/sandbox"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/smtp"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/webhook"
@@ -20,6 +21,7 @@ import (
 	"github.com/dwizi/agent-runtime/internal/connectors/discord"
 	"github.com/dwizi/agent-runtime/internal/connectors/imap"
 	"github.com/dwizi/agent-runtime/internal/connectors/telegram"
+	"github.com/dwizi/agent-runtime/internal/extplugins"
 	"github.com/dwizi/agent-runtime/internal/gateway"
 	"github.com/dwizi/agent-runtime/internal/heartbeat"
 	"github.com/dwizi/agent-runtime/internal/httpapi"
@@ -29,6 +31,7 @@ import (
 	"github.com/dwizi/agent-runtime/internal/llm/openai"
 	"github.com/dwizi/agent-runtime/internal/llm/promptpolicy"
 	"github.com/dwizi/agent-runtime/internal/llm/safety"
+	"github.com/dwizi/agent-runtime/internal/mcp"
 	"github.com/dwizi/agent-runtime/internal/orchestrator"
 	"github.com/dwizi/agent-runtime/internal/qmd"
 	"github.com/dwizi/agent-runtime/internal/scheduler"
@@ -42,6 +45,9 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	}
 	if err := os.MkdirAll(cfg.WorkspaceRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create workspace root: %w", err)
+	}
+	if err := os.MkdirAll(cfg.ExtPluginCacheDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create external plugin cache dir: %w", err)
 	}
 
 	sqlStore, err := store.New(cfg.DBPath)
@@ -83,7 +89,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		heartbeatRegistry.Beat("qmd", "qmd service initialized")
 	}
 
-	plugins := []executor.Plugin{
+	actionPlugins := []executor.Plugin{
 		webhook.New(15 * time.Second),
 		smtp.New(smtp.Config{
 			Host:     cfg.SMTPHost,
@@ -94,7 +100,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}),
 	}
 	if cfg.SandboxEnabled {
-		plugins = append(plugins, sandbox.New(sandbox.Config{
+		actionPlugins = append(actionPlugins, sandbox.New(sandbox.Config{
 			Enabled:         true,
 			WorkspaceRoot:   cfg.WorkspaceRoot,
 			AllowedCommands: parseCSVList(cfg.SandboxAllowedCommandsCSV),
@@ -104,7 +110,73 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			MaxOutputBytes:  cfg.SandboxMaxOutputBytes,
 		}))
 	}
-	actionExecutor := executor.NewRegistry(plugins...)
+
+	externalPluginConfig, err := extplugins.LoadConfig(cfg.ExtPluginsConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("load external plugins config: %w", err)
+	}
+	resolvedExternalPlugins, err := extplugins.ResolveExternalPlugins(cfg.ExtPluginsConfigPath, externalPluginConfig.ExternalPlugins)
+	if err != nil {
+		return nil, fmt.Errorf("resolve external plugins: %w", err)
+	}
+	for _, resolved := range resolvedExternalPlugins {
+		timeout := time.Duration(resolved.Manifest.Runtime.TimeoutSeconds) * time.Second
+		uvRuntime, uvErr := extplugins.BuildUVRuntime(
+			resolved.ID,
+			resolved.BaseDir,
+			cfg.ExtPluginCacheDir,
+			resolved.Manifest.Runtime.Isolation,
+			cfg.ExtPluginWarmOnBootstrap,
+		)
+		if uvErr != nil {
+			return nil, fmt.Errorf("configure external plugin %s uv runtime: %w", resolved.ID, uvErr)
+		}
+		var uvConfig *externalcmd.UVConfig
+		if uvRuntime.Enabled {
+			uvConfig = &externalcmd.UVConfig{
+				ProjectDir:      uvRuntime.ProjectDir,
+				CacheDir:        uvRuntime.CacheDir,
+				VenvDir:         uvRuntime.VenvDir,
+				WarmOnBootstrap: uvRuntime.WarmOnBootstrap,
+				Locked:          uvRuntime.Locked,
+			}
+		}
+		plugin, createErr := externalcmd.New(externalcmd.Config{
+			ID:            resolved.ID,
+			PluginKey:     resolved.Manifest.PluginKey,
+			BaseDir:       resolved.BaseDir,
+			Command:       resolved.Manifest.Runtime.Command,
+			Args:          resolved.Manifest.Runtime.Args,
+			Env:           resolved.Manifest.Runtime.Env,
+			ActionTypes:   resolved.Manifest.ActionTypes,
+			Timeout:       timeout,
+			RunnerCommand: cfg.SandboxRunnerCommand,
+			RunnerArgs:    parseShellArgs(cfg.SandboxRunnerArgs),
+			UV:            uvConfig,
+		})
+		if createErr != nil {
+			return nil, fmt.Errorf("configure external plugin %s: %w", resolved.ID, createErr)
+		}
+		if cfg.ExtPluginWarmOnBootstrap {
+			if warmErr := plugin.Warmup(context.Background()); warmErr != nil {
+				logger.Warn(
+					"external plugin warmup failed",
+					"plugin_id", resolved.ID,
+					"error", warmErr,
+				)
+			}
+		}
+		actionPlugins = append(actionPlugins, plugin)
+		logger.Info(
+			"external executable plugin enabled",
+			"plugin_id", resolved.ID,
+			"manifest", resolved.ManifestPath,
+			"action_types", strings.Join(resolved.Manifest.ActionTypes, ","),
+			"isolation_mode", resolved.Manifest.Runtime.Isolation.Mode,
+		)
+	}
+
+	actionExecutor := executor.NewRegistry(actionPlugins...)
 	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor, cfg.WorkspaceRoot, logger.With("component", "gateway"))
 	commandGateway.SetTriageEnabled(cfg.TriageEnabled)
 	if cfg.AgentMaxTurnDurationSec > 0 {
@@ -112,6 +184,31 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 	}
 	commandGateway.SetAgentGroundingPolicy(cfg.AgentGroundingFirstStep, cfg.AgentGroundingEveryStep)
 	commandGateway.SetSensitiveApprovalTTL(time.Duration(cfg.AgentSensitiveApprovalTTLSeconds) * time.Second)
+
+	mcpManager, err := mcp.NewManager(mcp.ManagerConfig{
+		ConfigPath:             cfg.MCPConfigPath,
+		WorkspaceRoot:          cfg.WorkspaceRoot,
+		WorkspaceConfigRelPath: cfg.MCPWorkspaceConfigRelPath,
+		DefaultRefreshSeconds:  cfg.MCPRefreshSeconds,
+		DefaultHTTPTimeoutSec:  cfg.MCPHTTPTimeoutSec,
+	}, logger.With("component", "mcp"))
+	if err != nil {
+		return nil, fmt.Errorf("configure mcp manager: %w", err)
+	}
+	commandGateway.SetMCPRuntime(mcpManager)
+	mcpManager.SetToolUpdateHandler(func(update mcp.ToolUpdate) {
+		namespace := "mcp:" + strings.ToLower(strings.TrimSpace(update.ServerID))
+		dynamicTools := gateway.BuildMCPDynamicTools(func() gateway.MCPRuntime { return mcpManager }, update.Tools)
+		commandGateway.Registry().ReplaceNamespace(namespace, dynamicTools)
+	})
+	mcpManager.Bootstrap(context.Background())
+	mcpSummary := mcpManager.Summary()
+	logger.Info(
+		"mcp bootstrap complete",
+		"enabled_servers", mcpSummary.EnabledServers,
+		"healthy_servers", mcpSummary.HealthyServers,
+		"degraded_servers", mcpSummary.DegradedServers,
+	)
 
 	// Load Reasoning Prompt
 	if cfg.ReasoningPromptFile != "" {
@@ -281,6 +378,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		Store:               sqlStore,
 		Engine:              engine,
 		Gateway:             commandGateway,
+		MCPStatusProvider:   mcpManager,
 		Logger:              logger.With("component", "api"),
 		Heartbeat:           heartbeatRegistry,
 		HeartbeatStaleAfter: time.Duration(cfg.HeartbeatStaleSec) * time.Second,
@@ -395,6 +493,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			scheduler:        schedulerService,
 			qmd:              qmdService,
 			connectors:       connectorList,
+			mcp:              mcpManager,
 			heartbeat:        heartbeatRegistry,
 			heartbeatMonitor: heartbeatMonitor,
 		}, nil
@@ -410,5 +509,6 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		scheduler:  schedulerService,
 		qmd:        qmdService,
 		connectors: connectorList,
+		mcp:        mcpManager,
 	}, nil
 }

@@ -27,10 +27,14 @@ func (r *router) handleHeartbeat(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *router) handleInfo(w http.ResponseWriter, req *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"name":        "agent-runtime",
 		"environment": r.deps.Config.Environment,
 		"public_host": r.deps.Config.PublicHost,
 		"admin_host":  r.deps.Config.AdminHost,
-	})
+	}
+	if r.deps.MCPStatusProvider != nil {
+		payload["mcp"] = r.deps.MCPStatusProvider.Summary()
+	}
+	writeJSON(w, http.StatusOK, payload)
 }

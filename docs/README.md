@@ -14,6 +14,8 @@ This index is organized by audience.
 2. [Configuration](configuration.md)
 3. [Operations](operations.md)
 4. [Production Checklist](production-checklist.md)
+5. [External Plugins](../ext/plugins/README.md)
+6. [MCP Servers](../ext/mcp/README.md)
 
 ## API and Architecture
 

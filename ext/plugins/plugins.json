@@ -1,0 +1,14 @@
+{
+  "external_plugins": [
+    {
+      "id": "tinyfish",
+      "enabled": true,
+      "manifest": "tinyfish/plugin.json"
+    },
+    {
+      "id": "resend",
+      "enabled": true,
+      "manifest": "resend/plugin.json"
+    }
+  ]
+}

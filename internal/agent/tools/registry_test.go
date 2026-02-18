@@ -63,9 +63,9 @@ func TestRegistry_ExecuteTool(t *testing.T) {
 func TestRegistry_DescribeAll(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&MockTool{
-		NameVal:     "search",
-		DescVal:     "searches docs",
-		SchemaVal:      `{"query": "string"}`,
+		NameVal:   "search",
+		DescVal:   "searches docs",
+		SchemaVal: `{"query": "string"}`,
 	})
 
 	desc := reg.DescribeAll()
@@ -74,5 +74,50 @@ func TestRegistry_DescribeAll(t *testing.T) {
 	}
 	if !strings.Contains(desc, "Schema: {\"query\": \"string\"}") {
 		t.Errorf("description missing schema: %s", desc)
+	}
+}
+
+func TestRegistry_ReplaceNamespace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&MockTool{NameVal: "static_tool"})
+	reg.ReplaceNamespace("mcp:test", []Tool{
+		&MockTool{NameVal: "mcp_test__one"},
+		&MockTool{NameVal: "mcp_test__two"},
+	})
+
+	list := reg.List()
+	if len(list) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(list))
+	}
+
+	reg.ReplaceNamespace("mcp:test", []Tool{
+		&MockTool{NameVal: "mcp_test__three"},
+	})
+	if _, ok := reg.Get("mcp_test__one"); ok {
+		t.Fatal("expected old namespaced tool to be removed")
+	}
+	if _, ok := reg.Get("mcp_test__two"); ok {
+		t.Fatal("expected old namespaced tool to be removed")
+	}
+	if _, ok := reg.Get("mcp_test__three"); !ok {
+		t.Fatal("expected replacement namespaced tool")
+	}
+	if _, ok := reg.Get("static_tool"); !ok {
+		t.Fatal("expected static tool to remain")
+	}
+}
+
+func TestRegistry_RemoveNamespace(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(&MockTool{NameVal: "static_tool"})
+	reg.ReplaceNamespace("mcp:test", []Tool{
+		&MockTool{NameVal: "mcp_test__one"},
+	})
+	reg.RemoveNamespace("mcp:test")
+	if _, ok := reg.Get("mcp_test__one"); ok {
+		t.Fatal("expected namespaced tool removed")
+	}
+	if _, ok := reg.Get("static_tool"); !ok {
+		t.Fatal("expected static tool preserved")
 	}
 }

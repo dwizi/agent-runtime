@@ -64,6 +64,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_SMTP_USERNAME", "")
 	t.Setenv("AGENT_RUNTIME_SMTP_PASSWORD", "")
 	t.Setenv("AGENT_RUNTIME_SMTP_FROM", "")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR", "")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ENABLED", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND", "")
@@ -262,6 +265,27 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SMTPFrom != "" {
 		t.Fatalf("expected default smtp from empty, got %s", cfg.SMTPFrom)
 	}
+	if cfg.ExtPluginsConfigPath != "ext/plugins/plugins.json" {
+		t.Fatalf("expected default ext plugin config path ext/plugins/plugins.json, got %s", cfg.ExtPluginsConfigPath)
+	}
+	if cfg.ExtPluginCacheDir != filepath.Join("/data", "agent-runtime", "ext-plugin-cache") {
+		t.Fatalf("expected default ext plugin cache dir /data/agent-runtime/ext-plugin-cache, got %s", cfg.ExtPluginCacheDir)
+	}
+	if !cfg.ExtPluginWarmOnBootstrap {
+		t.Fatal("expected default ext plugin warm_on_bootstrap true")
+	}
+	if cfg.MCPConfigPath != "ext/mcp/servers.json" {
+		t.Fatalf("expected default mcp config path ext/mcp/servers.json, got %s", cfg.MCPConfigPath)
+	}
+	if cfg.MCPWorkspaceConfigRelPath != "context/mcp/servers.json" {
+		t.Fatalf("expected default mcp workspace config rel path context/mcp/servers.json, got %s", cfg.MCPWorkspaceConfigRelPath)
+	}
+	if cfg.MCPRefreshSeconds != 120 {
+		t.Fatalf("expected default mcp refresh seconds 120, got %d", cfg.MCPRefreshSeconds)
+	}
+	if cfg.MCPHTTPTimeoutSec != 30 {
+		t.Fatalf("expected default mcp http timeout seconds 30, got %d", cfg.MCPHTTPTimeoutSec)
+	}
 	if !cfg.SandboxEnabled {
 		t.Fatal("expected sandbox enabled by default")
 	}
@@ -435,6 +459,13 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_SMTP_USERNAME", "bot@example.com")
 	t.Setenv("AGENT_RUNTIME_SMTP_PASSWORD", "secret")
 	t.Setenv("AGENT_RUNTIME_SMTP_FROM", "Agent Runtime Bot <bot@example.com>")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "/etc/agent-runtime/plugins.json")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR", "/var/agent-runtime/ext-plugin-cache")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP", "false")
+	t.Setenv("AGENT_RUNTIME_MCP_CONFIG", "/etc/agent-runtime/mcp-servers.json")
+	t.Setenv("AGENT_RUNTIME_MCP_WORKSPACE_CONFIG_REL_PATH", "runtime/mcp/workspace.json")
+	t.Setenv("AGENT_RUNTIME_MCP_REFRESH_SECONDS", "33")
+	t.Setenv("AGENT_RUNTIME_MCP_HTTP_TIMEOUT_SECONDS", "44")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ENABLED", "false")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "curl,git,rg")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND", "just-bash")
@@ -647,6 +678,27 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SMTPFrom != "Agent Runtime Bot <bot@example.com>" {
 		t.Fatalf("expected overridden smtp from, got %s", cfg.SMTPFrom)
+	}
+	if cfg.ExtPluginsConfigPath != "/etc/agent-runtime/plugins.json" {
+		t.Fatalf("expected overridden ext plugins config path, got %s", cfg.ExtPluginsConfigPath)
+	}
+	if cfg.ExtPluginCacheDir != "/var/agent-runtime/ext-plugin-cache" {
+		t.Fatalf("expected overridden ext plugin cache dir, got %s", cfg.ExtPluginCacheDir)
+	}
+	if cfg.ExtPluginWarmOnBootstrap {
+		t.Fatal("expected ext plugin warm_on_bootstrap false")
+	}
+	if cfg.MCPConfigPath != "/etc/agent-runtime/mcp-servers.json" {
+		t.Fatalf("expected overridden mcp config path, got %s", cfg.MCPConfigPath)
+	}
+	if cfg.MCPWorkspaceConfigRelPath != "runtime/mcp/workspace.json" {
+		t.Fatalf("expected overridden mcp workspace config rel path, got %s", cfg.MCPWorkspaceConfigRelPath)
+	}
+	if cfg.MCPRefreshSeconds != 33 {
+		t.Fatalf("expected overridden mcp refresh seconds, got %d", cfg.MCPRefreshSeconds)
+	}
+	if cfg.MCPHTTPTimeoutSec != 44 {
+		t.Fatalf("expected overridden mcp http timeout seconds, got %d", cfg.MCPHTTPTimeoutSec)
 	}
 	if cfg.SandboxEnabled {
 		t.Fatal("expected sandbox enabled false")

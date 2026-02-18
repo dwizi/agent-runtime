@@ -18,6 +18,14 @@ Day-2 tasks for maintaining Agent Runtime safely.
 5. Review task execution lifecycle:
    - `sqlite3 /data/agent-runtime/meta.sqlite "SELECT status, count(*) FROM tasks GROUP BY status ORDER BY status;"`
    - task outputs under `/data/workspaces/<ws>/tasks/YYYY/MM/DD/<task-id>.md`
+6. Review external plugin health:
+   - check startup logs for `external executable plugin enabled`
+   - check startup warnings for `external plugin warmup failed`
+   - verify uv cache directory contents under `/data/agent-runtime/ext-plugin-cache`
+7. Review MCP health:
+   - `curl -fsS http://localhost/api/v1/info` and inspect `mcp.enabled_servers`, `mcp.healthy_servers`, `mcp.degraded_servers`
+   - check startup/refresh logs for `mcp discovery succeeded` and `mcp discovery failed`
+   - verify workspace overrides only reference existing global server ids under `/data/workspaces/<ws>/context/mcp/servers.json`
 
 ## Admin/TUI Controls
 
@@ -59,6 +67,7 @@ When LLM proposes external actions:
 Guideline:
 - approve only actions aligned with workspace policy and role scope
 - deny with reason for audit clarity
+- for `agentic_web` / `resend_email`, verify target URL/recipient and data sensitivity before approval
 
 ## Message Routing Overrides
 

@@ -1,0 +1,13 @@
+{
+  "schema_version": "v1",
+  "name": "Echo Example",
+  "description": "Minimal executable plugin example for agent-runtime.",
+  "plugin_key": "external_echo_example",
+  "action_types": ["external_echo"],
+  "runtime": {
+    "command": "./run.sh",
+    "args": [],
+    "env": {},
+    "timeout_seconds": 30
+  }
+}

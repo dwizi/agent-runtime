@@ -1,0 +1,6 @@
+[project]
+name = "agent-runtime-plugin-resend"
+version = "0.1.0"
+description = "Resend external plugin for agent-runtime"
+requires-python = ">=3.11"
+dependencies = []

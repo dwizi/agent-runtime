@@ -78,6 +78,7 @@ type Service struct {
 	sensitiveApprovals      map[string]time.Time
 	sensitiveApprovalTTL    time.Duration
 	logger                  *slog.Logger
+	mcpRuntime              MCPRuntime
 }
 
 type MessageInput struct {
@@ -101,6 +102,18 @@ func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionE
 	if logger == nil {
 		logger = slog.Default()
 	}
+	service := &Service{
+		store:                   store,
+		engine:                  engine,
+		retriever:               retriever,
+		actionExecutor:          actionExecutor,
+		workspaceRoot:           workspaceRoot,
+		agentGroundingFirstStep: true,
+		triageEnabled:           true,
+		sensitiveApprovals:      map[string]time.Time{},
+		sensitiveApprovalTTL:    10 * time.Minute,
+		logger:                  logger,
+	}
 	registry := tools.NewRegistry()
 	registry.Register(NewSearchTool(retriever))
 	registry.Register(NewOpenKnowledgeDocumentTool(retriever))
@@ -122,20 +135,14 @@ func New(store Store, engine Engine, retriever Retriever, actionExecutor ActionE
 	registry.Register(NewLookupTaskTool(store))
 	registry.Register(NewWebSearchTool(store, actionExecutor))
 	registry.Register(NewPythonCodeTool(store, actionExecutor, workspaceRoot))
-
-	return &Service{
-		store:                   store,
-		engine:                  engine,
-		retriever:               retriever,
-		actionExecutor:          actionExecutor,
-		toolRegistry:            registry,
-		workspaceRoot:           workspaceRoot,
-		agentGroundingFirstStep: true,
-		triageEnabled:           true,
-		sensitiveApprovals:      map[string]time.Time{},
-		sensitiveApprovalTTL:    10 * time.Minute,
-		logger:                  logger,
-	}
+	registry.Register(NewMCPListServersTool(func() MCPRuntime { return service.mcpRuntime }))
+	registry.Register(NewMCPListResourcesTool(func() MCPRuntime { return service.mcpRuntime }))
+	registry.Register(NewMCPReadResourceTool(func() MCPRuntime { return service.mcpRuntime }))
+	registry.Register(NewMCPListResourceTemplatesTool(func() MCPRuntime { return service.mcpRuntime }))
+	registry.Register(NewMCPListPromptsTool(func() MCPRuntime { return service.mcpRuntime }))
+	registry.Register(NewMCPGetPromptTool(func() MCPRuntime { return service.mcpRuntime }))
+	service.toolRegistry = registry
+	return service
 }
 
 func (s *Service) Registry() *tools.Registry {
@@ -144,6 +151,10 @@ func (s *Service) Registry() *tools.Registry {
 
 func (s *Service) SetTriageEnabled(enabled bool) {
 	s.triageEnabled = enabled
+}
+
+func (s *Service) SetMCPRuntime(runtime MCPRuntime) {
+	s.mcpRuntime = runtime
 }
 
 func (s *Service) SetSensitiveApprovalTTL(ttl time.Duration) {

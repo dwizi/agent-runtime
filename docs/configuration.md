@@ -12,6 +12,13 @@ This is the operator-focused environment reference.
 - `AGENT_RUNTIME_WORKSPACE_ROOT`
 - `AGENT_RUNTIME_DB_PATH`
 - `AGENT_RUNTIME_DEFAULT_CONCURRENCY`
+- `AGENT_RUNTIME_EXT_PLUGINS_CONFIG` (default: `ext/plugins/plugins.json`)
+- `AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR` (default: `${AGENT_RUNTIME_DATA_DIR}/agent-runtime/ext-plugin-cache`)
+- `AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP` (default: `true`)
+- `AGENT_RUNTIME_MCP_CONFIG` (default: `ext/mcp/servers.json`)
+- `AGENT_RUNTIME_MCP_WORKSPACE_CONFIG_REL_PATH` (default: `context/mcp/servers.json`)
+- `AGENT_RUNTIME_MCP_REFRESH_SECONDS` (default: `120`)
+- `AGENT_RUNTIME_MCP_HTTP_TIMEOUT_SECONDS` (default: `30`)
 
 ## Hosts and TLS
 
@@ -258,4 +265,42 @@ API endpoints:
 Recommended baseline:
 - keep allowlist minimal (`curl,rg,cat,ls` unless you need more)
 - use a runner wrapper for stronger isolation when available
+
+## External Plugins
+
+- `AGENT_RUNTIME_EXT_PLUGINS_CONFIG` (default: `ext/plugins/plugins.json`)
+- `AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR` (default: `/data/agent-runtime/ext-plugin-cache`)
+- `AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP` (default: `true`)
+- `AGENT_RUNTIME_TINYFISH_API_KEY` (used by `ext/plugins/tinyfish`)
+- `AGENT_RUNTIME_TINYFISH_BASE_URL` (optional override, default `https://agent.tinyfish.ai`)
+- `AGENT_RUNTIME_RESEND_API_KEY` (used by `ext/plugins/resend`)
+- `AGENT_RUNTIME_RESEND_FROM` (default sender for `resend_email`)
+- `AGENT_RUNTIME_RESEND_API_BASE` (optional override, default `https://api.resend.com`)
+
+Notes:
+- Third-party plugins under `ext/plugins/` are disabled unless explicitly enabled in the plugin config file.
+- Default config file: `ext/plugins/plugins.json`.
+- Generic executable plugins are enabled via `external_plugins[]` entries that point to a `plugin.json` manifest.
+- Manifest `runtime.command` is executed with `runtime.args`; stdin/stdout use JSON contract documented in `ext/plugins/README.md`.
+- For `runtime.isolation.mode=uv`, runtime warms and caches plugin envs under `AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR`.
+- External plugin execution reuses sandbox runner settings (`AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND`, `AGENT_RUNTIME_SANDBOX_RUNNER_ARGS`) when set.
+- Warmup failures are non-fatal at startup; execution path attempts lazy uv sync before failing the action.
+- `ext/plugins/` is reserved for external plugin assets/manifests, not runtime app code.
 - review action approvals in admin channels before execution
+
+## MCP Servers
+
+- `AGENT_RUNTIME_MCP_CONFIG` (default: `ext/mcp/servers.json`)
+- `AGENT_RUNTIME_MCP_WORKSPACE_CONFIG_REL_PATH` (default: `context/mcp/servers.json`)
+- `AGENT_RUNTIME_MCP_REFRESH_SECONDS` (default: `120`)
+- `AGENT_RUNTIME_MCP_HTTP_TIMEOUT_SECONDS` (default: `30`)
+
+Notes:
+- MCP servers are loaded from `ext/mcp/servers.json`.
+- Supported transport types: `streamable_http`, `sse`.
+- Header values support env templates such as `${AGENT_RUNTIME_MY_TOKEN}`.
+- Missing env vars for templated values invalidate that server config.
+- Workspace overrides are read from `/data/workspaces/<workspace-id>/context/mcp/servers.json`.
+- Workspace overrides are override-only for existing global server IDs; unknown IDs are ignored with warning logs.
+- MCP tool names are registered with prefix format `mcp_<server_id>__<tool_name>`.
+- Startup does not fail when a server is unreachable; status is degraded and retried on refresh.

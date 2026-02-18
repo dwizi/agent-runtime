@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -41,6 +42,32 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return r.watcher.Start(runCtx)
 		})
 	})
+	if r.mcp != nil {
+		group.Go(func() error {
+			return runMonitored(groupCtx, r.heartbeat, "mcp", 20*time.Second, func(runCtx context.Context) error {
+				return r.mcp.Start(runCtx)
+			})
+		})
+		if r.heartbeat != nil {
+			group.Go(func() error {
+				ticker := time.NewTicker(15 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-groupCtx.Done():
+						return nil
+					case <-ticker.C:
+						summary := r.mcp.Summary()
+						if summary.EnabledServers > 0 && summary.HealthyServers == 0 {
+							r.heartbeat.Degrade("mcp", "all enabled mcp servers are degraded", errors.New("all enabled mcp servers are degraded"))
+							continue
+						}
+						r.heartbeat.Beat("mcp", fmt.Sprintf("enabled=%d healthy=%d degraded=%d", summary.EnabledServers, summary.HealthyServers, summary.DegradedServers))
+					}
+				}
+			})
+		}
+	}
 	group.Go(func() error {
 		return runMonitored(groupCtx, r.heartbeat, "scheduler", 0, func(runCtx context.Context) error {
 			return r.scheduler.Start(runCtx)
@@ -80,6 +107,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 }
 
 func (r *Runtime) Close() error {
+	if r.mcp != nil {
+		_ = r.mcp.Close()
+	}
 	if r.qmd != nil {
 		r.qmd.Close()
 	}

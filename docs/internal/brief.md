@@ -43,6 +43,7 @@ No web frontend is required; operations happen through chat + TUI + API.
 - Reasoning: LLM-based agent loop with Tool-Use architecture
   - Tools: `search_knowledge_base`, `create_task`
 - Retrieval: qmd over Markdown
+- MCP integration: HTTP/SSE MCP servers exposed as native runtime tools (`mcp_<server_id>__<tool_name>`)
 - Scheduling:
   - interval-based objectives
   - markdown update event objectives
@@ -50,6 +51,10 @@ No web frontend is required; operations happen through chat + TUI + API.
   - webhook/http
   - smtp email
   - sandbox command
+  - tinyfish agentic web (official external plugin via `ext/plugins/tinyfish`)
+  - resend email (`resend_email`, official external plugin via `ext/plugins/resend`)
+  - executable third-party plugins loaded from `ext/plugins/*/plugin.json` manifests
+  - uv-isolated external plugins warmed on bootstrap and cached under `/data/agent-runtime/ext-plugin-cache`
 
 Twitter/X connector is intentionally postponed.
 
