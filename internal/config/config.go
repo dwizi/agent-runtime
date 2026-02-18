@@ -72,6 +72,12 @@ type Config struct {
 	SMTPPassword                       string
 	SMTPFrom                           string
 	ExtPluginsConfigPath               string
+	ExtPluginCacheDir                  string
+	ExtPluginWarmOnBootstrap           bool
+	MCPConfigPath                      string
+	MCPWorkspaceConfigRelPath          string
+	MCPRefreshSeconds                  int
+	MCPHTTPTimeoutSec                  int
 	SandboxEnabled                     bool
 	SandboxAllowedCommandsCSV          string
 	SandboxRunnerCommand               string
@@ -201,6 +207,12 @@ func FromEnv() Config {
 		SMTPPassword:                       os.Getenv("AGENT_RUNTIME_SMTP_PASSWORD"),
 		SMTPFrom:                           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_FROM")),
 		ExtPluginsConfigPath:               stringOrDefault("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "ext/plugins/plugins.json"),
+		ExtPluginCacheDir:                  stringOrDefault("AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR", filepath.Join(dataDir, "agent-runtime", "ext-plugin-cache")),
+		ExtPluginWarmOnBootstrap:           boolOrDefault("AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP", true),
+		MCPConfigPath:                      stringOrDefault("AGENT_RUNTIME_MCP_CONFIG", "ext/mcp/servers.json"),
+		MCPWorkspaceConfigRelPath:          stringOrDefault("AGENT_RUNTIME_MCP_WORKSPACE_CONFIG_REL_PATH", "context/mcp/servers.json"),
+		MCPRefreshSeconds:                  intOrDefault("AGENT_RUNTIME_MCP_REFRESH_SECONDS", 120),
+		MCPHTTPTimeoutSec:                  intOrDefault("AGENT_RUNTIME_MCP_HTTP_TIMEOUT_SECONDS", 30),
 		SandboxEnabled:                     boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
 		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,wget,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
 		SandboxRunnerCommand:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),

@@ -11,20 +11,14 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Tinyfish.Enabled {
-		t.Fatal("expected tinyfish disabled by default")
+	if len(cfg.ExternalPlugins) != 0 {
+		t.Fatalf("expected no plugins, got %d", len(cfg.ExternalPlugins))
 	}
 }
 
 func TestLoadConfigValid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.json")
 	content := `{
-  "tinyfish": {
-    "enabled": true,
-    "base_url": "https://agent.tinyfish.ai",
-    "api_key_env": "AGENT_RUNTIME_TINYFISH_API_KEY",
-    "timeout_seconds": 90
-  },
   "external_plugins": [
     {"id": "echo", "enabled": true, "manifest": "echo/plugin.json"}
   ]
@@ -37,18 +31,6 @@ func TestLoadConfigValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if !cfg.Tinyfish.Enabled {
-		t.Fatal("expected tinyfish enabled")
-	}
-	if cfg.Tinyfish.BaseURL != "https://agent.tinyfish.ai" {
-		t.Fatalf("unexpected base url: %s", cfg.Tinyfish.BaseURL)
-	}
-	if cfg.Tinyfish.APIKeyEnv != "AGENT_RUNTIME_TINYFISH_API_KEY" {
-		t.Fatalf("unexpected api key env: %s", cfg.Tinyfish.APIKeyEnv)
-	}
-	if cfg.Tinyfish.TimeoutSeconds != 90 {
-		t.Fatalf("unexpected timeout: %d", cfg.Tinyfish.TimeoutSeconds)
-	}
 	if len(cfg.ExternalPlugins) != 1 {
 		t.Fatalf("expected one external plugin config, got %d", len(cfg.ExternalPlugins))
 	}
@@ -58,8 +40,7 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugins.json")
 	content := `{
   "tinyfish": {
-    "enabled": true,
-    "nope": true
+    "enabled": true
   }
 }`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -96,6 +77,50 @@ func TestLoadManifestValid(t *testing.T) {
 	}
 	if manifest.Runtime.Command != "./run.sh" {
 		t.Fatalf("unexpected command: %s", manifest.Runtime.Command)
+	}
+	if manifest.Runtime.Isolation.Mode != "none" {
+		t.Fatalf("expected default isolation mode none, got %s", manifest.Runtime.Isolation.Mode)
+	}
+	if manifest.Runtime.Isolation.Project != "." {
+		t.Fatalf("expected default isolation project ., got %s", manifest.Runtime.Isolation.Project)
+	}
+}
+
+func TestLoadManifestValidIsolation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugin.json")
+	content := `{
+  "schema_version": "v1",
+  "name": "TinyFish",
+  "plugin_key": "tinyfish_agentic_web",
+  "action_types": ["agentic_web"],
+  "runtime": {
+    "command": "./run.sh",
+    "isolation": {
+      "mode": "uv",
+      "project": "python",
+      "warm_on_bootstrap": false,
+      "locked": false
+    }
+  }
+}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	manifest, err := LoadManifest(path)
+	if err != nil {
+		t.Fatalf("load manifest: %v", err)
+	}
+	if manifest.Runtime.Isolation.Mode != "uv" {
+		t.Fatalf("expected isolation mode uv, got %s", manifest.Runtime.Isolation.Mode)
+	}
+	if manifest.Runtime.Isolation.Project != "python" {
+		t.Fatalf("expected project python, got %s", manifest.Runtime.Isolation.Project)
+	}
+	if manifest.Runtime.Isolation.WarmOnBootstrapValue(true) {
+		t.Fatal("expected warm_on_bootstrap false")
+	}
+	if manifest.Runtime.Isolation.LockedValue(true) {
+		t.Fatal("expected locked false")
 	}
 }
 

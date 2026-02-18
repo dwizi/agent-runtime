@@ -119,6 +119,33 @@ Check artifacts:
 ## 5) Recommended Next Steps
 
 - Configure sandbox command allowlist for your environment.
+- Configure MCP servers in `ext/mcp/servers.json` for native MCP tool access.
+- Example:
+  ```json
+  {
+    "schema_version": "v1",
+    "servers": [
+      {
+        "id": "github",
+        "enabled": true,
+        "transport": {
+          "type": "streamable_http",
+          "endpoint": "https://mcp.example.com/mcp"
+        },
+        "http": {
+          "headers": {
+            "Authorization": "Bearer ${AGENT_RUNTIME_GITHUB_MCP_TOKEN}"
+          },
+          "timeout_seconds": 30
+        },
+        "refresh_seconds": 120
+      }
+    ]
+  }
+  ```
+- Configure official external plugins under `ext/plugins/plugins.json` (TinyFish + Resend).
+- Set external plugin secrets in `.env` (`AGENT_RUNTIME_TINYFISH_API_KEY`, `AGENT_RUNTIME_RESEND_API_KEY`, `AGENT_RUNTIME_RESEND_FROM`).
+- Keep uv plugin cache persistent (`AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR`) for faster warm restarts.
 - Configure objective/scheduler settings for recurring workloads.
 - Configure Codex publish callback if you want proactive messages back into coding tools.
 - Define system prompts/skills for your domain-specific workflows.

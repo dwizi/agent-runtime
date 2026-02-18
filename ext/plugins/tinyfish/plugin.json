@@ -1,0 +1,22 @@
+{
+  "schema_version": "v1",
+  "name": "TinyFish Agentic Web",
+  "description": "Agentic web automation using TinyFish API.",
+  "plugin_key": "tinyfish_agentic_web",
+  "action_types": ["agentic_web", "tinyfish_sync", "tinyfish_async"],
+  "runtime": {
+    "command": "./run.sh",
+    "args": [],
+    "env": {
+      "TINYFISH_API_KEY": "${AGENT_RUNTIME_TINYFISH_API_KEY}",
+      "TINYFISH_BASE_URL": "${AGENT_RUNTIME_TINYFISH_BASE_URL}"
+    },
+    "timeout_seconds": 90,
+    "isolation": {
+      "mode": "uv",
+      "project": ".",
+      "warm_on_bootstrap": true,
+      "locked": true
+    }
+  }
+}

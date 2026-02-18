@@ -9,6 +9,7 @@ import (
 	"github.com/dwizi/agent-runtime/internal/config"
 	"github.com/dwizi/agent-runtime/internal/gateway"
 	"github.com/dwizi/agent-runtime/internal/heartbeat"
+	"github.com/dwizi/agent-runtime/internal/mcp"
 	"github.com/dwizi/agent-runtime/internal/orchestrator"
 	"github.com/dwizi/agent-runtime/internal/store"
 )
@@ -17,11 +18,16 @@ type MessageGateway interface {
 	HandleMessage(ctx context.Context, input gateway.MessageInput) (gateway.MessageOutput, error)
 }
 
+type MCPStatusProvider interface {
+	Summary() mcp.Summary
+}
+
 type Dependencies struct {
 	Config              config.Config
 	Store               *store.Store
 	Engine              *orchestrator.Engine
 	Gateway             MessageGateway
+	MCPStatusProvider   MCPStatusProvider
 	Logger              *slog.Logger
 	Heartbeat           *heartbeat.Registry
 	HeartbeatStaleAfter time.Duration

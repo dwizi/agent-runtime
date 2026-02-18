@@ -42,6 +42,16 @@ Optional but recommended for connector command UX:
 - `AGENT_RUNTIME_DISCORD_COMMAND_GUILD_IDS=<guild-id-csv>` (faster slash-command visibility)
 - `AGENT_RUNTIME_DISCORD_APPLICATION_ID=<app-id>` (when automatic app id lookup is restricted)
 
+Optional for official external plugins (TinyFish + Resend):
+- `AGENT_RUNTIME_TINYFISH_API_KEY`
+- `AGENT_RUNTIME_TINYFISH_BASE_URL` (default: `https://agent.tinyfish.ai`)
+- `AGENT_RUNTIME_RESEND_API_KEY`
+- `AGENT_RUNTIME_RESEND_FROM`
+- `AGENT_RUNTIME_RESEND_API_BASE` (default: `https://api.resend.com`)
+- `AGENT_RUNTIME_EXT_PLUGINS_CONFIG` (default: `ext/plugins/plugins.json`)
+- `AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR` (default: `/data/agent-runtime/ext-plugin-cache`)
+- `AGENT_RUNTIME_EXT_PLUGIN_WARM_ON_BOOTSTRAP` (default: `true`)
+
 Then set admin API target for local TUI:
 
 - `AGENT_RUNTIME_ADMIN_API_URL=https://<ADMIN_HOST>`
@@ -60,6 +70,7 @@ What this does:
   - `./data` -> `/data` (workspaces, sqlite, task outputs)
   - `./context` -> `/context` (global SOUL, system prompt, and skills files)
 - bootstraps connector command sync (Telegram menu commands + Discord slash command upsert) if enabled
+- warms enabled uv-isolated external plugins into `AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR` (non-fatal on warmup failure)
 
 Optional qmd tooling sidecar:
 

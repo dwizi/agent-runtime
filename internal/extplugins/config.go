@@ -14,16 +14,7 @@ import (
 const DefaultConfigPath = "ext/plugins/plugins.json"
 
 type Config struct {
-	Tinyfish        TinyfishConfig      `json:"tinyfish"`
 	ExternalPlugins []ExternalPluginRef `json:"external_plugins"`
-}
-
-type TinyfishConfig struct {
-	Enabled        bool   `json:"enabled"`
-	BaseURL        string `json:"base_url"`
-	APIKey         string `json:"api_key"`
-	APIKeyEnv      string `json:"api_key_env"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 type ExternalPluginRef struct {
@@ -46,6 +37,14 @@ type PluginRuntime struct {
 	Args           []string          `json:"args"`
 	Env            map[string]string `json:"env"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
+	Isolation      PluginIsolation   `json:"isolation"`
+}
+
+type PluginIsolation struct {
+	Mode            string `json:"mode"`
+	Project         string `json:"project"`
+	WarmOnBootstrap *bool  `json:"warm_on_bootstrap"`
+	Locked          *bool  `json:"locked"`
 }
 
 type ResolvedExternalPlugin struct {
@@ -83,6 +82,19 @@ func LoadManifest(path string) (PluginManifest, error) {
 	if strings.TrimSpace(manifest.Runtime.Command) == "" {
 		return PluginManifest{}, fmt.Errorf("external plugin manifest %s requires runtime.command", path)
 	}
+	manifest.Runtime.Isolation.Mode = strings.ToLower(strings.TrimSpace(manifest.Runtime.Isolation.Mode))
+	if manifest.Runtime.Isolation.Mode == "" {
+		manifest.Runtime.Isolation.Mode = "none"
+	}
+	switch manifest.Runtime.Isolation.Mode {
+	case "none", "uv":
+	default:
+		return PluginManifest{}, fmt.Errorf("external plugin manifest %s has invalid runtime.isolation.mode %q", path, manifest.Runtime.Isolation.Mode)
+	}
+	manifest.Runtime.Isolation.Project = strings.TrimSpace(manifest.Runtime.Isolation.Project)
+	if manifest.Runtime.Isolation.Project == "" {
+		manifest.Runtime.Isolation.Project = "."
+	}
 	actionTypes := make([]string, 0, len(manifest.ActionTypes))
 	seen := map[string]struct{}{}
 	for _, actionType := range manifest.ActionTypes {
@@ -101,6 +113,20 @@ func LoadManifest(path string) (PluginManifest, error) {
 	}
 	manifest.ActionTypes = actionTypes
 	return manifest, nil
+}
+
+func (p PluginIsolation) WarmOnBootstrapValue(defaultValue bool) bool {
+	if p.WarmOnBootstrap == nil {
+		return defaultValue
+	}
+	return *p.WarmOnBootstrap
+}
+
+func (p PluginIsolation) LockedValue(defaultValue bool) bool {
+	if p.Locked == nil {
+		return defaultValue
+	}
+	return *p.Locked
 }
 
 func ResolveExternalPlugins(configPath string, refs []ExternalPluginRef) ([]ResolvedExternalPlugin, error) {

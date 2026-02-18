@@ -13,6 +13,8 @@ flowchart LR
     Gateway --> Orchestrator["Orchestrator"]
     Orchestrator --> Worker["Task Worker"]
     Worker --> Plugins["Action Plugins"]
+    Gateway --> MCP["MCP Manager"]
+    MCP --> MCPServers["MCP Servers (HTTP/SSE)"]
 
     Gateway --> Store["SQLite Store"]
     Worker --> Store
@@ -34,6 +36,7 @@ flowchart LR
 - `orchestrator`: queueing and running background tasks
 - `store`: task/context/objective/action persistence
 - `connectors`: external channel adapters
+- `mcp`: MCP server lifecycle, discovery, refresh, and dynamic tool registration
 - `qmd`: workspace markdown indexing and retrieval
 - `scheduler`: recurring objectives and event-based objective triggers
 - `httpapi`: programmatic admin and automation interface

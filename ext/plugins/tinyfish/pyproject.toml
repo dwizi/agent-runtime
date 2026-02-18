@@ -1,0 +1,6 @@
+[project]
+name = "agent-runtime-plugin-tinyfish"
+version = "0.1.0"
+description = "TinyFish external plugin for agent-runtime"
+requires-python = ">=3.11"
+dependencies = []

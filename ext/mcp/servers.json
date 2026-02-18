@@ -1,0 +1,23 @@
+{
+  "schema_version": "v1",
+  "servers": [
+    {
+      "id": "dwizi",
+      "enabled": true,
+      "transport": {
+        "type": "streamable_http",
+        "endpoint": "http://api.dwizi.com/mcp/demo?stream=1"
+      },
+      "http": {
+        "headers": {},
+        "timeout_seconds": 30
+      },
+      "refresh_seconds": 120,
+      "policy": {
+        "default_tool_class": "general",
+        "default_requires_approval": false,
+        "tool_overrides": {}
+      }
+    }
+  ]
+}

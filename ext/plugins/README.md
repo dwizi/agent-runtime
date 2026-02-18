@@ -16,20 +16,12 @@ folder in the future.
 
 `ext/plugins/plugins.json` supports:
 
-- `tinyfish`: built-in third-party integration config.
 - `external_plugins`: list of executable plugins discovered from manifests.
 
 Example:
 
 ```json
 {
-  "tinyfish": {
-    "enabled": false,
-    "base_url": "https://agent.tinyfish.ai",
-    "api_key": "",
-    "api_key_env": "AGENT_RUNTIME_TINYFISH_API_KEY",
-    "timeout_seconds": 90
-  },
   "external_plugins": [
     {
       "id": "echo-example",
@@ -54,10 +46,34 @@ Each external plugin repo/folder should provide a `plugin.json`:
     "command": "./run.sh",
     "args": [],
     "env": {},
-    "timeout_seconds": 30
+    "timeout_seconds": 30,
+    "isolation": {
+      "mode": "none",
+      "project": ".",
+      "warm_on_bootstrap": true,
+      "locked": true
+    }
   }
 }
 ```
+
+`runtime.isolation` supports:
+
+- `mode`: `none` (default) or `uv`
+- `project`: relative project path for uv (default `.`)
+- `warm_on_bootstrap`: prebuild env at startup (default `true`)
+- `locked`: use `uv sync --locked` (default `true`)
+
+## Execution Model
+
+- External plugins run through the same sandbox runner wrapper used by command actions when
+  `AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND` and `AGENT_RUNTIME_SANDBOX_RUNNER_ARGS` are set.
+- For `mode=uv`:
+  - startup warmup uses `uv sync --project <project-path> --no-dev` (with `--locked` when enabled)
+  - execution uses `uv run --project <project-path> --no-sync -- <runtime.command> <runtime.args...>`
+  - cache defaults to `/data/agent-runtime/ext-plugin-cache`
+- Warmup failures log warnings and do not abort runtime startup.
+- First execution attempts lazy uv sync if warmup was skipped or failed.
 
 The command receives JSON on stdin and must write either:
 
@@ -68,4 +84,10 @@ See `ext/plugins/examples/echo/` for a minimal example.
 
 ## Included Plugin
 
-- `tinyfish`: Agentic web automation plugin backed by TinyFish API.
+- `tinyfish`: Agentic web automation via TinyFish API.
+- `resend` (`resend_email`): Sends emails through Resend.
+
+Official plugin locations:
+
+- `ext/plugins/tinyfish`
+- `ext/plugins/resend`
