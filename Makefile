@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: build test run tui compose-up compose-dev-up compose-up-qmd compose-down compose-dev-down compose-down-qmd sync-env docs-check
+.PHONY: build test run tui compose-up compose-dev-up compose-up-qmd compose-down compose-dev-down compose-down-qmd sync-env docs-check skills-bootstrap
 
 build:
 	$(GO) build ./cmd/agent-runtime
@@ -43,3 +43,6 @@ sync-env:
 
 docs-check:
 	./scripts/docs-check.sh
+
+skills-bootstrap:
+	./scripts/bootstrap-skills.sh

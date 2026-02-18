@@ -265,6 +265,7 @@ API endpoints:
 Recommended baseline:
 - keep allowlist minimal (`curl,rg,cat,ls` unless you need more)
 - use a runner wrapper for stronger isolation when available
+- for Vercel `skills` installs, include `node,npm,npx` (and optionally `bun,bunx`) in `AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS`
 
 ## External Plugins
 

@@ -146,6 +146,8 @@ Check artifacts:
 - Configure official external plugins under `ext/plugins/plugins.json` (TinyFish + Resend).
 - Set external plugin secrets in `.env` (`AGENT_RUNTIME_TINYFISH_API_KEY`, `AGENT_RUNTIME_RESEND_API_KEY`, `AGENT_RUNTIME_RESEND_FROM`).
 - Keep uv plugin cache persistent (`AGENT_RUNTIME_EXT_PLUGIN_CACHE_DIR`) for faster warm restarts.
+- Install Vercel skills globally for Codex (optional): `make skills-bootstrap` (defaults to `vercel-labs/agent-skills`) or `./scripts/bootstrap-skills.sh pipe-rack/skills`.
+  - In containers, bootstrap defaults `HOME=/data`, so skills persist under `/data/.agents/skills`.
 - Configure objective/scheduler settings for recurring workloads.
 - Configure Codex publish callback if you want proactive messages back into coding tools.
 - Define system prompts/skills for your domain-specific workflows.

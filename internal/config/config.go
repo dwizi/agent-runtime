@@ -214,7 +214,7 @@ func FromEnv() Config {
 		MCPRefreshSeconds:                  intOrDefault("AGENT_RUNTIME_MCP_REFRESH_SECONDS", 120),
 		MCPHTTPTimeoutSec:                  intOrDefault("AGENT_RUNTIME_MCP_HTTP_TIMEOUT_SECONDS", 30),
 		SandboxEnabled:                     boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
-		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,wget,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
+		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,wget,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm,npx,bun,bunx"),
 		SandboxRunnerCommand:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),
 		SandboxRunnerArgs:                  strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_ARGS")),
 		SandboxTimeoutSec:                  intOrDefault("AGENT_RUNTIME_SANDBOX_TIMEOUT_SECONDS", 20),
