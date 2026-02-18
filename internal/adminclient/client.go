@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -423,7 +424,7 @@ func (c *Client) doJSON(req *http.Request, out any) error {
 		if strings.TrimSpace(apiError.Error) == "" {
 			apiError.Error = res.Status
 		}
-		return fmt.Errorf(apiError.Error)
+		return errors.New(apiError.Error)
 	}
 	if out == nil {
 		return nil

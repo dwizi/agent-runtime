@@ -27,20 +27,27 @@ Start TUI:
 make tui
 ```
 
-Modes:
-- `Pairings` tab: approve/deny one-time link tokens
-- `Objectives` tab:
-  - set workspace id and press `Enter`
-  - `j/k` select
-  - `p` pause/resume
-  - `x` delete
-  - `r` refresh
-- `Tasks` tab:
-  - set workspace id and press `Enter`
-  - `j/k` select
-  - `[`/`]` cycle status filter
-  - `y` retry selected failed task
-  - `r` refresh
+Layout:
+- left `Sidebar`: `Overview`, `Pairings`, `Objectives`, `Tasks`, `Activity`
+- center `Workbench`: active operational view
+- right `Inspector`: selected item detail and health metadata
+- bottom help/status strip: contextual key help and non-blocking status/error text
+
+Global controls:
+- `tab` / `shift+tab`: cycle focus zones (sidebar/workbench/inspector/help)
+- `1..5`: jump directly to views
+- `j/k` or arrows: navigate in focused zone
+- `enter`: activate selection / submit current input
+- `r`: manual refresh for current view
+- `?`: toggle expanded help
+- `q`: quit
+
+Operational actions:
+- `Pairings`: paste token + `enter` lookup, `a` approve, `d` deny, `[`/`]` role, `n` clear
+- `Objectives`: set workspace id, `enter` refresh, `j/k` select, `p` pause/resume, `x` delete
+- `Tasks`: set workspace id, `enter` refresh, `j/k` select, `[`/`]` filter, `y` retry failed task
+- `Overview`: KPI cards from current objective/task workspace filters
+- `Activity`: local session event feed for operator/API events
 
 ## Approvals Workflow
 

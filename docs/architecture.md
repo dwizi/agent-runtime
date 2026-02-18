@@ -38,6 +38,17 @@ flowchart LR
 - `scheduler`: recurring objectives and event-based objective triggers
 - `httpapi`: programmatic admin and automation interface
 
+## Admin TUI Architecture
+
+The admin TUI is a fullscreen Bubble Tea control plane with three persistent
+zones:
+- `sidebar`: view navigation (`Overview`, `Pairings`, `Objectives`, `Tasks`, `Activity`)
+- `workbench`: primary interactive surface (tables/forms/actions)
+- `inspector`: detail and health context for the current selection
+
+UI components are built with `bubbles` and `lipgloss`, while all operational
+actions continue to call the same admin HTTP APIs (no backend schema changes).
+
 ## Persistence and Artifacts
 
 - metadata DB: `/data/agent-runtime/meta.sqlite`
