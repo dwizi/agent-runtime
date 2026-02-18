@@ -1,0 +1,10 @@
+{
+  "tinyfish": {
+    "enabled": false,
+    "base_url": "https://agent.tinyfish.ai",
+    "api_key": "",
+    "api_key_env": "AGENT_RUNTIME_TINYFISH_API_KEY",
+    "timeout_seconds": 90
+  },
+  "external_plugins": []
+}

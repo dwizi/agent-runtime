@@ -12,6 +12,7 @@ This is the operator-focused environment reference.
 - `AGENT_RUNTIME_WORKSPACE_ROOT`
 - `AGENT_RUNTIME_DB_PATH`
 - `AGENT_RUNTIME_DEFAULT_CONCURRENCY`
+- `AGENT_RUNTIME_EXT_PLUGINS_CONFIG` (default: `ext/plugins/plugins.json`)
 
 ## Hosts and TLS
 
@@ -258,4 +259,17 @@ API endpoints:
 Recommended baseline:
 - keep allowlist minimal (`curl,rg,cat,ls` unless you need more)
 - use a runner wrapper for stronger isolation when available
+
+## External Plugins
+
+- `AGENT_RUNTIME_EXT_PLUGINS_CONFIG` (default: `ext/plugins/plugins.json`)
+- `AGENT_RUNTIME_TINYFISH_API_KEY` (if `api_key_env` is set to this in plugin config)
+
+Notes:
+- Third-party plugins under `ext/plugins/` are disabled unless explicitly enabled in the plugin config file.
+- Default config file: `ext/plugins/plugins.json`.
+- TinyFish is enabled by setting `tinyfish.enabled=true` in that file.
+- Generic executable plugins are enabled via `external_plugins[]` entries that point to a `plugin.json` manifest.
+- Manifest `runtime.command` is executed with `runtime.args`; stdin/stdout use JSON contract documented in `ext/plugins/README.md`.
+- `ext/plugins/` is reserved for external plugin assets/manifests, not runtime app code.
 - review action approvals in admin channels before execution

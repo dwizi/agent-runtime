@@ -64,6 +64,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_SMTP_USERNAME", "")
 	t.Setenv("AGENT_RUNTIME_SMTP_PASSWORD", "")
 	t.Setenv("AGENT_RUNTIME_SMTP_FROM", "")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ENABLED", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND", "")
@@ -262,6 +263,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SMTPFrom != "" {
 		t.Fatalf("expected default smtp from empty, got %s", cfg.SMTPFrom)
 	}
+	if cfg.ExtPluginsConfigPath != "ext/plugins/plugins.json" {
+		t.Fatalf("expected default ext plugin config path ext/plugins/plugins.json, got %s", cfg.ExtPluginsConfigPath)
+	}
 	if !cfg.SandboxEnabled {
 		t.Fatal("expected sandbox enabled by default")
 	}
@@ -435,6 +439,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENT_RUNTIME_SMTP_USERNAME", "bot@example.com")
 	t.Setenv("AGENT_RUNTIME_SMTP_PASSWORD", "secret")
 	t.Setenv("AGENT_RUNTIME_SMTP_FROM", "Agent Runtime Bot <bot@example.com>")
+	t.Setenv("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "/etc/agent-runtime/plugins.json")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ENABLED", "false")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "curl,git,rg")
 	t.Setenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND", "just-bash")
@@ -647,6 +652,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.SMTPFrom != "Agent Runtime Bot <bot@example.com>" {
 		t.Fatalf("expected overridden smtp from, got %s", cfg.SMTPFrom)
+	}
+	if cfg.ExtPluginsConfigPath != "/etc/agent-runtime/plugins.json" {
+		t.Fatalf("expected overridden ext plugins config path, got %s", cfg.ExtPluginsConfigPath)
 	}
 	if cfg.SandboxEnabled {
 		t.Fatal("expected sandbox enabled false")

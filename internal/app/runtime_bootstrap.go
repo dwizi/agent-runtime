@@ -12,14 +12,17 @@ import (
 	"time"
 
 	"github.com/dwizi/agent-runtime/internal/actions/executor"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/externalcmd"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/sandbox"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/smtp"
+	"github.com/dwizi/agent-runtime/internal/actions/plugins/tinyfish"
 	"github.com/dwizi/agent-runtime/internal/actions/plugins/webhook"
 	"github.com/dwizi/agent-runtime/internal/config"
 	"github.com/dwizi/agent-runtime/internal/connectors"
 	"github.com/dwizi/agent-runtime/internal/connectors/discord"
 	"github.com/dwizi/agent-runtime/internal/connectors/imap"
 	"github.com/dwizi/agent-runtime/internal/connectors/telegram"
+	"github.com/dwizi/agent-runtime/internal/extplugins"
 	"github.com/dwizi/agent-runtime/internal/gateway"
 	"github.com/dwizi/agent-runtime/internal/heartbeat"
 	"github.com/dwizi/agent-runtime/internal/httpapi"
@@ -83,7 +86,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		heartbeatRegistry.Beat("qmd", "qmd service initialized")
 	}
 
-	plugins := []executor.Plugin{
+	actionPlugins := []executor.Plugin{
 		webhook.New(15 * time.Second),
 		smtp.New(smtp.Config{
 			Host:     cfg.SMTPHost,
@@ -94,7 +97,7 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 		}),
 	}
 	if cfg.SandboxEnabled {
-		plugins = append(plugins, sandbox.New(sandbox.Config{
+		actionPlugins = append(actionPlugins, sandbox.New(sandbox.Config{
 			Enabled:         true,
 			WorkspaceRoot:   cfg.WorkspaceRoot,
 			AllowedCommands: parseCSVList(cfg.SandboxAllowedCommandsCSV),
@@ -104,7 +107,49 @@ func New(cfg config.Config, logger *slog.Logger) (*Runtime, error) {
 			MaxOutputBytes:  cfg.SandboxMaxOutputBytes,
 		}))
 	}
-	actionExecutor := executor.NewRegistry(plugins...)
+
+	externalPluginConfig, err := extplugins.LoadConfig(cfg.ExtPluginsConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("load external plugins config: %w", err)
+	}
+	if externalPluginConfig.Tinyfish.Enabled {
+		actionPlugins = append(actionPlugins, tinyfish.NewFromExternalConfig(
+			externalPluginConfig.Tinyfish.BaseURL,
+			externalPluginConfig.Tinyfish.APIKey,
+			externalPluginConfig.Tinyfish.APIKeyEnv,
+			externalPluginConfig.Tinyfish.TimeoutSeconds,
+		))
+		logger.Info("external plugin enabled", "plugin", "tinyfish", "config_path", cfg.ExtPluginsConfigPath)
+	}
+	resolvedExternalPlugins, err := extplugins.ResolveExternalPlugins(cfg.ExtPluginsConfigPath, externalPluginConfig.ExternalPlugins)
+	if err != nil {
+		return nil, fmt.Errorf("resolve external plugins: %w", err)
+	}
+	for _, resolved := range resolvedExternalPlugins {
+		timeout := time.Duration(resolved.Manifest.Runtime.TimeoutSeconds) * time.Second
+		plugin, createErr := externalcmd.New(externalcmd.Config{
+			ID:          resolved.ID,
+			PluginKey:   resolved.Manifest.PluginKey,
+			BaseDir:     resolved.BaseDir,
+			Command:     resolved.Manifest.Runtime.Command,
+			Args:        resolved.Manifest.Runtime.Args,
+			Env:         resolved.Manifest.Runtime.Env,
+			ActionTypes: resolved.Manifest.ActionTypes,
+			Timeout:     timeout,
+		})
+		if createErr != nil {
+			return nil, fmt.Errorf("configure external plugin %s: %w", resolved.ID, createErr)
+		}
+		actionPlugins = append(actionPlugins, plugin)
+		logger.Info(
+			"external executable plugin enabled",
+			"plugin_id", resolved.ID,
+			"manifest", resolved.ManifestPath,
+			"action_types", strings.Join(resolved.Manifest.ActionTypes, ","),
+		)
+	}
+
+	actionExecutor := executor.NewRegistry(actionPlugins...)
 	commandGateway := gateway.New(sqlStore, engine, qmdService, actionExecutor, cfg.WorkspaceRoot, logger.With("component", "gateway"))
 	commandGateway.SetTriageEnabled(cfg.TriageEnabled)
 	if cfg.AgentMaxTurnDurationSec > 0 {

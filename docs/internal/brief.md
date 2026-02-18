@@ -50,6 +50,8 @@ No web frontend is required; operations happen through chat + TUI + API.
   - webhook/http
   - smtp email
   - sandbox command
+  - tinyfish agentic web (external plugin; enabled via `ext/plugins/plugins.json`)
+  - executable third-party plugins loaded from `ext/plugins/*/plugin.json` manifests
 
 Twitter/X connector is intentionally postponed.
 

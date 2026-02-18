@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,11 +25,11 @@ func NewRunActionTool(store Store, executor ActionExecutor) *RunActionTool {
 func (t *RunActionTool) Name() string { return "run_action" }
 
 func (t *RunActionTool) Description() string {
-	return "Execute a system action like 'run_command' (curl, etc.), 'send_email', or 'webhook'. Use this for external integration."
+	return "Execute a system action like 'run_command' (curl, etc.), 'send_email', 'webhook', 'agentic_web' (TinyFish), or any external plugin action type loaded at runtime."
 }
 
 func (t *RunActionTool) ParametersSchema() string {
-	return `{"type": "run_command|send_email|webhook", "target": "string", "summary": "brief summary", "payload": {}}`
+	return `{"type": "string", "target": "string", "summary": "brief summary", "payload": {}}`
 }
 
 func (t *RunActionTool) ValidateArgs(rawArgs json.RawMessage) error {
@@ -43,10 +44,8 @@ func (t *RunActionTool) ValidateArgs(rawArgs json.RawMessage) error {
 	}
 
 	actionType := strings.ToLower(strings.TrimSpace(args.Type))
-	switch actionType {
-	case "run_command", "send_email", "webhook":
-	default:
-		return fmt.Errorf("%w: type must be run_command, send_email, or webhook", agenterr.ErrToolInvalidArgs)
+	if actionType == "" {
+		return fmt.Errorf("%w: type is required", agenterr.ErrToolInvalidArgs)
 	}
 
 	if actionType == "run_command" {
@@ -58,7 +57,107 @@ func (t *RunActionTool) ValidateArgs(rawArgs json.RawMessage) error {
 	if actionType == "webhook" && strings.TrimSpace(args.Target) == "" {
 		return fmt.Errorf("%w: target is required for webhook", agenterr.ErrToolInvalidArgs)
 	}
+	if isTinyfishActionType(actionType) {
+		goal := resolveTinyfishGoal(args.Summary, args.Payload)
+		if goal == "" {
+			return fmt.Errorf("%w: agentic_web requires summary or payload.goal/payload.task", agenterr.ErrToolInvalidArgs)
+		}
+		rawURL := resolveTinyfishURL(args.Target, args.Payload)
+		if rawURL == "" {
+			return fmt.Errorf("%w: agentic_web requires target or payload.url/payload.request.url", agenterr.ErrToolInvalidArgs)
+		}
+		parsedURL, err := url.ParseRequestURI(rawURL)
+		if err != nil || parsedURL == nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") || strings.TrimSpace(parsedURL.Host) == "" {
+			return fmt.Errorf("%w: agentic_web target must be a valid http(s) URL", agenterr.ErrToolInvalidArgs)
+		}
+	}
 	return nil
+}
+
+func isTinyfishActionType(actionType string) bool {
+	switch strings.ToLower(strings.TrimSpace(actionType)) {
+	case "agentic_web", "tinyfish_sync", "tinyfish_async":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveTinyfishGoal(summary string, payload map[string]any) string {
+	goal := strings.TrimSpace(summary)
+	if goal != "" {
+		return goal
+	}
+	goal = firstNonEmptyMapString(payload, "goal", "task")
+	if goal != "" {
+		return goal
+	}
+	if nestedRaw, ok := payload["payload"]; ok && nestedRaw != nil {
+		if nested, ok := nestedRaw.(map[string]any); ok {
+			goal = firstNonEmptyMapString(nested, "goal", "task")
+			if goal != "" {
+				return goal
+			}
+		}
+	}
+	if requestRaw, ok := payload["request"]; ok && requestRaw != nil {
+		if request, ok := requestRaw.(map[string]any); ok {
+			return firstNonEmptyMapString(request, "goal", "task")
+		}
+	}
+	return ""
+}
+
+func resolveTinyfishURL(target string, payload map[string]any) string {
+	resolved := strings.TrimSpace(target)
+	if resolved != "" {
+		return resolved
+	}
+	if payload == nil {
+		return ""
+	}
+	if value, ok := payload["url"]; ok && value != nil {
+		resolved = strings.TrimSpace(fmt.Sprintf("%v", value))
+		if resolved != "" {
+			return resolved
+		}
+	}
+	if requestRaw, ok := payload["request"]; ok && requestRaw != nil {
+		if request, ok := requestRaw.(map[string]any); ok {
+			if value, ok := request["url"]; ok && value != nil {
+				resolved = strings.TrimSpace(fmt.Sprintf("%v", value))
+				if resolved != "" {
+					return resolved
+				}
+			}
+		}
+	}
+	if nestedRaw, ok := payload["payload"]; ok && nestedRaw != nil {
+		if nested, ok := nestedRaw.(map[string]any); ok {
+			if value, ok := nested["url"]; ok && value != nil {
+				resolved = strings.TrimSpace(fmt.Sprintf("%v", value))
+				if resolved != "" {
+					return resolved
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyMapString(values map[string]any, keys ...string) string {
+	if values == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value, ok := values[key]; ok && value != nil {
+			trimmed := strings.TrimSpace(fmt.Sprintf("%v", value))
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 func (t *RunActionTool) Execute(ctx context.Context, rawArgs json.RawMessage) (string, error) {

@@ -335,3 +335,60 @@ func TestRunActionTool_ValidateArgsAcceptsConcreteCommand(t *testing.T) {
 		t.Fatalf("expected concrete args to validate, got %v", err)
 	}
 }
+
+func TestRunActionTool_ValidateArgsAcceptsAgenticWeb(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"agentic_web","target":"https://example.com","summary":"extract current pricing","payload":{}}`))
+	if err != nil {
+		t.Fatalf("expected agentic_web args to validate, got %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsRejectsAgenticWebWithoutGoal(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"agentic_web","target":"https://example.com","summary":"","payload":{}}`))
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "agentic_web requires") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsRejectsAgenticWebWithoutURL(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"agentic_web","target":"","summary":"extract pricing summary","payload":{}}`))
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "requires target") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsAcceptsAgenticWebWithPayloadURL(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"agentic_web","target":"","summary":"extract pricing summary","payload":{"url":"https://dwizi.com"}}`))
+	if err != nil {
+		t.Fatalf("expected payload url args to validate, got %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsRejectsAgenticWebWithInvalidURL(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"agentic_web","target":"dwizi.com","summary":"extract pricing summary","payload":{}}`))
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "valid http(s) url") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunActionTool_ValidateArgsAcceptsDynamicExternalType(t *testing.T) {
+	tool := NewRunActionTool(&MockStore{}, nil)
+	err := tool.ValidateArgs(json.RawMessage(`{"type":"my_repo_custom_action","target":"https://example.com","summary":"do custom task","payload":{"foo":"bar"}}`))
+	if err != nil {
+		t.Fatalf("expected dynamic external action type to validate, got %v", err)
+	}
+}

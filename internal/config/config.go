@@ -71,6 +71,7 @@ type Config struct {
 	SMTPUsername                       string
 	SMTPPassword                       string
 	SMTPFrom                           string
+	ExtPluginsConfigPath               string
 	SandboxEnabled                     bool
 	SandboxAllowedCommandsCSV          string
 	SandboxRunnerCommand               string
@@ -199,6 +200,7 @@ func FromEnv() Config {
 		SMTPUsername:                       strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_USERNAME")),
 		SMTPPassword:                       os.Getenv("AGENT_RUNTIME_SMTP_PASSWORD"),
 		SMTPFrom:                           strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SMTP_FROM")),
+		ExtPluginsConfigPath:               stringOrDefault("AGENT_RUNTIME_EXT_PLUGINS_CONFIG", "ext/plugins/plugins.json"),
 		SandboxEnabled:                     boolOrDefault("AGENT_RUNTIME_SANDBOX_ENABLED", true),
 		SandboxAllowedCommandsCSV:          stringOrDefault("AGENT_RUNTIME_SANDBOX_ALLOWED_COMMANDS", "echo,cat,ls,curl,wget,grep,rg,head,tail,python3,chromium,sh,bash,ash,apk,pip,pip3,git,jq,sed,awk,find,mkdir,rm,cp,mv,touch,chmod,unzip,tar,gzip,wc,sort,uniq,tee,date,sleep,whoami,pwd,ps,top,kill,node,npm"),
 		SandboxRunnerCommand:               strings.TrimSpace(os.Getenv("AGENT_RUNTIME_SANDBOX_RUNNER_COMMAND")),
