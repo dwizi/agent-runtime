@@ -382,8 +382,8 @@ func TestFromEnvDefaults(t *testing.T) {
 	if cfg.SystemPromptContextPath != "context/agents/{context_id}/SYSTEM_PROMPT.md" {
 		t.Fatalf("expected default context system prompt path, got %s", cfg.SystemPromptContextPath)
 	}
-	if cfg.SkillsGlobalRoot != "/context/skills" {
-		t.Fatalf("expected default skills global root /context/skills, got %s", cfg.SkillsGlobalRoot)
+	if cfg.SkillsGlobalRoot != "/data/.agents/skills" {
+		t.Fatalf("expected default skills global root /data/.agents/skills, got %s", cfg.SkillsGlobalRoot)
 	}
 	if !cfg.AgentGroundingFirstStep {
 		t.Fatal("expected agent grounding first step enabled by default")

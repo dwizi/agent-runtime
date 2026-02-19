@@ -257,7 +257,7 @@ func FromEnv() Config {
 		SystemPromptWorkspacePath:          stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_WORKSPACE_REL_PATH", "context/SYSTEM_PROMPT.md"),
 		SystemPromptContextPath:            stringOrDefault("AGENT_RUNTIME_SYSTEM_PROMPT_CONTEXT_REL_PATH", "context/agents/{context_id}/SYSTEM_PROMPT.md"),
 		ReasoningPromptFile:                stringOrDefault("AGENT_RUNTIME_REASONING_PROMPT_FILE", "/context/REASONING.md"),
-		SkillsGlobalRoot:                   stringOrDefault("AGENT_RUNTIME_SKILLS_GLOBAL_ROOT", "/context/skills"),
+		SkillsGlobalRoot:                   stringOrDefault("AGENT_RUNTIME_SKILLS_GLOBAL_ROOT", "/data/.agents/skills"),
 		PublicHost:                         stringOrDefault("PUBLIC_HOST", "localhost"),
 		AdminHost:                          stringOrDefault("ADMIN_HOST", "admin.localhost"),
 		AdminAPIURL:                        stringOrDefault("AGENT_RUNTIME_ADMIN_API_URL", "https://admin.localhost"),

@@ -141,6 +141,7 @@ Operational hardening: [Production Checklist](docs/production-checklist.md).
 Start here: [Docs Index](docs/README.md)
 
 - Getting started: [Getting Started](docs/getting-started.md)
+- Feature guide: [Feature Guide](docs/features.md)
 - Install: [Install](docs/install.md)
 - Configuration: [Configuration](docs/configuration.md)
 - Operations: [Operations](docs/operations.md)

@@ -6,7 +6,8 @@ This index is organized by audience.
 
 1. [Root README](../README.md)
 2. [Getting Started](getting-started.md)
-3. [Channel Setup](channels/README.md)
+3. [Feature Guide](features.md)
+4. [Channel Setup](channels/README.md)
 
 ## Operators
 
